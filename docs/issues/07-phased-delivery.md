@@ -4,22 +4,27 @@
 
 ---
 
-## Phase 0 — "It works" (Day 1) ✅ IN PROGRESS
+## Phase 0 — "It works" ✅ COMPLETE (2026-04-13)
 
-**Goal**: Run two commands, get a browsable wiki compiled from your last month of email.
+**Goal**: Run two commands, get a browsable wiki compiled from last month of email.
 
 | # | Task | Status |
 |---|---|---|
 | 1 | Project scaffolding (pyproject.toml, Makefile, .gitignore, config) | ✅ |
 | 2 | Gmail OAuth + email fetcher | ✅ |
 | 3 | Email parser (→ raw/ markdown with frontmatter) | ✅ |
-| 4 | Attachment handler | ✅ |
-| 5 | Wiki compiler (Deep Agents) | ✅ |
+| 4 | Attachment handler (code shipped; `--skip-attachments` default for now) | ✅ |
+| 5 | Wiki compiler (Deep Agents + LiteLLM) | ✅ |
 | 6 | Supersession rules in compiler prompt | ✅ |
-| 7 | Wiki lint (basic checks) | ✅ |
+| 7 | Wiki lint + validator + auto-fix | ✅ |
 | 8 | CLAUDE.md agent schema | ✅ |
-| 9 | Langfuse tracing integration | ✅ |
-| 10 | CLI scripts (ingest, compile, lint) | ✅ |
+| 9 | Langfuse tracing integration (opt-in; disabled by default) | ✅ |
+| 10 | CLI scripts (ingest, compile, compile_parallel, lint, validate, snapshot) | ✅ |
+| 11 | MkDocs Material + roamlinks wiki viewer | ✅ |
+| 12 | LiteLLM budget check integrated into compile | ✅ |
+| 13 | Pre-compile auto-snapshot for safe iteration | ✅ |
+| 14 | Hard validator (exits non-zero on corruption) | ✅ |
+| 15 | CHANGELOG.md living record of fixes | ✅ |
 
 ### Definition of Done
 

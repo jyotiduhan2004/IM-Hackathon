@@ -14,6 +14,68 @@ Format: newest first. Group by session/date. Each entry has:
 
 ## 2026-04-13 — Phase 0 bootstrap + first compile iterations
 
+### Frontmatter parser broke on `---` inside raw filenames
+
+**Issue**: After TPM bump, 3 wiki pages corrupted mid-compile: frontmatter
+contained only `last_compiled`; sources/title/body fragments scattered.
+
+**Root cause**: `content.split('---', 2)` naively matched the `---`
+sequence wherever it appeared. A raw email filename like
+`_informational---transforming-sonarqube-_3b4ad89f.md` (triple-dash from
+subject tag) sat inside the frontmatter's `sources:` field. Split treated
+those hyphens as the frontmatter terminator, leaving YAML truncated, and
+auto-stamp then preserved only `last_compiled` throwing away everything
+else. Chain of bugs.
+
+**Fix**:
+- `src/compile/compiler.py`: new `_split_frontmatter()` walks lines and
+  treats `---` as delimiter only when it's on its own line (proper YAML
+  frontmatter semantics). `_extract_frontmatter` and `_extract_body`
+  delegate to it.
+- Repaired 3 damaged pages manually — reconstructed frontmatter from body
+  fragments (sources, related, title from path, page_type from directory).
+  Body content preserved.
+- Also deleted one byte-identical duplicate (`google-ads-new.md` was a
+  second slug for `google-ads.md`).
+
+**Commit**: `49f2741`.
+
+### TPM rate limits contributed to mid-edit corruption
+
+**Issue**: LiteLLM proxy returned 429s every ~60 seconds. Agent's
+`edit_file` sometimes abandoned mid-edit, leaving pages with partial
+frontmatter.
+
+**Root cause**: TPM (tokens per minute) cap was 30000 on the key. Each
+agent turn sends 15-40k tokens of context. Bursts trivially exceeded
+the cap.
+
+**Fix**: User bumped TPM to 3,000,000 (100×). Retry logic and per-batch
+timeouts still TBD (captured in BACKLOG).
+
+**Commit**: external (proxy config).
+
+### Coherence drift between docs and code
+
+**Issue**: Background coherence-audit agent flagged: README described
+files that didn't exist (`relations.py`, `wiki/search.py`, etc.);
+CLAUDE.md page-type table missing `system` category; BACKLOG items
+shipped but not marked done; `mail-parser` dep declared but never
+imported; several scripts (validate_wiki, snapshot_wiki, budget,
+watch_and_compile) undocumented in README.
+
+**Root cause**: Rapid iteration; readme was written before the final
+layout stabilized; BACKLOG was append-only, nothing ever struck through.
+
+**Fix**: Rewrote README structure section to match actual filesystem;
+added `system` page type to CLAUDE.md; struck through shipped P0 items
+in BACKLOG; removed `mail-parser` dep.
+
+**Report**: `docs/reviews/coherence-20260413T023902Z.md`.
+
+---
+
+
 ### Frontmatter corruption during `edit_file` → auto-stamp made it worse
 
 **Issue**: After the 2nd 20-email compile batch, 18 wiki pages had mangled

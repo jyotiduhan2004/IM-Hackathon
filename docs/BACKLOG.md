@@ -30,41 +30,13 @@ elapsed ~12 min before process stalled. Compile was killed before finishing the 
 
 ### What's broken — quality issues
 
-**P0 (fix before next full compile)**:
+**P0 (fix before next full compile)** — ALL SHIPPED (see CHANGELOG for details):
 
-1. **Wikilink casing is 50/50 mixed** — `grep -hoE "\[\[.+?\]\]" wiki/` shows
-   both `[[abhishek-bhartia]]` (kebab-case, works) and `[[Abhishek Sharma]]`
-   (Title Case, broken). 210 broken link warnings. Every Title Case wikilink is
-   dead because files live at `wiki/entities/lucky-agarwal.md`.
-   - **Fix**: two layers — (a) harden the prompt to say "ALWAYS use the exact
-     filename stem from list_wiki_pages in wikilinks; never Title Case"; (b) add
-     a lint auto-fixer that normalizes `[[Title Case]]` → `[[title-case]]` via
-     a case-insensitive lookup against existing files.
-
-2. **Date hallucination** — some pages get `last_compiled: "2025-01-10T00:00:00Z"`
-   (model's training cutoff), others get real times. Inconsistent.
-   - **Status**: Partially fixed this session — added `stamp_page_compiled_at`
-     tool + `list_wiki_pages` tool, and told the compiler NOT to write
-     `last_compiled` itself. Need to re-run to verify.
-
-3. **Non-person "entities"** — compiler wikilinks products/platforms/lists as if
-   they're people: `[[BuyerMY]]`, `[[WhatsApp]]`, `[[M-Site]]`,
-   `[[Marketplace Launch]]`, `[[Launch IndiaMART]]`, `[[ai.intermesh.net]]`.
-   These have no pages and clutter the graph.
-   - **Fix**: either add a `wiki/systems/` category for products/platforms, or
-     tighten the prompt to not wikilink these (just mention in prose). Prefer
-     the former since products ARE useful to have pages for.
-
-4. **Orphan entity pages (17)** — e.g., `satya-nand.md`, `sandeep-garg.md`.
-   These were created in later batches as new entities but the topic pages in
-   earlier batches don't link back. Cross-batch state problem.
-   - **Fix**: either pass "existing wiki pages" in initial prompt of each batch
-     (partial) or post-compile pass that adds reverse links.
-
-5. **Index.md stale** — 17 entities not in index.md because the final
-   `update_wiki_index` call happens once per batch, not after all batches.
-   - **Fix**: run `update_wiki_index` once at the end of the CLI script, not
-     inside the agent.
+1. ~~Wikilink casing~~ → **DONE** (235dc74, b95f7da): prompt + lint normalizer
+2. ~~Date hallucination~~ → **DONE** (ddd0c5a): `stamp_page_compiled_at` tool
+3. ~~Non-person "entities"~~ → **DONE** (ae5f0e1): `wiki/systems/` category added
+4. Orphan entity back-links → still open: not blocking compile, low value
+5. ~~Index.md stale~~ → **DONE** (compile_all.py post-batch regen)
 
 **P1 (do next)**:
 
@@ -98,7 +70,16 @@ elapsed ~12 min before process stalled. Compile was killed before finishing the 
 
 ---
 
-## Performance: parallelize compilation
+## Performance: parallelize compilation (DRAFTED — `scripts/compile_parallel.py`)
+
+**Status**: Script shipped (commit b6368d6). Not yet benchmarked at scale.
+Overnight plan (`docs/reviews/overnight-plan-*.md`) recommends `--concurrency 4`
+for the main backlog compile. Still TBD: per-batch retry/timeout, Makefile
+wire-up.
+
+---
+
+## [original content below]
 
 **Why**: Sequentially compiling 22 emails via `z-ai/glm-4.6` on LiteLLM takes ~4
 min in our first test (batches of 3, ~30-90s each). For 30-day backlog (~3000

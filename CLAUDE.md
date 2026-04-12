@@ -64,8 +64,9 @@ uv run pytest tests/test_file.py -x
 
 | Type | Directory | When to create |
 |---|---|---|
-| topic | wiki/topics/ | Email discusses a project, product, initiative, or theme |
-| entity | wiki/entities/ | Email introduces or significantly references a person, team, product, or system |
+| topic | wiki/topics/ | Email discusses a project, initiative, feature, or theme |
+| entity | wiki/entities/ | A HUMAN PERSON referenced in From/To/CC/body. One page per person, never for products. |
+| system | wiki/systems/ | A product, platform, service, URL, tool, or mailing list (NOT a human) |
 | policy | wiki/policies/ | Email announces, updates, or clarifies a rule/procedure/guideline |
 | timeline | wiki/timelines/ | A topic has enough chronological events for a timeline view |
 | conflict | wiki/conflicts/ | Two+ emails disagree on a factual claim, policy, or decision |

@@ -195,53 +195,55 @@ email-knowledge-base/
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                  # Settings via pydantic-settings
+│   ├── budget.py                  # LiteLLM proxy budget check
 │   │
 │   ├── ingest/                    # Email → raw/ pipeline
 │   │   ├── __init__.py
-│   │   ├── gmail.py               # Gmail API client (fetch, list, watch)
-│   │   ├── parser.py              # Email → structured markdown
-│   │   └── attachments.py         # Attachment + image extraction & captioning
+│   │   ├── gmail.py               # Gmail API client (OAuth, fetch, list)
+│   │   ├── parser.py              # Email → raw markdown with YAML frontmatter
+│   │   └── attachments.py         # Attachments + image captioning (LiteLLM vision)
 │   │
 │   ├── compile/                   # raw/ → wiki/ compilation
 │   │   ├── __init__.py
-│   │   ├── compiler.py            # Deep Agents wiki compiler workflow
-│   │   ├── prompts.py             # LLM prompt templates for compilation
-│   │   └── relations.py           # Supersession & conflict detection
+│   │   ├── compiler.py            # Deep Agents workflow + custom tools
+│   │   └── prompts.py             # Karpathy-pattern compilation prompts
 │   │
-│   ├── wiki/                      # Wiki management utilities
-│   │   ├── __init__.py
-│   │   ├── index.py               # Index page management
-│   │   ├── search.py              # Full-text search over wiki
-│   │   └── lint.py                # Wiki health checker
-│   │
-│   └── api/                       # FastAPI endpoints (Phase 1+)
-│       ├── __init__.py
-│       └── server.py              # Query API, webhook receiver
+│   ├── wiki/__init__.py           # reserved for Phase 2 search/index modules
+│   └── api/__init__.py            # reserved for Phase 1+ FastAPI endpoints
 │
-├── raw/                           # Immutable email storage
+├── raw/                           # Immutable email storage (content gitignored)
 │   ├── .gitkeep
-│   └── attachments/               # Email attachments by message_id
+│   └── attachments/               # Email attachments by message_id hash
 │
-├── wiki/                          # LLM-compiled knowledge base
-│   ├── index.md                   # Master catalog
-│   ├── log.md                     # Chronological ingest/compile log
-│   ├── topics/                    # Project/product/initiative pages
-│   ├── entities/                  # People, teams, products
-│   ├── policies/                  # Current policies with history
-│   ├── timelines/                 # Chronological event tracking
+├── wiki/                          # LLM-compiled knowledge base (content gitignored)
+│   ├── index.md                   # Master catalog (auto-generated)
+│   ├── log.md                     # Append-only compile log
+│   ├── topics/                    # Projects, initiatives, features
+│   ├── entities/                  # People (humans only)
+│   ├── systems/                   # Products, platforms, services, mailing lists
+│   ├── policies/                  # Current policies with version history
+│   ├── timelines/                 # Long-running chronologies
 │   └── conflicts/                 # Unresolved contradictions
 │
 ├── scripts/
-│   ├── ingest_backlog.py          # Pull last N days of email
-│   ├── compile_all.py             # Compile all raw → wiki
-│   └── lint_wiki.py               # Run wiki health check
+│   ├── ingest_backlog.py          # Pull last N days of mailing-list email
+│   ├── compile_all.py             # Sequential compile (chronological, oldest-first)
+│   ├── compile_parallel.py        # Thread-aware parallel compile
+│   ├── lint_wiki.py               # Advisory checks + auto-fix (wikilinks, stubs)
+│   ├── validate_wiki.py           # Hard integrity check (exits non-zero on corruption)
+│   ├── snapshot_wiki.py           # Save/restore wiki state for safe iteration
+│   └── watch_and_compile.py       # Live mode: poll Gmail + compile (candidate for Phase 1)
 │
-└── tests/
-    ├── __init__.py
-    ├── test_parser.py
-    ├── test_compiler.py
-    └── fixtures/
-        └── sample_emails/         # Test .eml files
+├── mkdocs.yml + mkdocs_hooks.py   # Material theme + roamlinks + Sources-section hook
+│
+├── docs/
+│   ├── BACKLOG.md                 # "For later" items
+│   ├── issues/                    # Issue docs (optional GitHub promotion)
+│   └── reviews/                   # Audit reports (coherence, quality, plans)
+│
+├── CHANGELOG.md                   # Living record of issues + fixes + rationale
+├── CLAUDE.md                      # Agent schema (symlinked as AGENTS.md)
+└── .snapshots/                    # Pre-compile backups (gitignored, local-only)
 ```
 
 ## Phased delivery

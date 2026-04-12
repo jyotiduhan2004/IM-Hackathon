@@ -163,6 +163,31 @@ Current wiki pages tend to over-abstract. Keep concrete details from the source:
 Prefer a short "Technical Details" or "Implementation" section with these raw
 facts over a paragraph of prose that loses the specifics.
 
+## Preserve structured tables verbatim
+
+When the source email contains a table (bug matrix, test matrix, launch audit,
+metric comparison), REPRODUCE IT VERBATIM as a markdown table in the wiki page.
+Do NOT summarize "12 bugs across HP/MP/LP" — include the full row-by-row table
+with priorities, IDs, descriptions. Tables are where actionable signal lives.
+
+Examples of tables you MUST preserve row-by-row:
+- Bug matrices (Bug ID, Priority, Description, Status)
+- Test result breakdowns (Scenario, Result, Pass/Fail count)
+- Launch audit parameters (Parameter, Status, Target, Actual)
+- Metric comparisons (Metric, Before, After, Delta)
+- Adoption numbers by segment
+
+## Populate sources exhaustively
+
+When creating or updating an entity page for a person, their `sources:` list
+should include EVERY raw email file where they appear in From, To, CC, or body
+— not just the email being currently compiled. Before writing the page, run
+`grep -l "email@domain" raw/` (via the grep tool) to find all raw files that
+mention them, and include those paths in `sources:`.
+
+A stub entity with 1 source while the person appears in 50+ raw emails is an
+error. Either enumerate all sources or do NOT create the stub.
+
 ## Page type invariants
 
 Before creating or updating a page, verify the category:

@@ -176,6 +176,28 @@ def main(batch_size: int, concurrency: int, model: str | None, dry_run: bool) ->
     click.echo(f"Model: {model or settings.llm_model}")
     click.echo()
 
+    # Auto-snapshot before compiling (parity with compile_all.py)
+    if not dry_run:
+        import shutil
+        from datetime import UTC
+        from datetime import datetime
+
+        label = f"pre-parallel-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        snapshot_path = REPO_ROOT / ".snapshots" / label
+        if (REPO_ROOT / wiki_dir).exists():
+            snapshot_path.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(REPO_ROOT / wiki_dir, snapshot_path / "wiki")
+            click.echo(f"Pre-parallel snapshot: .snapshots/{label}/wiki")
+
+    # Budget snapshot (parity with compile_all.py)
+    try:
+        from src.budget import fetch_budget
+        budget_before = fetch_budget()
+        if budget_before:
+            click.echo(f"Budget (pre-run): {budget_before}")
+    except ImportError:
+        budget_before = None
+
     if dry_run:
         for i, g in enumerate(groups[:20], 1):
             tid = g[0].get("thread_id", "")[:12]
