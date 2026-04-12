@@ -7,6 +7,11 @@ docs_dir: wiki
 # Auto-discover pages — don't require an explicit nav (pages change as we compile)
 use_directory_urls: true
 
+# Keep log.md accessible by URL but hide from sidebar nav.
+# MkDocs 1.5+ supports not_in_nav.
+not_in_nav: |
+  log.md
+
 theme:
   name: material
   palette:

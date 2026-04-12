@@ -579,7 +579,18 @@ compound improvement over runs.
   proposing any fix. Just the signal is valuable.
 - Categories: `missing_page` | `prompt_ambiguity` | `tool_gap` |
   `supersession_doubt` | `conflict_candidate` | `pattern_noticed` |
-  `improvement_suggestion`
+  `improvement_suggestion` | `question_for_human` | `structure_suggestion`
+- **`structure_suggestion`**: LLM can propose directory/schema/naming
+  changes. E.g., "All these 12 WhatsApp-* topics should probably live
+  under `wiki/topics/whatsapp/` with a parent page" or "We should add a
+  `wiki/bugs/` category separate from `topics/`". These get reviewed
+  weekly; good ideas become migrations.
+- **`question_for_human`**: LLM can ask outright questions it can't answer
+  from context — e.g., "What does BL mean here? Is it 'buyer lead' or
+  'back log' or something else?" or "Why does this policy differ from
+  the Feb 2026 one?" — queued for async human answer. Answers get fed
+  back into compiler context (via CLAUDE.md or a glossary file) so the
+  LLM doesn't have to ask again. Compounds system knowledge over time.
 - Writes a structured entry to `docs/insights/YYYY-MM-DD.md` with:
   - ISO timestamp
   - batch_id / thread_id (if available)
