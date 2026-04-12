@@ -442,6 +442,41 @@ emails).
 
 ---
 
+## Multiple mailing lists
+
+**The dedup story is already fine** — we key off `Message-ID` (global, set by
+mail server), not Gmail's `thread_id`. Same email delivered to two lists
+produces one file because the hash collides to the same filename.
+
+**Changes needed to support `list A + list B`**:
+
+1. `.env`: `MAILING_LIST_ADDRESSES=list-a@company.com,list-b@company.com`
+   (current key `MAILING_LIST_ADDRESS` stays for single-list mode).
+2. `src/config.py`: expose `mailing_list_addresses: list[str]`.
+3. `scripts/ingest_backlog.py`: either loop the list, or build one Gmail query
+   `list:A OR list:B after:...`.
+4. `src/ingest/parser.py`: add `mailing_lists: [A, B]` to raw frontmatter when
+   we can detect which list delivered it (look at `Delivered-To` or
+   `List-Id` header).
+5. Compiler prompt: unchanged. It processes raw files regardless of list. The
+   `list:` provenance field is available if the compiler wants to label pages.
+
+**Edge cases**:
+- Same email sent to both lists → one raw file (dedup wins), `mailing_lists` has both.
+- Separate threads on same topic in two lists → two separate thread_ids, two
+  timelines. Compiler may create separate pages; cross-reference via the topic.
+- Budget: ~2× emails = ~2× compile cost. Use `compile_all --limit N` to
+  stagger.
+
+**Authentication**:
+- Current OAuth pulls `me` mailbox. If you're on all the lists, no changes.
+- If not: need domain-wide delegation (service account impersonating users) —
+  memory note already captures this.
+
+**When to build**: after live mode is proven on one list. Probably Phase 2.
+
+---
+
 ## Storage tier: local → GCS → Cloud SQL
 
 **Current (Phase 0)**: local disk only. raw/, wiki/, .snapshots/ all
@@ -456,18 +491,70 @@ gitignored. GitHub holds code + docs + audit reports only.
 
 **Phase 1 target (when pipeline stable)**: GCS in voice-eval-stack-im.
 
+### Bucket layout
+
 ```
 gs://voice-eval-stack-im-email-kb/
-  raw/           # immutable email markdown + frontmatter
-  attachments/   # blobs by message_id
-  wiki/          # compiled pages (regenerable from raw)
-  .snapshots/    # pre-compile backups
+  raw/                    # immutable .md, one per email (source of truth)
+  attachments/{msg_id}/   # blobs (PDFs, images) keyed by message_id short hash
+  wiki/                   # compiled markdown pages (regenerable)
+  snapshots/{label}/      # pre-compile backups (cleanup after 30d)
+  site/                   # optional: prebuilt static wiki HTML for hosting
 ```
 
-- Bucket IAM = team scope, audit logged
-- Lifecycle: raw/ → Coldline after 90 days
-- `gsutil rsync` from local to bucket in the watcher loop
-- Cost: ~$0.02/GB-month; negligible at current scale
+### Sync mechanism
+
+- `scripts/sync_to_gcs.py` uses `gsutil rsync -d -r <local> gs://...`
+- Trigger: after every successful compile OR on a cron (10-min interval)
+- Can also pull: `gsutil rsync gs://... <local>` on a second machine
+- State: keep `.gcs_last_sync` with ISO timestamp
+
+### Cost (projected for 1 year at current rate)
+
+| Tier | Size | Monthly |
+|---|---|---|
+| Raw (hot, 6 months) | ~500MB × 2 = 1GB | $0.02 |
+| Raw (cold, 6-12 months) | 1GB | $0.004 |
+| Attachments (when enabled) | 5-50GB | $0.10-1.00 |
+| Wiki | 100-500MB | $0.01 |
+| Snapshots (rolling 7d) | ~500MB | $0.01 |
+| **Total** | — | **<$2/month** at full scale |
+
+Egress (if we serve publicly): $0.12/GB. If 10 viewers × 10MB/visit/day =
+100MB/day = 3GB/month = $0.36. Inconsequential.
+
+### Serving the wiki
+
+Three options, cheapest first:
+
+1. **Local MkDocs dev server + phone on LAN** (current): free
+2. **Static build → GCS static website hosting**: $0.01/month plus egress.
+   Not HTTPS by default (need Cloud CDN or custom domain+LB).
+3. **Static build → Cloud Run**: $free under free tier, HTTPS automatic,
+   can add Google IAP (Identity-Aware Proxy) for org-only access. **This
+   is what we'd pick for team access.**
+
+### Speed
+
+- Build time: MkDocs Material builds 10k pages in ~30s. Not a concern.
+- Read time: served as static HTML from Cloud Run or GCS — <100ms cold, <10ms warm.
+- GCS-to-build: rsync every 10 min is ~5s for incremental changes.
+- No per-request GCS reads = no per-request cost.
+
+### Rollout sequence (when we promote)
+
+1. Create bucket with uniform bucket-level IAM
+2. Grant voice-eval-stack-im service account read/write
+3. Initial `gsutil rsync` uploads current raw/ + wiki/
+4. Modify `scripts/watch_and_compile.py` to rsync at end of each tick
+5. Deploy static site to Cloud Run with IAP: `gcloud run deploy
+   --source site/ --allow-unauthenticated=false` + IAP binding
+6. Add `.env`: `GCS_BUCKET`, `WIKI_URL` for the deployed site
+7. README section: "Accessing the wiki"
+
+**Do this when**: (a) compile pipeline is stable for a week, OR (b) you
+want to access the wiki from another machine, OR (c) another team member
+wants read-only access.
 
 **Phase 3 target (search at scale, >5k pages)**: Cloud SQL Postgres (already
 running in the GCP project). PGroonga for full-text, pgvector for semantic.
