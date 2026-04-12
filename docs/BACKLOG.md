@@ -364,6 +364,71 @@ we'd want.
 
 ---
 
+## Schema versioning, migration, and changelog for future agents
+
+**Why**: As we iterate on page structure, relations, and frontmatter fields, older
+pages will fall out of spec. We need a way to:
+1. Version the schema (e.g., `schema_version: 2` on every page)
+2. Migrate pages between versions without losing data
+3. Leave a changelog that explains WHY a decision was made (so a future LLM agent
+   compiling against v5 understands why a v2 page did something differently)
+
+**Pieces to build (Phase 2+)**:
+- `docs/SCHEMA.md` with versioned spec (v1, v2, ...) and changelog entries
+- `scripts/migrate_wiki.py migrate --to v2` that rewrites pages to match new
+  schema; must be idempotent and resumable
+- Every wiki page gets `schema_version` in frontmatter
+- `docs/DECISIONS.md` or ADRs for "why we did X" (e.g., "switched entity IDs
+  from name-slug to email-slug on 2026-05-01 because...")
+- Snapshot before migrating so you can roll back
+
+**Notes**:
+- Even v0→v1 will be a migration (our current pages have inconsistent `last_compiled`
+  hallucinations — a migration could stamp them all to a fresh known-bad marker
+  like `"unknown"`)
+- This also helps when comparing compiler prompt changes: snapshot v1, iterate
+  prompt, run on same raw emails, diff outputs
+
+**When**: Before Phase 3 chatbot. Essential for a multi-month evolving system.
+
+---
+
+## Thread-aware compilation — not yet implemented
+
+**Current state**:
+- Gmail API gives us `thread_id` (string like `19d431cd45e0b512`) on every
+  message — fully authoritative, no piecing together needed
+- We DO capture it in `raw/*.md` frontmatter
+- `list_uncompiled_emails` tool returns `thread_id`
+- Compiler prompt says "Group by thread_id when possible"
+
+**What's missing**:
+- No `list_uncompiled_threads` tool to let agent batch a whole thread
+- No thread state model (open / decision_pending / decided / amended / closed /
+  reopened)
+- Agent might compile the reply first (because it's chronologically later) and
+  miss context from the original
+- Multi-email threads show up as separate compile steps
+
+**Why it matters**:
+- A reply can reverse a decision ("Actually, let's go with option B instead")
+- Discussion threads need to compile as a unit for proper synthesis
+- Supersession detection is harder without thread context
+
+**Proposed design**:
+1. Add `list_uncompiled_threads` tool: groups uncompiled emails by `thread_id`,
+   returns `[{thread_id, emails: [{path, date, ...}], participants, subject}]`.
+2. Compile-all CLI batches by thread, not by email, so one agent invocation
+   sees all emails in one thread at once.
+3. Add `thread_state` field on relevant wiki pages: open / decided / etc.
+4. For live mode (Phase 1): "quiet period" — wait 30 min after last thread
+   activity before compiling. Prevents mid-conversation compilation.
+
+**When**: Phase 1 or Phase 2. Critical before full backlog (30 days, 3000+
+emails).
+
+---
+
 ## Future: multi-list ingestion via Google Groups
 
 See memory: `email_kb_multi_list.md`. Instead of per-user OAuth, use Google

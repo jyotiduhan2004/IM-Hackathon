@@ -163,11 +163,15 @@ def mark_as_compiled(file_path: str) -> dict[str, str | int]:
 def update_wiki_index(wiki_dir: str = "wiki") -> str:
     """Regenerate wiki/index.md by scanning all wiki pages and their frontmatter.
 
+    Also auto-stamps `last_compiled` on any page missing the field, using the
+    current real UTC time. This guarantees every page has a timestamp without
+    relying on the agent to call `stamp_page_compiled_at` for each one.
+
     Args:
         wiki_dir: Root wiki directory
 
     Returns:
-        Summary of what was indexed
+        Summary: pages indexed + pages auto-stamped
     """
     wiki_path = Path(wiki_dir)
     if not wiki_path.exists():
@@ -181,6 +185,8 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
         "timelines": [],
         "conflicts": [],
     }
+    stamped = 0
+    now_iso = datetime.now(UTC).isoformat()
 
     for category in categories:
         cat_dir = wiki_path / category
@@ -190,6 +196,14 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
             try:
                 content = md_file.read_text(encoding="utf-8")
                 fm = _extract_frontmatter(content)
+                # Auto-stamp if missing
+                if "last_compiled" not in fm:
+                    fm["last_compiled"] = now_iso
+                    body = _extract_body(content)
+                    md_file.write_text(
+                        _render_with_frontmatter(fm, body), encoding="utf-8"
+                    )
+                    stamped += 1
                 title = fm.get("title", md_file.stem)
                 status = fm.get("status", "current")
                 name = md_file.stem
@@ -203,7 +217,7 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
     lines = [
         "# Knowledge Base Index",
         "",
-        f"Last updated: {datetime.now().isoformat()}Z",
+        f"Last updated: {now_iso}",
         "",
     ]
     total = 0
@@ -220,7 +234,11 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
     index_path = wiki_path / "index.md"
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    return f"updated index: {total} pages across {sum(1 for v in categories.values() if v)} categories"
+    return (
+        f"updated index: {total} pages across "
+        f"{sum(1 for v in categories.values() if v)} categories; "
+        f"auto-stamped {stamped} pages with last_compiled"
+    )
 
 
 @tool
@@ -351,15 +369,23 @@ def create_compiler(
 
     # Deep Agents defaults to a virtual (in-memory) filesystem. We need real disk
     # so read_file/write_file/edit_file operate on raw/ and wiki/ directly.
-    # root_dir="." anchors the agent to the current working directory (repo root).
-    backend = FilesystemBackend(root_dir=".", virtual_mode=False)
+    # virtual_mode=True with root_dir="." means:
+    # - Absolute paths and ".." traversal are blocked (security guardrail)
+    # - Agent must use relative paths like "raw/foo.md", "wiki/topics/bar.md"
+    # Per FilesystemBackend docs, this is the right mode for bounded workflows.
+    cwd = Path.cwd().resolve()
+    backend = FilesystemBackend(root_dir=str(cwd), virtual_mode=True)
 
     system_prompt = (
         COMPILER_SYSTEM_PROMPT
         + f"\n\n## Context\n\n- raw_dir: {raw_dir}\n- wiki_dir: {wiki_dir}\n"
-        + "- All file paths are relative to the repo root.\n"
-        + "- Use read_file, write_file, edit_file, ls, glob, grep built-in tools "
-        + "to operate on real files in raw/ and wiki/.\n"
+        + "- ALL file paths MUST be relative (no leading /, no ..). Examples:\n"
+        + f"  - GOOD: `{raw_dir}/2026-04-11_subject_abc.md`\n"
+        + f"  - GOOD: `{wiki_dir}/topics/my-topic.md`\n"
+        + f"  - BAD: `/Users/...` (absolute paths are blocked)\n"
+        + f"  - BAD: `/raw/foo.md` (leading slash means absolute; blocked)\n"
+        + "- Do NOT call `ls` on absolute paths or `/`. Use `ls raw` or "
+        + f"`ls {wiki_dir}/topics` or use `glob` with patterns.\n"
     )
 
     return create_deep_agent(
@@ -401,8 +427,15 @@ def run_compilation(
     model_name: str | None = None,
     raw_dir: str = "raw",
     wiki_dir: str = "wiki",
+    recursion_limit: int = 150,
 ) -> dict[str, Any]:
-    """Run a compilation pass. Returns the agent's final state."""
+    """Run a compilation pass. Returns the agent's final state.
+
+    recursion_limit of 150 accommodates ~3-10 emails per batch. Each email
+    typically takes 10-20 agent steps (read, classify, read existing pages,
+    write/edit pages, stamp timestamps, mark compiled). Bump higher if batches
+    hit the limit.
+    """
     agent = create_compiler(model_name=model_name, raw_dir=raw_dir, wiki_dir=wiki_dir)
 
     callbacks = []
@@ -413,9 +446,13 @@ def run_compilation(
     config: dict[str, Any] = {}
     if callbacks:
         config["callbacks"] = callbacks
-    config["recursion_limit"] = 100
+    config["recursion_limit"] = recursion_limit
 
-    logger.info("running compilation", instruction=instruction[:100])
+    logger.info(
+        "running compilation",
+        instruction=instruction[:100],
+        recursion_limit=recursion_limit,
+    )
     result = agent.invoke(
         {"messages": [{"role": "user", "content": instruction}]},
         config=config,
