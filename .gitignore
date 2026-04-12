@@ -51,6 +51,9 @@ wiki/conflicts/*.md
 # Wiki snapshots for safe experimentation (see scripts/snapshot_wiki.py)
 .snapshots/
 
+# Tool harness large-output dumps (accidental commits from Bash tool overflow)
+large_tool_results/
+
 # Test artifacts
 .pytest_cache/
 htmlcov/
