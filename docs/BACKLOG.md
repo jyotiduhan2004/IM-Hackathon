@@ -429,6 +429,38 @@ emails).
 
 ---
 
+## Ordering guarantees — current behavior and known gaps
+
+**Sequential `compile_all.py`**:
+- `list_uncompiled_emails` sorts by filename (filenames start with `YYYY-MM-DD`)
+- Batches handed to agent strictly oldest → newest
+- Within a batch (3 emails): also chronological
+- **Supersession works naturally**: agent sees old policy first, then the email
+  that supersedes it
+
+**Parallel `compile_parallel.py`**:
+- Groups by `thread_id`, sorts WITHIN thread chronologically
+- Threads themselves processed CONCURRENTLY (no order between threads)
+- Supersession within a thread: fine
+- Cross-thread supersession (rare but real: "that reimbursement policy we
+  discussed in [thread A]? we're changing it, see [new thread B]"): agent
+  won't see thread A context while processing thread B if they're processing
+  concurrently
+
+**Mitigation for 30-day default run**:
+- Stick with sequential `compile_all.py` for the first full pass
+- Use parallel only for incremental updates (newly-arrived emails) where
+  cross-thread supersession is less common
+
+**Long-term fix** (Phase 2+):
+- Two-pass compile: pass 1 creates pages per email (parallel, fast); pass 2
+  runs a linter-agent that reads the whole wiki and detects cross-thread
+  supersession + conflicts
+- Or: serialize the "supersession detection" sub-task even while other steps
+  parallelize
+
+---
+
 ## Future: multi-list ingestion via Google Groups
 
 See memory: `email_kb_multi_list.md`. Instead of per-user OAuth, use Google

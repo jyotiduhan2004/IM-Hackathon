@@ -66,8 +66,15 @@ snapshot-clean: ## Delete all wiki/ .md content (keeps structure). Needs --confi
 
 # === Wiki Browsing ===
 
-wiki: ## Serve the compiled wiki at http://127.0.0.1:8765 (auto-reloads)
+wiki: ## Serve wiki on localhost only (http://127.0.0.1:8765)
 	uv run mkdocs serve --dev-addr 127.0.0.1:8765
+
+wiki-lan: ## Serve wiki on LAN (phone-accessible). Shows IP to use.
+	@echo "Serving on LAN. On phone (same WiFi), visit:"
+	@ip=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null); \
+		echo "  http://$$ip:8765/"
+	@echo "macOS firewall may prompt — accept the incoming connection."
+	uv run mkdocs serve --dev-addr 0.0.0.0:8765
 
 wiki-build: ## Build static wiki site into ./site/ for deployment
 	uv run mkdocs build
