@@ -442,6 +442,44 @@ emails).
 
 ---
 
+## Storage tier: local → GCS → Cloud SQL
+
+**Current (Phase 0)**: local disk only. raw/, wiki/, .snapshots/ all
+gitignored. GitHub holds code + docs + audit reports only.
+
+**Why not GitHub for content**:
+- Compliance risk — internal emails contain names, customer data, ticket IDs,
+  roadmaps. Even private GitHub has AI-training caches.
+- 100MB per-file limit; attachments will break this.
+- Git remembers forever — awkward for retention policies.
+- Can't do per-folder IAM.
+
+**Phase 1 target (when pipeline stable)**: GCS in voice-eval-stack-im.
+
+```
+gs://voice-eval-stack-im-email-kb/
+  raw/           # immutable email markdown + frontmatter
+  attachments/   # blobs by message_id
+  wiki/          # compiled pages (regenerable from raw)
+  .snapshots/    # pre-compile backups
+```
+
+- Bucket IAM = team scope, audit logged
+- Lifecycle: raw/ → Coldline after 90 days
+- `gsutil rsync` from local to bucket in the watcher loop
+- Cost: ~$0.02/GB-month; negligible at current scale
+
+**Phase 3 target (search at scale, >5k pages)**: Cloud SQL Postgres (already
+running in the GCP project). PGroonga for full-text, pgvector for semantic.
+
+**Phase 4 target (team access to wiki)**: MkDocs static build → GCS static
+website → Cloud Run + IAP. Google sign-in gated to the org.
+
+**When to promote Phase 0 → 1**: second machine needs access, or we add
+automated ingestion (watch_and_compile.py running 24/7).
+
+---
+
 ## Future: multi-list ingestion via Google Groups
 
 See memory: `email_kb_multi_list.md`. Instead of per-user OAuth, use Google

@@ -59,8 +59,9 @@ logger = structlog.get_logger(__name__)
 )
 @click.option(
     "--max-results",
-    default=500,
-    help="Maximum messages to fetch (default 500)",
+    type=int,
+    default=None,
+    help="Maximum messages to fetch. Default: unlimited (paginates until done).",
 )
 @click.option("--dry-run", is_flag=True, help="List messages without saving")
 @click.option("--skip-attachments", is_flag=True, help="Skip attachment downloads")
@@ -70,7 +71,7 @@ def main(
     after: datetime | None,
     before: datetime | None,
     mailing_list: str | None,
-    max_results: int,
+    max_results: int | None,
     dry_run: bool,
     skip_attachments: bool,
     query: str,

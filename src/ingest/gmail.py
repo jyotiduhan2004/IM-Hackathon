@@ -117,7 +117,7 @@ class GmailClient:
         after: date | datetime | None = None,
         before: date | datetime | None = None,
         query: str = "",
-        max_results: int = 500,
+        max_results: int | None = None,
     ) -> list[MessageStub]:
         """List message IDs matching the filter.
 
@@ -126,7 +126,7 @@ class GmailClient:
             after: Fetch emails sent after this date
             before: Fetch emails sent before this date
             query: Additional Gmail search query to append
-            max_results: Maximum messages to return (paginates automatically)
+            max_results: Maximum messages to return. None = unlimited (paginate until empty).
 
         Returns:
             List of MessageStub with id and thread_id
@@ -146,9 +146,19 @@ class GmailClient:
 
         stubs: list[MessageStub] = []
         page_token: str | None = None
+        # Gmail API maxResults per request caps at 500; we paginate until empty
+        # or until we've accumulated max_results total.
+        per_page = 500
 
-        while len(stubs) < max_results:
-            batch_size = min(500, max_results - len(stubs))
+        while True:
+            if max_results is not None:
+                remaining = max_results - len(stubs)
+                if remaining <= 0:
+                    break
+                batch_size = min(per_page, remaining)
+            else:
+                batch_size = per_page
+
             response = (
                 self.service.users()
                 .messages()

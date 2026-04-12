@@ -622,7 +622,6 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "litellm" },
-    { name = "mail-parser" },
     { name = "markitdown", extra = ["all"] },
     { name = "mkdocs-material" },
     { name = "mkdocs-roamlinks-plugin" },
@@ -654,7 +653,6 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.3.0" },
     { name = "langfuse", specifier = ">=2.50.0" },
     { name = "litellm", specifier = ">=1.50.0" },
-    { name = "mail-parser", specifier = ">=3.15.0" },
     { name = "markitdown", extras = ["all"], specifier = ">=0.0.1a3" },
     { name = "mkdocs-material", specifier = ">=9.7.6" },
     { name = "mkdocs-roamlinks-plugin", specifier = ">=0.3.2" },
@@ -1645,15 +1643,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/25/8f/132b0d7cd51c02c39fd52658a5896276c30c8cc2fd453270b19db8c40f7e/magika-0.6.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:86901e64b05dde5faff408c9b8245495b2e1fd4c226e3393d3d2a3fee65c504b", size = 13358841, upload-time = "2025-10-30T15:22:27.413Z" },
     { url = "https://files.pythonhosted.org/packages/c4/03/5ed859be502903a68b7b393b17ae0283bf34195cfcca79ce2dc25b9290e7/magika-0.6.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:3d9661eedbdf445ac9567e97e7ceefb93545d77a6a32858139ea966b5806fb64", size = 15367335, upload-time = "2025-10-30T15:22:29.907Z" },
     { url = "https://files.pythonhosted.org/packages/7b/9e/f8ee7d644affa3b80efdd623a3d75865c8f058f3950cb87fb0c48e3559bc/magika-0.6.3-py3-none-win_amd64.whl", hash = "sha256:e57f75674447b20cab4db928ae58ab264d7d8582b55183a0b876711c2b2787f3", size = 12692831, upload-time = "2025-10-30T15:22:32.063Z" },
-]
-
-[[package]]
-name = "mail-parser"
-version = "4.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4e/61/71a4d87627dbf57816eb3e8ebf31e1dd2ae52ff57d7436719b950c69a3e4/mail_parser-4.2.1.tar.gz", hash = "sha256:2ddd4e48bedbff28d09d0743e879d3818651d0301718838b1b81e7f93175d096", size = 2788499, upload-time = "2026-04-04T14:52:45.063Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/e9/afc4903ef4b042be380dcf0091f28416aa6be50db7b228bdc8ce8224bdfa/mail_parser-4.2.1-py3-none-any.whl", hash = "sha256:f7b46be5e0834173ca1538bf5b3cb118d4f169e7c16d157dd915aaa9bceba9a2", size = 33317, upload-time = "2026-04-04T14:52:43.388Z" },
 ]
 
 [[package]]
