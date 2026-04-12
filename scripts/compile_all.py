@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.compile.compiler import (  # noqa: E402
     list_uncompiled_emails,
     run_compilation,
+    update_wiki_index,
 )
 from src.config import settings  # noqa: E402
 
@@ -61,11 +62,15 @@ def main(batch_size: int, dry_run: bool, model: str | None) -> None:
 
     click.echo(f"Found {total} uncompiled emails.")
     if total == 0:
-        click.echo("Nothing to compile. Done.")
+        click.echo("Nothing to compile.")
+        # Still regenerate index in case wiki changed
+        click.echo("Regenerating wiki index...")
+        click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
         return
 
     if dry_run:
-        for path in uncompiled[:30]:
+        for email in uncompiled[:30]:
+            path = email["path"] if isinstance(email, dict) else email
             click.echo(f"  {path}")
         if total > 30:
             click.echo(f"  ... and {total - 30} more")
@@ -80,11 +85,13 @@ def main(batch_size: int, dry_run: bool, model: str | None) -> None:
     processed = 0
     for i in range(0, total, batch_size):
         batch = uncompiled[i : i + batch_size]
-        batch_files = "\n".join(f"- {p}" for p in batch)
+        # batch items may be dicts (new schema) or strings (legacy); handle both
+        batch_paths = [b["path"] if isinstance(b, dict) else b for b in batch]
+        batch_files = "\n".join(f"- {p}" for p in batch_paths)
         instruction = (
             f"Compile the following {len(batch)} uncompiled raw emails into wiki pages. "
             f"Process them chronologically and create/update wiki pages as needed. "
-            f"Mark each as compiled when done. Update the index and log at the end of this batch.\n\n"
+            f"Mark each email as compiled with `mark_as_compiled` when done.\n\n"
             f"Files to compile:\n{batch_files}"
         )
 
@@ -102,6 +109,10 @@ def main(batch_size: int, dry_run: bool, model: str | None) -> None:
             logger.error("batch compilation failed", batch_index=i, error=str(e))
             click.echo(f"ERROR in batch: {e}")
             click.echo("Continuing with next batch...")
+
+    # Regenerate index once after all batches complete — authoritative, not stale
+    click.echo("\nRegenerating wiki index (post-compile)...")
+    click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
 
     click.echo(f"\nDone. Processed {processed}/{total} emails.")
 

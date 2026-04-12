@@ -37,7 +37,8 @@ class LintIssue:
 
 REQUIRED_FRONTMATTER = {"title", "page_type", "status", "sources", "last_compiled"}
 VALID_STATUSES = {"current", "superseded", "contested"}
-VALID_PAGE_TYPES = {"topic", "entity", "policy", "timeline", "conflict"}
+VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict"}
+WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
 def _extract_frontmatter(content: str) -> dict[str, Any]:
@@ -60,7 +61,7 @@ def _extract_wikilinks(content: str) -> list[str]:
 def _get_wiki_pages(wiki_dir: Path) -> dict[str, Path]:
     """Map page name (stem) → file path for all wiki pages."""
     pages: dict[str, Path] = {}
-    for category in ("topics", "entities", "policies", "timelines", "conflicts"):
+    for category in WIKI_CATEGORIES:
         cat_dir = wiki_dir / category
         if cat_dir.exists():
             for md in cat_dir.glob("*.md"):
@@ -214,6 +215,77 @@ def check_missing_index_entries(wiki_dir: Path) -> list[LintIssue]:
     return issues
 
 
+def _slugify(text: str) -> str:
+    """Convert a string to a kebab-case slug for filename matching."""
+    text = re.sub(r"[^\w\s-]", "", text.lower())
+    text = re.sub(r"[\s_]+", "-", text).strip("-")
+    return text
+
+
+def normalize_wikilinks(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue]:
+    """Auto-fix broken wikilinks by matching Title Case targets to kebab-case files.
+
+    For every `[[Some Target]]` in wiki pages:
+    - If `wiki/**/Some Target.md` exists (exact match), skip
+    - Else try `_slugify("Some Target") == file.stem` → rewrite link to `[[some-target]]`
+    - Else lowercase and compare → rewrite if match
+    - Else leave as-is (will be caught by check_broken_wikilinks)
+
+    Returns list of LintIssue entries describing what was (or would be) fixed.
+    """
+    pages = _get_wiki_pages(wiki_dir)
+    # Build lookup: lowercase stem → canonical stem
+    stem_by_lower: dict[str, str] = {p.lower(): p for p in pages}
+
+    issues: list[LintIssue] = []
+
+    for name, path in pages.items():
+        content = path.read_text(encoding="utf-8")
+        original = content
+
+        def replace_link(match: re.Match[str]) -> str:
+            target = match.group(1).split("|")[0].strip()
+            if target in pages:
+                return match.group(0)  # already canonical
+            # Try case-insensitive exact match
+            if target.lower() in stem_by_lower:
+                canonical = stem_by_lower[target.lower()]
+                return f"[[{canonical}]]"
+            # Try slugify + lookup
+            slug = _slugify(target)
+            if slug in pages:
+                return f"[[{slug}]]"
+            return match.group(0)  # can't fix
+
+        new_content = re.sub(r"\[\[([^\]]+)\]\]", replace_link, content)
+
+        if new_content != original:
+            diff_count = sum(
+                1
+                for a, b in zip(
+                    re.findall(r"\[\[[^\]]+\]\]", original),
+                    re.findall(r"\[\[[^\]]+\]\]", new_content),
+                    strict=False,
+                )
+                if a != b
+            )
+            issues.append(
+                LintIssue(
+                    severity="info",
+                    category="wikilink_normalized",
+                    page=str(path),
+                    message=f"Would normalize {diff_count} wikilinks"
+                    if dry_run
+                    else f"Normalized {diff_count} wikilinks",
+                    auto_fixable=True,
+                )
+            )
+            if not dry_run:
+                path.write_text(new_content, encoding="utf-8")
+
+    return issues
+
+
 def run_all_checks(wiki_dir: Path) -> list[LintIssue]:
     """Run all lint checks."""
     all_issues: list[LintIssue] = []
@@ -272,6 +344,12 @@ def main(fix: bool, category: str | None) -> None:
         click.echo(f"ERROR: wiki directory not found: {wiki_dir}", err=True)
         sys.exit(1)
 
+    if fix:
+        click.echo("Auto-fixing wikilinks (normalizing Title Case → kebab-case)...")
+        fixed = normalize_wikilinks(wiki_dir, dry_run=False)
+        click.echo(f"Normalized wikilinks in {len(fixed)} pages.")
+        click.echo()
+
     issues = run_all_checks(wiki_dir)
 
     if category:
@@ -279,9 +357,8 @@ def main(fix: bool, category: str | None) -> None:
 
     print_report(issues)
 
-    if fix:
-        click.echo("\n--fix not yet implemented. Issues reported but not modified.")
-        click.echo("(Auto-fix will come in Phase 2.)")
+    if not fix and any(i.auto_fixable for i in issues):
+        click.echo("\nRun with --fix to auto-normalize wikilinks.")
 
     has_errors = any(i.severity == "error" for i in issues)
     sys.exit(1 if has_errors else 0)

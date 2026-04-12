@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,27 +20,38 @@ logger = structlog.get_logger(__name__)
 
 
 @tool
-def list_uncompiled_emails(raw_dir: str = "raw") -> list[str]:
-    """List all raw email files that haven't been compiled yet.
+def list_uncompiled_emails(raw_dir: str = "raw") -> list[dict[str, str]]:
+    """List raw email files that haven't been compiled yet.
 
-    Reads YAML frontmatter of each .md file in raw_dir and returns
-    paths where compiled: false, sorted chronologically by filename
-    (which starts with YYYY-MM-DD).
+    Returns one entry per uncompiled email with lightweight metadata the agent
+    can use to plan without reading each file. Sorted oldest-first by date.
+
+    Args:
+        raw_dir: Directory containing raw/*.md files (default "raw")
 
     Returns:
-        List of relative paths like ["raw/2026-04-01_subject_abc12345.md", ...]
+        List of dicts with keys: path, date, subject, from, thread_id.
+        Empty list if no uncompiled emails.
     """
     raw_path = Path(raw_dir)
     if not raw_path.exists():
         return []
 
-    uncompiled: list[str] = []
+    uncompiled: list[dict[str, str]] = []
     for md_file in sorted(raw_path.glob("*.md")):
         try:
             content = md_file.read_text(encoding="utf-8")
             frontmatter = _extract_frontmatter(content)
             if frontmatter.get("compiled") is False:
-                uncompiled.append(str(md_file))
+                uncompiled.append(
+                    {
+                        "path": str(md_file),
+                        "date": str(frontmatter.get("date", "")),
+                        "subject": str(frontmatter.get("subject", "")),
+                        "from": str(frontmatter.get("from", "")),
+                        "thread_id": str(frontmatter.get("thread_id", "")),
+                    }
+                )
         except (yaml.YAMLError, UnicodeDecodeError) as e:
             logger.warning("skipping malformed raw file", path=str(md_file), error=str(e))
 
@@ -48,30 +59,104 @@ def list_uncompiled_emails(raw_dir: str = "raw") -> list[str]:
 
 
 @tool
-def mark_as_compiled(file_path: str) -> str:
-    """Mark a raw email as compiled by setting compiled: true in frontmatter.
+def list_wiki_pages(wiki_dir: str = "wiki") -> dict[str, list[str]]:
+    """List all existing wiki pages grouped by category.
 
-    Args:
-        file_path: Path to the raw email markdown file
+    Call this BEFORE creating new pages so you know what already exists and
+    can update the existing page instead of duplicating.
 
     Returns:
-        Confirmation message
+        Dict with keys: topics, entities, policies, timelines, conflicts.
+        Each value is a list of page names (without .md extension).
+        These names are what you should use in [[wikilinks]].
+    """
+    wiki_path = Path(wiki_dir)
+    result: dict[str, list[str]] = {
+        "topics": [],
+        "entities": [],
+        "systems": [],
+        "policies": [],
+        "timelines": [],
+        "conflicts": [],
+    }
+    if not wiki_path.exists():
+        return result
+
+    for category in result:
+        cat_dir = wiki_path / category
+        if cat_dir.exists():
+            result[category] = sorted(f.stem for f in cat_dir.glob("*.md"))
+    return result
+
+
+@tool
+def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
+    """Set last_compiled on a wiki page to the current real-world UTC time.
+
+    Use this INSTEAD OF writing last_compiled yourself in the page frontmatter.
+    You do not know the current date; this tool uses the system clock.
+
+    Args:
+        file_path: Path to the wiki page markdown file
+
+    Returns:
+        Dict with "ok" (bool), "last_compiled" (ISO string), "path" (str).
     """
     path = Path(file_path)
     if not path.exists():
-        return f"ERROR: file not found: {file_path}"
+        return {"ok": "false", "error": f"file not found: {file_path}"}
+
+    content = path.read_text(encoding="utf-8")
+    frontmatter = _extract_frontmatter(content)
+    body = _extract_body(content)
+
+    now_iso = datetime.now(UTC).isoformat()
+    frontmatter["last_compiled"] = now_iso
+
+    new_content = _render_with_frontmatter(frontmatter, body)
+    path.write_text(new_content, encoding="utf-8")
+    return {"ok": "true", "last_compiled": now_iso, "path": file_path}
+
+
+@tool
+def mark_as_compiled(file_path: str) -> dict[str, str | int]:
+    """Mark a raw email as compiled. Call ONLY after the email's content has
+    been merged into the correct wiki pages.
+
+    Sets compiled: true and compiled_at (real UTC time) in the raw file's
+    frontmatter. Does not modify email body.
+
+    Args:
+        file_path: Path to the raw email markdown file (e.g., "raw/2026-04-11_foo_abc12345.md")
+
+    Returns:
+        Dict with "ok" (bool), "remaining_uncompiled" (int count), "path" (str).
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return {"ok": "false", "error": f"file not found: {file_path}"}
 
     content = path.read_text(encoding="utf-8")
     frontmatter = _extract_frontmatter(content)
     body = _extract_body(content)
 
     frontmatter["compiled"] = True
-    frontmatter["compiled_at"] = datetime.now().isoformat() + "Z"
+    frontmatter["compiled_at"] = datetime.now(UTC).isoformat()
 
     new_content = _render_with_frontmatter(frontmatter, body)
     path.write_text(new_content, encoding="utf-8")
 
-    return f"marked compiled: {file_path}"
+    remaining = sum(
+        1
+        for md in path.parent.glob("*.md")
+        if _extract_frontmatter(md.read_text(encoding="utf-8")).get("compiled") is False
+    )
+
+    return {
+        "ok": "true",
+        "remaining_uncompiled": remaining,
+        "path": file_path,
+    }
 
 
 @tool
@@ -88,10 +173,11 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
     if not wiki_path.exists():
         return f"ERROR: wiki directory not found: {wiki_dir}"
 
-    categories = {
+    categories: dict[str, list[str]] = {
         "policies": [],
         "topics": [],
         "entities": [],
+        "systems": [],
         "timelines": [],
         "conflicts": [],
     }
@@ -206,6 +292,29 @@ def _render_with_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
 # === Compiler Factory ===
 
 
+def _make_chat_model(model_name: str) -> Any:
+    """Build a chat model, routing through LiteLLM proxy if configured.
+
+    LiteLLM proxies expose an OpenAI-compatible API, so we use langchain-openai's
+    ChatOpenAI and point it at the proxy's base URL. This works for any model
+    string the proxy knows (e.g. "z-ai/glm-5", "anthropic/claude-opus-4-6"),
+    regardless of whether langchain has a native provider for it.
+    """
+    if settings.litellm_base_url:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model_name,
+            base_url=settings.litellm_base_url,
+            api_key=settings.openai_api_key or "dummy",
+        )
+
+    # Fallback: use langchain's provider inference
+    from langchain.chat_models import init_chat_model
+
+    return init_chat_model(model_name)
+
+
 def create_compiler(
     model_name: str | None = None,
     raw_dir: str = "raw",
@@ -213,8 +322,15 @@ def create_compiler(
 ) -> Any:
     """Create a Deep Agents wiki compiler.
 
+    Model routing:
+    - If LITELLM_BASE_URL is set, routes all models through the LiteLLM proxy
+      using an OpenAI-compatible client. This lets us use any model name the
+      proxy knows (e.g. "z-ai/glm-5", "anthropic/claude-opus-4-6").
+    - Otherwise uses init_chat_model's provider inference (requires provider
+      prefix like "openai:gpt-4o" or a recognized model name).
+
     Args:
-        model_name: LiteLLM model string (e.g., "gpt-4o"). Defaults to settings.llm_model.
+        model_name: Model string. Defaults to settings.llm_model.
         raw_dir: Path to raw/ directory
         wiki_dir: Path to wiki/ directory
 
@@ -222,27 +338,42 @@ def create_compiler(
         A compiled LangGraph agent ready to invoke.
     """
     from deepagents import create_deep_agent
-    from langchain.chat_models import init_chat_model
+    from deepagents.backends import FilesystemBackend
 
     model_name = model_name or settings.llm_model
-    logger.info("creating wiki compiler", model=model_name)
+    logger.info(
+        "creating wiki compiler",
+        model=model_name,
+        via_proxy=bool(settings.litellm_base_url),
+    )
 
-    model = init_chat_model(model_name)
+    model = _make_chat_model(model_name)
+
+    # Deep Agents defaults to a virtual (in-memory) filesystem. We need real disk
+    # so read_file/write_file/edit_file operate on raw/ and wiki/ directly.
+    # root_dir="." anchors the agent to the current working directory (repo root).
+    backend = FilesystemBackend(root_dir=".", virtual_mode=False)
 
     system_prompt = (
         COMPILER_SYSTEM_PROMPT
         + f"\n\n## Context\n\n- raw_dir: {raw_dir}\n- wiki_dir: {wiki_dir}\n"
+        + "- All file paths are relative to the repo root.\n"
+        + "- Use read_file, write_file, edit_file, ls, glob, grep built-in tools "
+        + "to operate on real files in raw/ and wiki/.\n"
     )
 
     return create_deep_agent(
         model=model,
         tools=[
             list_uncompiled_emails,
+            list_wiki_pages,
             mark_as_compiled,
+            stamp_page_compiled_at,
             update_wiki_index,
             append_to_log,
         ],
         system_prompt=system_prompt,
+        backend=backend,
     )
 
 

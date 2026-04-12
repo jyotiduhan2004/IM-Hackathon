@@ -28,10 +28,19 @@ credentials.json
 .DS_Store
 Thumbs.db
 
-# Raw email storage (may be large — track separately or use git-lfs)
-# Uncomment if raw/ gets too large for git:
-# raw/
-# raw/attachments/
+# Content of raw/ and wiki/ is NOT committed — only the directory structure.
+# This keeps the repo clean while letting us move to a real datastore later.
+# The .gitkeep files in each subdirectory preserve the tree layout in git.
+raw/*.md
+raw/attachments/**/*
+!raw/attachments/.gitkeep
+wiki/*.md
+wiki/topics/*.md
+wiki/entities/*.md
+wiki/systems/*.md
+wiki/policies/*.md
+wiki/timelines/*.md
+wiki/conflicts/*.md
 
 # Langfuse / tracing
 .langfuse/
