@@ -196,8 +196,12 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
             try:
                 content = md_file.read_text(encoding="utf-8")
                 fm = _extract_frontmatter(content)
-                # Auto-stamp if missing
-                if "last_compiled" not in fm:
+                # Auto-stamp only if the frontmatter looks complete enough.
+                # A broken frontmatter (e.g., only `last_compiled` present) means
+                # the agent's edit_file mangled the page — don't overwrite it,
+                # or we'll destroy what's left.
+                has_real_fields = "title" in fm or "page_type" in fm
+                if "last_compiled" not in fm and has_real_fields:
                     fm["last_compiled"] = now_iso
                     body = _extract_body(content)
                     md_file.write_text(

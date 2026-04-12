@@ -79,6 +79,18 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
         click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
         return
 
+    # Auto-snapshot before compiling so we can roll back if the run corrupts
+    # wiki pages. Snapshots are cheap (local copy) and have saved us pain.
+    if not dry_run:
+        from datetime import UTC, datetime
+        label = f"pre-compile-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        snapshot_path = REPO_ROOT / ".snapshots" / label
+        if (REPO_ROOT / wiki_dir).exists():
+            import shutil
+            snapshot_path.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(REPO_ROOT / wiki_dir, snapshot_path / "wiki")
+            click.echo(f"Pre-compile snapshot: .snapshots/{label}/wiki")
+
     if dry_run:
         for email in uncompiled[:30]:
             path = email["path"] if isinstance(email, dict) else email
@@ -124,6 +136,24 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
     # Regenerate index once after all batches complete — authoritative, not stale
     click.echo("\nRegenerating wiki index (post-compile)...")
     click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
+
+    # Run validator and warn (but don't fail) if integrity is broken. Pre-compile
+    # snapshot is already captured above for rollback.
+    click.echo("\nValidating wiki integrity...")
+    import subprocess
+    result = subprocess.run(
+        ["uv", "run", "python", "scripts/validate_wiki.py"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+    click.echo(result.stdout)
+    if result.returncode != 0:
+        click.echo(result.stderr)
+        click.echo(
+            f"\n⚠ Validation failed. Pre-compile snapshot is saved. "
+            f"Restore with: uv run python scripts/snapshot_wiki.py restore <label>"
+        )
 
     click.echo(f"\nDone. Processed {processed}/{total} emails.")
 
