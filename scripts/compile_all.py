@@ -42,6 +42,12 @@ logger = structlog.get_logger(__name__)
     help="Max emails to compile per agent invocation (default 20)",
 )
 @click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Max TOTAL emails to process this run (oldest-first). Default: all.",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="List uncompiled emails without compiling",
@@ -51,16 +57,21 @@ logger = structlog.get_logger(__name__)
     default=None,
     help="Override LLM model (default from .env LLM_MODEL)",
 )
-def main(batch_size: int, dry_run: bool, model: str | None) -> None:
+def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -> None:
     """Compile uncompiled raw emails into wiki pages using Deep Agents."""
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
 
     # Use the tool directly for listing, not through the agent
-    uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
+    all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
+    # list_uncompiled_emails already sorts by filename (= YYYY-MM-DD prefix),
+    # so slicing gives us the oldest N emails — strict chronological order.
+    uncompiled = all_uncompiled[:limit] if limit else all_uncompiled
     total = len(uncompiled)
 
-    click.echo(f"Found {total} uncompiled emails.")
+    click.echo(f"Found {len(all_uncompiled)} uncompiled emails total.")
+    if limit and limit < len(all_uncompiled):
+        click.echo(f"Processing oldest {limit} this run (chronological).")
     if total == 0:
         click.echo("Nothing to compile.")
         # Still regenerate index in case wiki changed

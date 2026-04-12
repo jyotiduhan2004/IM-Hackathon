@@ -61,6 +61,9 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
 
+hooks:
+  - mkdocs_hooks.py  # Appends "## Sources" from frontmatter to every page
+
 plugins:
   - search
   - tags

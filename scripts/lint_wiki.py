@@ -351,10 +351,79 @@ def normalize_wikilinks(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue
     return issues
 
 
+def check_duplicate_bodies(wiki_dir: Path) -> list[LintIssue]:
+    """Detect wiki pages with byte-identical bodies (sans last_compiled).
+
+    Caught a real bug: systems/export-indiamart.md was a byte-for-byte copy of
+    systems/tawk-to.md (only last_compiled differed). This check would have
+    flagged it.
+    """
+    import hashlib
+
+    issues: list[LintIssue] = []
+    by_hash: dict[str, list[Path]] = {}
+
+    for path in _get_wiki_pages(wiki_dir).values():
+        content = path.read_text(encoding="utf-8")
+        # Strip last_compiled line so timestamp differences don't mask dupes
+        normalized = re.sub(
+            r"^last_compiled:.*$", "", content, flags=re.MULTILINE
+        ).strip()
+        digest = hashlib.sha256(normalized.encode()).hexdigest()
+        by_hash.setdefault(digest, []).append(path)
+
+    for paths in by_hash.values():
+        if len(paths) > 1:
+            names = ", ".join(p.name for p in paths)
+            for p in paths:
+                issues.append(
+                    LintIssue(
+                        severity="error",
+                        category="duplicate_body",
+                        page=str(p),
+                        message=f"Byte-identical body shared with: {names}",
+                    )
+                )
+
+    return issues
+
+
+def check_page_type_mismatch(wiki_dir: Path) -> list[LintIssue]:
+    """Flag pages where directory and page_type frontmatter disagree."""
+    issues: list[LintIssue] = []
+    expected = {
+        "topics": "topic",
+        "entities": "entity",
+        "systems": "system",
+        "policies": "policy",
+        "timelines": "timeline",
+        "conflicts": "conflict",
+    }
+    for path in _get_wiki_pages(wiki_dir).values():
+        category = path.parent.name
+        want = expected.get(category)
+        if not want:
+            continue
+        fm = _extract_frontmatter(path.read_text(encoding="utf-8"))
+        got = fm.get("page_type")
+        if got and got != want:
+            issues.append(
+                LintIssue(
+                    severity="error",
+                    category="page_type_mismatch",
+                    page=str(path),
+                    message=f"In {category}/ but page_type={got!r}, expected {want!r}",
+                )
+            )
+    return issues
+
+
 def run_all_checks(wiki_dir: Path) -> list[LintIssue]:
     """Run all lint checks."""
     all_issues: list[LintIssue] = []
     all_issues.extend(check_frontmatter(wiki_dir))
+    all_issues.extend(check_page_type_mismatch(wiki_dir))
+    all_issues.extend(check_duplicate_bodies(wiki_dir))
     all_issues.extend(check_broken_wikilinks(wiki_dir))
     all_issues.extend(check_orphan_pages(wiki_dir))
     all_issues.extend(check_missing_index_entries(wiki_dir))

@@ -144,6 +144,45 @@ Never wikilink something without a page.
 - NEVER delete a wiki page — supersede it instead
 - NEVER remove history — only add to it
 - NEVER guess at supersession — flag as conflict when unsure
+- NEVER create two pages with the same body content (post-compile lint checks hashes)
+- NEVER produce made-up summary stats (e.g., "5/5 parameters"). Use the exact
+  numbers from the source (e.g., "8 Yes, 2 NA, 1 No; 91.67% score").
+
+## Preserve technical depth
+
+Current wiki pages tend to over-abstract. Keep concrete details from the source:
+
+- **Ticket IDs / bug numbers** (e.g., 655345, 655415)
+- **Test results** (e.g., "5/6 passed", "7/7 tests, 36/36 smoke")
+- **Root cause explanations** (e.g., "Realm on main thread in viewDidLoad sync chain")
+- **Specific fixes** (e.g., "RealmActor background, async let parallelization")
+- **API/config paths** (e.g., "user_glid + AK params on PDP/Company APIs")
+- **URLs / identifiers mentioned** (e.g., "apidocs.intermesh.net/ai-dashboard",
+  "Ticket 655547", "GLID 264497212")
+
+Prefer a short "Technical Details" or "Implementation" section with these raw
+facts over a paragraph of prose that loses the specifics.
+
+## Page type invariants
+
+Before creating or updating a page, verify the category:
+
+- `entity/{slug}.md` MUST be a human person. Signal: the source email has a
+  From or CC line with their email address like `first.last@indiamart.com`
+  containing their name. Also: if the slug is obviously a person's name
+  (first-last pattern) with no platform/product/URL suffix.
+- `system/{slug}.md` MUST be a product, platform, service, URL, tool, or
+  mailing list. Signal: slug ends with `.com`/`.net`/`-net`/`-bot`/`-team`;
+  or appears in technical/product context; or matches a mailing list address.
+- If you wrote a page to the wrong category, MOVE it (write to new location,
+  delete old) rather than leave a duplicate.
+
+## Source completeness for entity pages
+
+When creating an entity page, scan ALL uncompiled raw emails for references
+to the person. Include every raw file where they appear in From/To/CC/body
+in the page's `sources:` list. A stub entity with `sources: []` is an error:
+either fill it in or don't create the page.
 
 ## Efficiency
 
