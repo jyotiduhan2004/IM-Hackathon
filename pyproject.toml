@@ -31,6 +31,8 @@ dependencies = [
     "rich>=13.9.0",
     "click>=8.1.0",
     "pyyaml>=6.0.0",
+    "mkdocs-material>=9.7.6",
+    "mkdocs-roamlinks-plugin>=0.3.2",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,4 @@
-.PHONY: setup sync ingest compile lint check test format type-check serve help
+.PHONY: setup sync ingest compile lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -53,7 +53,23 @@ format-check: ## Check formatting without fixing
 type-check: ## Type check
 	uv run mypy src/
 
+# === Snapshot / Restore (safe experimentation) ===
+
+snapshot: ## Snapshot current wiki/ into .snapshots/ with timestamp label
+	uv run python scripts/snapshot_wiki.py save
+
+snapshot-list: ## List available snapshots
+	uv run python scripts/snapshot_wiki.py list
+
+snapshot-clean: ## Delete all wiki/ .md content (keeps structure). Needs --confirm
+	uv run python scripts/snapshot_wiki.py clean --confirm
+
 # === Wiki Browsing ===
 
-serve: ## Serve wiki locally (requires mkdocs-material)
-	uv run mkdocs serve
+wiki: ## Serve the compiled wiki at http://127.0.0.1:8765 (auto-reloads)
+	uv run mkdocs serve --dev-addr 127.0.0.1:8765
+
+wiki-build: ## Build static wiki site into ./site/ for deployment
+	uv run mkdocs build
+
+serve: wiki ## Alias for `make wiki`
