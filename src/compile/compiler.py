@@ -274,15 +274,42 @@ def append_to_log(entry: str, wiki_dir: str = "wiki") -> str:
 # === Frontmatter helpers ===
 
 
+def _split_frontmatter(content: str) -> tuple[str, str]:
+    """Split markdown content into (yaml_frontmatter, body) correctly.
+
+    The naive `content.split("---", 2)` breaks when content contains `---`
+    NOT as frontmatter delimiter (e.g., filename in sources: `_informational---transforming_`).
+    This parser only treats `---` as a delimiter when it's on its own line,
+    matching the YAML frontmatter convention.
+    """
+    if not content.startswith("---"):
+        return "", content
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].rstrip() != "---":
+        return "", content
+
+    fm_lines: list[str] = []
+    body_start_idx = -1
+    for i, line in enumerate(lines[1:], start=1):
+        if line.rstrip() == "---":
+            body_start_idx = i + 1
+            break
+        fm_lines.append(line)
+
+    if body_start_idx == -1:
+        return "", content  # No closing ---, not valid frontmatter
+
+    body = "".join(lines[body_start_idx:]).lstrip("\n")
+    return "".join(fm_lines), body
+
+
 def _extract_frontmatter(content: str) -> dict[str, Any]:
     """Extract YAML frontmatter from a markdown file."""
-    if not content.startswith("---"):
-        return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
+    fm_text, _ = _split_frontmatter(content)
+    if not fm_text:
         return {}
     try:
-        parsed = yaml.safe_load(parts[1])
+        parsed = yaml.safe_load(fm_text)
         return parsed if isinstance(parsed, dict) else {}
     except yaml.YAMLError:
         return {}
@@ -290,12 +317,8 @@ def _extract_frontmatter(content: str) -> dict[str, Any]:
 
 def _extract_body(content: str) -> str:
     """Extract the body (everything after frontmatter)."""
-    if not content.startswith("---"):
-        return content
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return content
-    return parts[2].lstrip("\n")
+    _, body = _split_frontmatter(content)
+    return body
 
 
 def _render_with_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
