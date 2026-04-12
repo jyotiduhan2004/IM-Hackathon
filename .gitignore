@@ -48,6 +48,9 @@ wiki/conflicts/*.md
 # Gmail state
 .gmail_history_id
 
+# Wiki snapshots for safe experimentation (see scripts/snapshot_wiki.py)
+.snapshots/
+
 # Test artifacts
 .pytest_cache/
 htmlcov/
