@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.budget import fetch_budget  # noqa: E402
 from src.compile.compiler import (  # noqa: E402
     list_uncompiled_emails,
     run_compilation,
@@ -103,6 +104,9 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
     click.echo(f"Compiling in batches of {batch_size}...")
     click.echo(f"Model: {model or settings.llm_model}")
     click.echo(f"Wiki dir: {wiki_dir}")
+    budget_before = fetch_budget()
+    if budget_before:
+        click.echo(f"Budget (pre-run): {budget_before}")
     click.echo()
 
     processed = 0
@@ -154,6 +158,13 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
             f"\n⚠ Validation failed. Pre-compile snapshot is saved. "
             f"Restore with: uv run python scripts/snapshot_wiki.py restore <label>"
         )
+
+    budget_after = fetch_budget()
+    if budget_after:
+        click.echo(f"Budget (post-run): {budget_after}")
+        if budget_before:
+            delta = budget_after.spend - budget_before.spend
+            click.echo(f"This run cost: ${delta:.4f}")
 
     click.echo(f"\nDone. Processed {processed}/{total} emails.")
 

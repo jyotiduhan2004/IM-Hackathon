@@ -1,0 +1,190 @@
+# Changelog
+
+Living record of issues encountered and how we fixed them. Each entry should
+be concrete enough that a future developer (or LLM) can understand *why* the
+code looks the way it does.
+
+Format: newest first. Group by session/date. Each entry has:
+- **Issue**: what broke or hurt
+- **Root cause**: why
+- **Fix**: what we changed
+- **Commit**: sha (or "manual" for non-code fixes)
+
+---
+
+## 2026-04-13 — Phase 0 bootstrap + first compile iterations
+
+### Frontmatter corruption during `edit_file` → auto-stamp made it worse
+
+**Issue**: After the 2nd 20-email compile batch, 18 wiki pages had mangled
+frontmatter — only `last_compiled` remained; title, page_type, sources, and
+body fragments were destroyed.
+
+**Root cause**: Two bugs compounded:
+1. Agent's built-in `edit_file` tool (Deep Agents) was clipping YAML during
+   string-based edits when the prompt asked it to modify a page's
+   frontmatter. The result was unparseable YAML or partial frontmatter.
+2. Our `update_wiki_index` auto-stamped `last_compiled` on every page missing
+   it. When run against a page with ALREADY-broken frontmatter, it called
+   `_extract_frontmatter` → got `{}` (or partial) → added only `last_compiled`
+   → rewrote the page losing everything else. It effectively "preserved" the
+   corruption.
+
+**Fix**:
+- `src/compile/compiler.py`: auto-stamp now checks that frontmatter has
+  `title` or `page_type` before overwriting. If the page looks mid-broken,
+  leave it alone so we can see the damage.
+- `scripts/validate_wiki.py`: new hard validator. Runs after compile.
+  Detects: orphan frontmatter (only `last_compiled`), missing required
+  fields, page_type vs directory mismatch, duplicate bodies.
+- `scripts/compile_all.py`: auto-snapshots `wiki/` to
+  `.snapshots/pre-compile-{ts}/` BEFORE compiling. Runs validator
+  AFTER. If validation fails, snapshot label is printed so we can
+  `restore`.
+
+**What NOT to do again**: Delete broken pages. We did this in the
+recovery and lost real compute ($ spent on those pages). Prefer repair —
+salvage the body, reconstruct frontmatter from path + context.
+
+**Commits**: `01b8e50` (validator + auto-snapshot), `ae5f0e1` (prompt
+hardening).
+
+---
+
+### Duplicate file bodies: `systems/export-indiamart.md` == `systems/tawk-to.md`
+
+**Issue**: Two wiki pages had byte-identical bodies. `export-indiamart.md`
+actually described tawk.to.
+
+**Root cause**: Agent ran compile across two emails discussing related but
+distinct systems (export.indiamart.com domain vs tawk.to live chat) and
+wrote the same content to both slugs. No deduplication guard existed.
+
+**Fix**:
+- Manual: deleted the wrong dupe, rewrote `trustseal-buyer-program.md`
+  wikilinks to point to the correct `exporters-indiamart`.
+- Added `check_duplicate_bodies` lint (sha256 of body minus timestamp).
+
+**Commit**: `ae5f0e1`.
+
+---
+
+### page_type misclassification: humans in systems/, products in entities/
+
+**Issue**: `systems/amarinder-s-dhaliwal.md` was a human (CEO-level exec);
+`entities/wazuh-mcp.md` was software.
+
+**Root cause**: Agent's stub-creation heuristic in `lint_wiki.py`
+classified unresolved wikilinks as "entity" if they looked like
+`first-last` (2-part kebab). `amarinder-s-dhaliwal` has 3 parts so was
+bucketed as system. `wazuh-mcp` fit the 2-part pattern and landed in
+entities.
+
+**Fix**:
+- Manual: moved files between directories, updated `page_type` field.
+- Added `check_page_type_mismatch` lint (directory vs frontmatter).
+- Prompt: hardened to restate that entities = humans, systems =
+  products/platforms/URLs/mailing-lists; if in wrong category, MOVE not
+  duplicate.
+
+**Commit**: `ae5f0e1`.
+
+---
+
+### Title Case wikilinks broke 210+ cross-references
+
+**Issue**: First-ever compile wrote `[[Amit Agarwal]]`, `[[BuyerMY]]` style
+Title Case wikilinks. None resolved because actual files used kebab-case.
+
+**Root cause**: Prompt said "use `[[wikilinks]]`" without requiring case.
+
+**Fix**:
+- Prompt: explicit GOOD/BAD examples for kebab-case; "NEVER Title Case".
+- `lint_wiki.py normalize_wikilinks()`: case-insensitive + slugify match
+  against existing files, rewrites to canonical kebab.
+- `lint_wiki.py create_missing_stubs()`: for unresolved targets, create a
+  minimal stub page rather than leaving the link broken.
+- Run `make lint-wiki-fix` after each compile.
+
+**Commits**: `235dc74`, `b95f7da`.
+
+---
+
+### Deep Agents virtual filesystem silently swallowed writes
+
+**Issue**: First compile reported "batches complete" but produced 0 wiki
+pages on disk. Only the log.md entries and raw `compiled: true` flags
+showed activity.
+
+**Root cause**: Deep Agents' default backend is an in-memory virtual
+filesystem. The agent's `read_file`/`write_file` tools wrote to ephemeral
+state, not disk. Our custom tools (which used real `Path.write_text`) did
+work — that's why the flags flipped but pages never appeared.
+
+**Fix**:
+- `src/compile/compiler.py`: `create_compiler` now passes
+  `backend=FilesystemBackend(root_dir=".", virtual_mode=True)` to
+  `create_deep_agent`. `virtual_mode=True` gives path traversal
+  guardrails (no `..`, no absolute paths outside root) while persisting
+  to real disk.
+- Prompt: explicit GOOD/BAD path examples with leading-slash warnings.
+- Bumped `recursion_limit` to 150 (agent does ~15-20 tool calls per
+  email when working carefully).
+
+**Commit**: `ddd0c5a`.
+
+---
+
+### `init_chat_model` couldn't route `z-ai/glm-5` / LiteLLM proxy models
+
+**Issue**: Compile errored with "Unable to infer model provider for
+model='z-ai/glm-5'".
+
+**Root cause**: LangChain's `init_chat_model` has a fixed list of known
+provider prefixes; LiteLLM-proxy model IDs like `z-ai/glm-4.6` don't
+match any.
+
+**Fix**:
+- `src/compile/compiler.py`: new `_make_chat_model()` helper. If
+  `LITELLM_BASE_URL` is set, construct `ChatOpenAI(model=name,
+  base_url=..., api_key=...)` directly — LiteLLM is OpenAI-compatible, so
+  any model the proxy knows works.
+- `.env`: used `z-ai/glm-4.6` (not `glm-5` — proxy didn't have that).
+
+**Commit**: `b6368d6`.
+
+---
+
+### Date hallucination (`last_compiled: "2025-01-10..."`)
+
+**Issue**: Wiki pages had random 2025 dates in `last_compiled`, not the
+real current time.
+
+**Root cause**: Agent was writing `last_compiled` itself, using its
+training-cutoff date rather than the real clock.
+
+**Fix**:
+- Prompt: "NEVER write `last_compiled` yourself — use
+  `stamp_page_compiled_at` tool".
+- New tool `stamp_page_compiled_at(file_path)` that sets the field using
+  `datetime.now(UTC).isoformat()`.
+- `update_wiki_index` also auto-stamps any missing timestamps as a
+  safety net.
+
+**Commit**: `ddd0c5a`.
+
+---
+
+## Format for future entries
+
+```
+### Short title
+
+**Issue**: one-paragraph description.
+
+**Root cause**: *why* it broke, not just *what* broke.
+
+**Fix**: what we changed, ideally with commit sha.
+
+**What NOT to do again**: lessons if applicable.
+```
