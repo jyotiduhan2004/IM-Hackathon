@@ -531,6 +531,38 @@ infra).
 
 ---
 
+## Advanced tools: filtering, sub-agents, RLM optimization
+
+Extensions once the basic KB and MCP are stable:
+
+1. **Complex filtering tools** for consumers: search by
+   `sender+date+entity+keyword` combo, Gmail-style operators (`from:X
+   before:Y has:table`). The MCP server surfaces these as structured
+   query tools rather than requiring the consumer agent to do multi-hop
+   filtering itself.
+
+2. **Sub-agent tools**: expose Deep Agents' subagent pattern to MCP
+   consumers so Claude Code / other clients can spawn bounded sub-agents
+   for specific KB tasks — e.g., "summarize everything related to X in
+   the last 30 days", "find all unresolved conflicts for this team".
+   The KB runs the sub-agent on behalf of the consumer, returns just
+   the distilled answer.
+
+3. **RLM-style optimization**: continually improve the compilation
+   prompt based on signal from Langfuse/Arize traces + user feedback on
+   wiki pages (a simple "was this helpful?" button). Use Langfuse's
+   prompt management / dataset features, or lean on something like
+   DSPy's COPRO/MIPRO to auto-tune the system prompt against a held-out
+   set of compilations.
+   - Phase: after 500+ compiled pages and at least two weeks of trace
+     data
+   - Requires: eval set of known-good compilations, a metric (fidelity?
+     concision? citation density?), a held-out corpus
+
+**When**: Phase 3+ — after MCP ships and we have real consumer usage.
+
+---
+
 ## Agent skills + MCP server + tools for downstream consumers
 
 Once the KB is stable, expose it to other agents and tools:

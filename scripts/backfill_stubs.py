@@ -38,33 +38,112 @@ from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
 
 
-def _grep_raw_for_slug(slug: str, raw_dir: Path) -> list[str]:
-    """Find raw files that reference `slug` by name variants."""
-    # Generate name candidates from slug. For "lucky-agarwal" → ["lucky agarwal",
-    # "lucky.agarwal", "agarwal.lucky", "lucky_agarwal"]
-    parts = slug.split("-")
-    candidates: set[str] = set()
-    if len(parts) >= 2:
-        # Multi-part name — likely a person
-        candidates.add(" ".join(parts))  # "lucky agarwal"
-        candidates.add(".".join(parts))  # "lucky.agarwal"
-        if len(parts) == 2:
-            candidates.add(f"{parts[1]}.{parts[0]}")  # "agarwal.lucky"
-    # Slug itself as a fallback
-    candidates.add(slug)
-    candidates.add(slug.replace("-", " "))
+def _grep_raw_for_entity(
+    slug: str, email: str | None, raw_dir: Path, name_only_hit_cap: int = 30
+) -> list[str]:
+    """Find raw files where this person is From/To/CC'd or signed the body.
 
-    hits: set[str] = set()
+    Much stricter than matching slug substrings — that gave us 1500 matches
+    for common tokens like "whatsapp" or "buylead". Real signal for an
+    entity is the person's email address appearing in headers or signature.
+
+    Strategy (in order):
+    1. If `email` is supplied or derivable, match any raw where that email
+       appears (From/To/CC/body).
+    2. If slug is 2-3 kebab parts (likely a name), try candidate emails:
+       `first.last@indiamart.com`, `last.first@`, `firstlast@`, plus
+       occurrences of the full `First Last` as a name match in From/CC lines.
+    3. Skip pages where match count exceeds `max_hits` — that indicates the
+       slug is a common term, not a person.
+
+    Returns sorted list of repo-relative paths.
+    """
+    import re as _re
+
+    parts = slug.split("-")
+    email_candidates: set[str] = set()
+    name_candidates: set[str] = set()
+
+    if email:
+        email_candidates.add(email.lower())
+    elif (
+        2 <= len(parts) <= 4
+        and all(p.isalpha() for p in parts)
+        and all(len(p) >= 3 for p in parts)  # rules out "m-site", "m-cat", etc.
+    ):
+        first, last = parts[0], parts[-1]
+        # Typical IndiaMART email patterns from observed data
+        for domain in ("@indiamart.com", "@intermesh.net"):
+            email_candidates.update(
+                {
+                    f"{first}.{last}{domain}".lower(),
+                    f"{last}.{first}{domain}".lower(),
+                    f"{first}{last}{domain}".lower(),
+                    f"{first}1{domain}".lower(),  # common disambiguator
+                }
+            )
+        name_candidates.add(f"{first} {last}".lower())
+        if len(parts) >= 3:
+            middle = " ".join(parts[1:-1])
+            name_candidates.add(f"{first} {middle} {last}".lower())
+
+    if not email_candidates and not name_candidates:
+        # Very short or non-person-looking slug: don't backfill with name
+        # search (too noisy). Caller will record "no matches".
+        return []
+
+    email_hits: set[str] = set()
+    name_only_hits: set[str] = set()
+    repo_root_resolved = REPO_ROOT.resolve()
+    from_cc_re = _re.compile(
+        r"^(from|to|cc|delivered-to):\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
+    )
+
     for md in raw_dir.glob("*.md"):
         try:
-            content = md.read_text(encoding="utf-8").lower()
+            content = md.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for cand in candidates:
-            if cand.lower() in content:
-                hits.add(str(md.relative_to(REPO_ROOT)))
+        lc = content.lower()
+
+        rel: str
+        try:
+            rel = str(md.resolve().relative_to(repo_root_resolved))
+        except ValueError:
+            rel = f"raw/{md.name}"
+
+        # Email match is authoritative — no cap
+        for e in email_candidates:
+            if e in lc:
+                email_hits.add(rel)
                 break
-    return sorted(hits)
+
+        # Name-only match: only count if the full "First Last" appears in a
+        # From/To/CC line (not body). Capped to avoid common-word collisions.
+        if rel not in email_hits and name_candidates:
+            header_text = "\n".join(m.group(0) for m in from_cc_re.finditer(content))
+            header_lc = header_text.lower()
+            for n in name_candidates:
+                if n in header_lc:
+                    name_only_hits.add(rel)
+                    break
+
+    # If we have ANY email-authoritative hits, that's the signal — return all
+    # of them (plus any name-only hits below the cap for completeness).
+    if email_hits:
+        combined = email_hits | name_only_hits
+        return sorted(combined)
+
+    # No email hits: fall back to name-only hits, but abort if suspiciously
+    # common (implies the slug is a shared name like "amit agarwal" that
+    # appears in many unrelated threads).
+    if len(name_only_hits) > name_only_hit_cap:
+        return []
+    return sorted(name_only_hits)
+
+
+# Kept for callers that don't know the category
+_grep_raw_for_slug = _grep_raw_for_entity
 
 
 def _is_stub(fm: dict) -> bool:
@@ -115,7 +194,20 @@ def main(dry_run: bool, recompile: bool, category: str) -> None:
 
             found += 1
             slug = page.stem
-            hits = _grep_raw_for_slug(slug, raw_dir)
+            # Only backfill entities (people). Systems need different heuristic
+            # (product/URL references, not name-style email addresses).
+            if cat != "entities":
+                click.echo(f"  skip {cat}/{slug} (only entities backfilled by this pass)")
+                continue
+            # Try to extract an email from the existing body (our compiler
+            # often writes "Email: first.last@domain" as first body line).
+            body_email_match = re.search(
+                r"(?:^|\s)(?:email[:\s]+)?([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]+)",
+                extract_body(content),
+                re.IGNORECASE,
+            )
+            body_email = body_email_match.group(1) if body_email_match else None
+            hits = _grep_raw_for_entity(slug, body_email, raw_dir)
 
             if not hits:
                 no_matches += 1
