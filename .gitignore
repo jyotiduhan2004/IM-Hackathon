@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# uv
+.python-version
+
+# Environment
+.env
+*.env.local
+
+# Gmail OAuth tokens (sensitive)
+token.json
+credentials.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Raw email storage (may be large — track separately or use git-lfs)
+# Uncomment if raw/ gets too large for git:
+# raw/
+# raw/attachments/
+
+# Langfuse / tracing
+.langfuse/
+
+# Gmail state
+.gmail_history_id
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# MkDocs build
+site/

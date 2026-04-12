@@ -1,0 +1,110 @@
+"""Compile all unprocessed raw emails into wiki pages.
+
+Usage:
+    uv run python scripts/compile_all.py
+    uv run python scripts/compile_all.py --dry-run
+    uv run python scripts/compile_all.py --batch-size 10
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import click
+import structlog
+
+REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.compile.compiler import (  # noqa: E402
+    list_uncompiled_emails,
+    run_compilation,
+)
+from src.config import settings  # noqa: E402
+
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ],
+)
+logger = structlog.get_logger(__name__)
+
+
+@click.command()
+@click.option(
+    "--batch-size",
+    default=20,
+    help="Max emails to compile per agent invocation (default 20)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="List uncompiled emails without compiling",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Override LLM model (default from .env LLM_MODEL)",
+)
+def main(batch_size: int, dry_run: bool, model: str | None) -> None:
+    """Compile uncompiled raw emails into wiki pages using Deep Agents."""
+    raw_dir = str(settings.raw_dir)
+    wiki_dir = str(settings.wiki_dir)
+
+    # Use the tool directly for listing, not through the agent
+    uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
+    total = len(uncompiled)
+
+    click.echo(f"Found {total} uncompiled emails.")
+    if total == 0:
+        click.echo("Nothing to compile. Done.")
+        return
+
+    if dry_run:
+        for path in uncompiled[:30]:
+            click.echo(f"  {path}")
+        if total > 30:
+            click.echo(f"  ... and {total - 30} more")
+        click.echo("\nDry run complete.")
+        return
+
+    click.echo(f"Compiling in batches of {batch_size}...")
+    click.echo(f"Model: {model or settings.llm_model}")
+    click.echo(f"Wiki dir: {wiki_dir}")
+    click.echo()
+
+    processed = 0
+    for i in range(0, total, batch_size):
+        batch = uncompiled[i : i + batch_size]
+        batch_files = "\n".join(f"- {p}" for p in batch)
+        instruction = (
+            f"Compile the following {len(batch)} uncompiled raw emails into wiki pages. "
+            f"Process them chronologically and create/update wiki pages as needed. "
+            f"Mark each as compiled when done. Update the index and log at the end of this batch.\n\n"
+            f"Files to compile:\n{batch_files}"
+        )
+
+        click.echo(f"\n=== Batch {i // batch_size + 1} ({len(batch)} emails) ===")
+        try:
+            run_compilation(
+                instruction=instruction,
+                model_name=model,
+                raw_dir=raw_dir,
+                wiki_dir=wiki_dir,
+            )
+            processed += len(batch)
+            click.echo(f"Batch complete. Progress: {processed}/{total}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("batch compilation failed", batch_index=i, error=str(e))
+            click.echo(f"ERROR in batch: {e}")
+            click.echo("Continuing with next batch...")
+
+    click.echo(f"\nDone. Processed {processed}/{total} emails.")
+
+
+if __name__ == "__main__":
+    main()
