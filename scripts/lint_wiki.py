@@ -453,7 +453,7 @@ def print_report(issues: list[LintIssue]) -> None:
         items = by_severity[severity]
         if not items:
             continue
-        marker = {"error": "✗", "warning": "⚠", "info": "ℹ"}[severity]  # noqa: RUF001
+        marker = {"error": "FAIL", "warning": "WARN", "info": "INFO"}[severity]
         click.echo(f"\n{severity.upper()}S ({len(items)}):")
         for issue in items:
             click.echo(f"  {marker} [{issue.category}] {issue.page}")

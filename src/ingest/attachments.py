@@ -91,11 +91,10 @@ async def caption_image(image_path: Path, model: str = "gpt-4o") -> str | None:
         logger.warning("litellm not installed, skipping image captioning")
         return None
 
+    import asyncio
+
     try:
-        # Image files are small (< 10MB typically); sync read is fine here even
-        # from an async context. Wrapping in asyncio.to_thread would add more
-        # noise than it's worth.
-        data = image_path.read_bytes()  # noqa: ASYNC240
+        data = await asyncio.to_thread(image_path.read_bytes)
         mime = _detect_image_mime(image_path)
         b64 = base64.b64encode(data).decode("utf-8")
         data_url = f"data:{mime};base64,{b64}"
