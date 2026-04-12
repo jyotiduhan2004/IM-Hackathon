@@ -143,6 +143,40 @@ def check_duplicates(wiki_dir: Path) -> list[Error]:
     return errors
 
 
+def check_duplicate_suffix_variants(wiki_dir: Path) -> list[Error]:
+    """Flag pages with -new, -v2, -copy, -latest, -updated suffix-twin pattern.
+
+    The compiler occasionally creates sibling pages with these suffixes when
+    it can't tell a page already exists (e.g., varnika-singh.md plus
+    varnika-singh-new.md plus varnika-singh-v2.md). All three end up with
+    near-identical bodies. This detects the pattern so we can merge them.
+    """
+    import re as _re
+
+    errors: list[Error] = []
+    suffix_re = _re.compile(r"^(.*?)-(new|v\d+|copy|latest|updated)$")
+
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        stems = {p.stem for p in cat.glob("*.md")}
+        for p in cat.glob("*.md"):
+            match = suffix_re.match(p.stem)
+            if not match:
+                continue
+            base = match.group(1)
+            if base in stems:
+                errors.append(
+                    Error(
+                        p,
+                        f"suspected duplicate of {base} "
+                        f"(suffix '{match.group(2)}' — likely agent variant, should be merged)",
+                    )
+                )
+    return errors
+
+
 def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
     """Fail-hard on wikilinks that don't resolve to a real page.
 
@@ -191,6 +225,7 @@ def run(wiki_dir: Path) -> list[Error]:
         for path in cat_dir.glob("*.md"):
             errors.extend(validate_page(path))
     errors.extend(check_duplicates(wiki_dir))
+    errors.extend(check_duplicate_suffix_variants(wiki_dir))
     errors.extend(check_broken_wikilinks(wiki_dir))
     return errors
 

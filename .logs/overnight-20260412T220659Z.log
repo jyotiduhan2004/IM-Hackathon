@@ -16,3 +16,18 @@ Batch complete. Progress: 1/20
 === Batch 2/13 (1 emails, thread=19b9c5f53594, earliest=2026-01-08) ===
 [2m2026-04-12T22:11:17.855248Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
 [2m2026-04-12T22:11:17.868924Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b9c5f53594a56e, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 2/20
+
+=== Batch 3/13 (2 emails, thread=19b6fc410654, earliest=2026-01-08) ===
+[2m2026-04-12T22:14:48.847582Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-12T22:14:48.863741Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 2 uncompiled raw emails from one thread (thread_id=19b6fc410654a93b, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 4/20
+
+=== Batch 4/13 (1 emails, thread=19b91e6980de, earliest=2026-01-08) ===
+[2m2026-04-12T22:21:29.763796Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-12T22:21:29.781780Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b91e6980de1a70, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 5/20
+
+=== Batch 5/13 (2 emails, thread=19b9cf091103, earliest=2026-01-08) ===
+[2m2026-04-12T22:25:05.472585Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-12T22:25:05.487625Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 2 uncompiled raw emails from one thread (thread_id=19b9cf09110365c1, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
