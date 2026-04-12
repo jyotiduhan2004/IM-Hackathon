@@ -477,6 +477,102 @@ produces one file because the hash collides to the same filename.
 
 ---
 
+## Agent meta-commentary (lessons-learnt from each compile batch)
+
+**Idea**: Each compile batch is a test. The LLM already forms judgments
+about what was easy/hard/ambiguous. Capture that structured commentary to
+compound improvement over runs.
+
+**Design**:
+- New tool `log_insight(category, message, suggested_action="")`
+- Categories: `missing_page` | `prompt_ambiguity` | `tool_gap` |
+  `supersession_doubt` | `conflict_candidate` | `pattern_noticed` |
+  `improvement_suggestion`
+- Writes a structured entry to `docs/insights/YYYY-MM-DD.md` with:
+  - ISO timestamp
+  - batch_id / thread_id (if available)
+  - category, severity (low/medium/high), message, suggested_action
+- Prompt: "After completing a batch, if anything was genuinely ambiguous
+  or would have benefited from a missing tool/page, call log_insight
+  once. Otherwise skip."
+
+**Value**:
+- Missing-page flags → auto-seed stubs in a nightly job
+- Ambiguity patterns → tighten prompt
+- Tool gaps → build the tools they ask for
+- Weekly human review of `docs/insights/*.md` in <10 min
+
+**Cost**: a few tokens per batch at most. Compounding benefit.
+
+**When**: After this thread-batching test validates. Probably before the
+next prompt iteration.
+
+---
+
+## Langfuse integration (self-hosted)
+
+**Instance**: `https://langfuse.intermesh.net`
+
+**Code status**: hooks already exist. `src/compile/compiler.py::
+get_langfuse_handler()` reads `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
+`LANGFUSE_HOST`, `LANGFUSE_ENABLED` from `.env` and attaches as a callback
+to every compile run. Today it's disabled (`LANGFUSE_ENABLED=false`).
+
+**To turn on**:
+1. Get credentials from Langfuse admin UI at langfuse.intermesh.net
+2. Set .env:
+```
+LANGFUSE_PUBLIC_KEY=...
+LANGFUSE_SECRET_KEY=...
+LANGFUSE_HOST=https://langfuse.intermesh.net
+LANGFUSE_ENABLED=true
+```
+3. Subsequent compile runs will stream traces to the Langfuse instance
+
+**What it adds beyond LiteLLM UI**:
+- Trace graphs — every tool call visible per batch (not just LLM cost)
+- Prompt A/B testing — version prompts, compare on same inputs
+- LLM-as-judge eval — automated scoring of compile quality
+- Sessions view — journey across batches
+- Free tier is self-hosted; no per-request fee
+
+**When**: After Phase 0 stabilizes (probably after thread-batching proves out
+over a full overnight run) and when we want to start tuning prompts
+systematically.
+
+---
+
+## Trivial-message filter (skip "+1", "thanks", "lgtm" replies)
+
+**Idea**: 40-60% of replies in corporate mailing lists are acknowledgement
+noise that pays full compile cost but adds zero to the wiki.
+
+**Two levels**:
+
+**Level 1 — deterministic** (no LLM, cheap):
+- Body < 20 words AND has `in_reply_to` (i.e., not thread-starter)
+- No URLs, no numbers, no code blocks, no attachments
+- Body matches regex blocklist: `^(thanks|thank you|\+1|👍|great|amazing|
+  lgtm|ship it|congrats|nice|sweet|awesome|\w+\+\+)\.?\s*$`
+- Mark with `skip_compile: true` at ingest time
+
+**Level 2 — cheap classifier** (optional, ~$0.001/call):
+- For messages 20-60 words, gpt-4.1-nano classifies: "substantive" or "ack"
+- Runs during ingest, zero impact on compile
+
+**Compile step**:
+- Skips any email with `skip_compile: true` — marks it compiled
+  immediately (bookkeeping) without LLM call
+- Summary of acknowledgements per thread added to thread's wiki page:
+  "Additional +1s from: [list of names]"
+
+**Expected savings**: 40-60% fewer LLM calls on mailing-list corpora.
+Probably bigger than thread-batching alone.
+
+**When**: After thread-batching proves out. Can be layered on top.
+
+---
+
 ## Storage tier: local → GCS → Cloud SQL
 
 **Current (Phase 0)**: local disk only. raw/, wiki/, .snapshots/ all
