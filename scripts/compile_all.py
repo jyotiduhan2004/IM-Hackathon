@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import click
@@ -32,6 +33,41 @@ structlog.configure(
     ],
 )
 logger = structlog.get_logger(__name__)
+
+
+def _group_by_thread(
+    emails: list[dict[str, str]], max_per_group: int
+) -> list[list[dict[str, str]]]:
+    """Group emails by thread_id, chronological within thread, threads ordered
+    by earliest message date.
+
+    Threads longer than `max_per_group` are split into sub-groups (still in
+    order). Emails without a thread_id become singleton groups. The whole
+    return list is sorted by each group's earliest date, so callers can
+    process batches in chronological order across threads.
+    """
+    by_thread: dict[str, list[dict[str, str]]] = defaultdict(list)
+    standalone: list[list[dict[str, str]]] = []
+
+    for email in emails:
+        tid = email.get("thread_id") or ""
+        if tid:
+            by_thread[tid].append(email)
+        else:
+            standalone.append([email])
+
+    groups: list[list[dict[str, str]]] = []
+    for members in by_thread.values():
+        members.sort(key=lambda e: e.get("date", ""))
+        # Split huge threads for safety; most will be one group
+        for i in range(0, len(members), max_per_group):
+            groups.append(members[i : i + max_per_group])
+    groups.extend(standalone)
+
+    # Threads processed in order of their earliest message — strict
+    # chronological for supersession detection across topics.
+    groups.sort(key=lambda g: min(e.get("date", "") for e in g) if g else "")
+    return groups
 
 
 @click.command()
@@ -94,11 +130,25 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
             click.echo(f"Pre-compile snapshot: .snapshots/{label}/wiki")
 
     if dry_run:
-        for email in uncompiled[:30]:
-            path = email["path"] if isinstance(email, dict) else email
-            click.echo(f"  {path}")
-        if total > 30:
-            click.echo(f"  ... and {total - 30} more")
+        preview_groups = _group_by_thread(uncompiled, max_per_group=batch_size)
+        click.echo(
+            f"Thread-grouped into {len(preview_groups)} batches "
+            f"(avg {total / max(len(preview_groups), 1):.1f} emails/batch)"
+        )
+        sizes = [len(g) for g in preview_groups]
+        if sizes:
+            click.echo(
+                f"Group size distribution: min={min(sizes)} median={sorted(sizes)[len(sizes) // 2]} "
+                f"max={max(sizes)} singletons={sizes.count(1)}"
+            )
+        click.echo("\nFirst 10 batches:")
+        for i, g in enumerate(preview_groups[:10], 1):
+            tid = g[0].get("thread_id", "")[:12]
+            earliest = g[0].get("date", "")[:10]
+            subj = g[0].get("subject", "")[:50]
+            click.echo(f"  batch {i}: thread={tid} earliest={earliest} n={len(g)} subj={subj!r}")
+        if len(preview_groups) > 10:
+            click.echo(f"  ... and {len(preview_groups) - 10} more batches")
         click.echo("\nDry run complete.")
         return
 
@@ -110,20 +160,36 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
         click.echo(f"Budget (pre-run): {budget_before}")
     click.echo()
 
+    # Group uncompiled emails into thread batches. One compile invocation per
+    # thread so the agent sees full conversation context at once (3-5x cheaper
+    # than recompiling the same page for each reply).
+    groups = _group_by_thread(uncompiled, max_per_group=batch_size)
+    click.echo(
+        f"Thread-grouped into {len(groups)} batches "
+        f"(avg {total / max(len(groups), 1):.1f} emails/batch)"
+    )
+
     processed = 0
-    for i in range(0, total, batch_size):
-        batch = uncompiled[i : i + batch_size]
-        # batch items may be dicts (new schema) or strings (legacy); handle both
+    for batch_idx, batch in enumerate(groups, start=1):
         batch_paths = [b["path"] if isinstance(b, dict) else b for b in batch]
         batch_files = "\n".join(f"- {p}" for p in batch_paths)
+        thread_id = batch[0].get("thread_id", "") if batch else ""
+        earliest = batch[0].get("date", "")[:10] if batch else ""
+
         instruction = (
-            f"Compile the following {len(batch)} uncompiled raw emails into wiki pages. "
-            f"Process them chronologically and create/update wiki pages as needed. "
+            f"Compile the following {len(batch)} uncompiled raw emails from one "
+            f"thread (thread_id={thread_id}, earliest={earliest}) into wiki pages. "
+            f"Process them chronologically as a conversation. When multiple replies "
+            f"build on the same decision/policy/feature, merge them into a single "
+            f"coherent wiki page rather than one page per message. "
             f"Mark each email as compiled with `mark_as_compiled` when done.\n\n"
             f"Files to compile:\n{batch_files}"
         )
 
-        click.echo(f"\n=== Batch {i // batch_size + 1} ({len(batch)} emails) ===")
+        click.echo(
+            f"\n=== Batch {batch_idx}/{len(groups)} "
+            f"({len(batch)} emails, thread={thread_id[:12]}, earliest={earliest}) ==="
+        )
         try:
             run_compilation(
                 instruction=instruction,
@@ -134,7 +200,7 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
             processed += len(batch)
             click.echo(f"Batch complete. Progress: {processed}/{total}")
         except Exception as e:  # noqa: BLE001
-            logger.error("batch compilation failed", batch_index=i, error=str(e))
+            logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
             click.echo(f"ERROR in batch: {e}")
             click.echo("Continuing with next batch...")
 
