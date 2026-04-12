@@ -442,6 +442,39 @@ emails).
 
 ---
 
+## Thread quiet-period — avoid incremental thread recompiles (user insight)
+
+User's observation: "if I've processed message 1 and then replies 2, 3, 4
+arrive, I shouldn't send [1,2], then [1,2,3], then [1,2,3,4]. Just send
+[1,2,3,4] once."
+
+**For backfill**: already handled by `_group_by_thread` in `compile_all.py`.
+One LLM call per thread, full context. No redundant re-reads within a run.
+
+**Across separate backfill runs**: mild overhead. When run N+1 adds replies
+to a thread already compiled in run N, the agent re-reads the existing
+wiki page (which is a compressed summary of the earlier messages) before
+merging the new replies. Cost is lower than re-reading the original raws
+but non-zero. Mitigation: batch similar-date compile runs so most threads
+finish in one run.
+
+**Live mode (Phase 1)**: this is where the user's insight is critical.
+Naive live compile-on-every-arrival would recompile the same thread page 4
+times for a 4-reply conversation. Solution: **thread quiet period**
+(already in `docs/issues/08-phase1-live-ingestion.md`):
+- New message arrives → note thread_id, start 30-min timer
+- Additional message to same thread → reset timer
+- Timer fires → compile the whole thread as one batch
+- Saves ~3× on active threads
+
+**Edge**: hot threads that never go quiet — need a max-wait-time fallback
+(e.g., "compile anyway after 2h even if replies keep coming") to avoid
+starving important long-running discussions.
+
+**When**: implement with Phase 1 live ingestion.
+
+---
+
 ## Topic hierarchy + tags (user observation from wiki UX)
 
 **Problem**: Currently `wiki/topics/*.md` is flat. `whatsapp-messaging-
