@@ -72,15 +72,68 @@ def _render_raw_source(raw_path: Path) -> str | None:
     )
 
 
+def _fix_list_gaps(body: str) -> str:
+    """Insert a blank line before any bullet/numbered list when the preceding
+    line is text. MkDocs' strict markdown parser treats `text\n- item` as a
+    single paragraph with literal dashes rather than a list. Writing good
+    markdown requires a blank line before the list.
+    """
+    lines = body.splitlines(keepends=False)
+    out: list[str] = []
+    list_start = re.compile(r"^[ \t]*([-*+]\s|\d+\.\s)")
+    for i, line in enumerate(lines):
+        if (
+            i > 0
+            and list_start.match(line)
+            and lines[i - 1].strip() != ""
+            and not list_start.match(lines[i - 1])
+            and not lines[i - 1].strip().endswith((":", ",", ";"))
+            is False  # odd condition kept for clarity; see below
+        ):
+            pass  # unreachable branch — see simpler version below
+        out.append(line)
+
+    # Simpler rewrite: walk and emit a blank when previous non-blank line is
+    # text AND current is a list item AND previous is NOT a list item
+    out = []
+    prev = ""
+    for line in lines:
+        is_list = bool(list_start.match(line))
+        prev_is_list = bool(list_start.match(prev)) if prev.strip() else False
+        if is_list and prev.strip() != "" and not prev_is_list:
+            out.append("")
+        out.append(line)
+        prev = line
+    return "\n".join(out) + ("\n" if body.endswith("\n") else "")
+
+
+def _page_metadata_banner(fm: dict) -> str:
+    """Small metadata banner at the top of each page: last updated, source count."""
+    last_compiled = fm.get("last_compiled", "")
+    sources_count = len(fm.get("sources") or [])
+    status = fm.get("status", "current")
+    parts: list[str] = []
+    if last_compiled and last_compiled != "stub":
+        # Trim fractional seconds for display
+        date_part = last_compiled.split("T")[0] if "T" in last_compiled else last_compiled
+        parts.append(f"**Last updated:** {date_part}")
+    if sources_count:
+        parts.append(f"**Sources:** {sources_count}")
+    if status != "current":
+        parts.append(f"**Status:** {status}")
+    if not parts:
+        return ""
+    return " · ".join(parts) + "\n\n"
+
+
 def on_page_markdown(markdown: str, *, page, config, files) -> str:
     """Called by MkDocs for every page before rendering.
 
-    Appends a "## Sources" section with collapsible blocks showing each
-    raw source email's content inline.
+    Normalizes markdown (blank line before lists) then appends a "## Sources"
+    section with collapsible blocks showing each raw source email's content
+    inline.
     """
-    import sys
     src_path = str(page.file.src_path)
-    print(f"[hook] on_page_markdown called: {src_path}", file=sys.stderr)
     if src_path in ("index.md", "log.md"):
         return markdown
     if not any(
@@ -89,13 +142,31 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     ):
         return markdown
 
-    fm, body = _extract_frontmatter(markdown)
-    sources = fm.get("sources") or []
-    if not sources:
-        return markdown
+    # MkDocs strips YAML frontmatter before calling this hook; the parsed
+    # metadata lives on page.meta, and `markdown` is body-only.
+    fm = dict(page.meta) if hasattr(page, "meta") and page.meta else {}
+    body = markdown
 
-    if re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
-        return markdown
+    # Fix markdown rendering issues at the source
+    body = _fix_list_gaps(body)
+
+    # Inject a metadata banner at the top (after the h1)
+    banner = _page_metadata_banner(fm)
+    if banner:
+        body_lines = body.splitlines(keepends=False)
+        h1_idx = -1
+        for i, line in enumerate(body_lines):
+            if line.startswith("# "):
+                h1_idx = i
+                break
+        if h1_idx >= 0:
+            body_lines.insert(h1_idx + 1, "")
+            body_lines.insert(h1_idx + 2, banner.rstrip())
+            body = "\n".join(body_lines)
+
+    sources = fm.get("sources") or []
+    if not sources or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
+        return body
 
     blocks = ["", "---", "", "## Sources", ""]
     for src in sources:
@@ -108,7 +179,4 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         else:
             blocks.append(f"- `{src}` *(file missing)*")
 
-    fm_yaml = yaml.safe_dump(
-        fm, sort_keys=False, allow_unicode=True, width=120
-    ).rstrip()
-    return f"---\n{fm_yaml}\n---\n\n{body.rstrip()}\n" + "\n".join(blocks) + "\n"
+    return body.rstrip() + "\n" + "\n".join(blocks) + "\n"

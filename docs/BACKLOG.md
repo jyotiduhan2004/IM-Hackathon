@@ -442,6 +442,62 @@ emails).
 
 ---
 
+## Topic hierarchy + tags (user observation from wiki UX)
+
+**Problem**: Currently `wiki/topics/*.md` is flat. `whatsapp-messaging-
+enhancement`, `whatsapp-smarter-seller-recommendations`, `whatsapp-context-
+aware-pricing-framework`, `whatsapp-launch-audit-as-skill`, `whatsapp9696`
+are all siblings at the same level. User asks: "WhatsApp has multiple
+different topics here. Should they be like tags?"
+
+**Proposed**:
+
+1. **Tags** (cheap, immediate): Add `tags:` frontmatter field populated by
+   the compiler. MkDocs Material's `tags` plugin renders a tag cloud +
+   per-tag page automatically. E.g., `tags: [whatsapp, buyer-side,
+   launch-2026-03]`. No file reorg needed.
+
+2. **Nested topics** (medium effort): split `wiki/topics/` into
+   `wiki/topics/whatsapp/{messaging,pricing,recommendations}.md` etc.
+   MkDocs nav auto-picks up the hierarchy. Requires:
+   - Compiler prompt update: "When creating a topic page that's clearly a
+     subtopic of an existing parent, put it under `wiki/topics/{parent}/`"
+   - Lint: parent page should list subtopics
+   - Index regeneration: show tree, not flat list
+
+3. **Cross-reference parent-child via `parent_topic:` frontmatter**:
+   `wiki/topics/whatsapp-messaging.md` has `parent_topic: whatsapp`. Hook
+   renders a "Part of [[whatsapp]]" banner. Less restructuring needed.
+
+**Recommendation**: ship tags first (zero migration cost, immediate
+benefit), revisit nested topics after compiling more of the backlog when
+we can see the shape of the hierarchy. Tag examples the compiler could
+emit: product (whatsapp, buyermy, msite), team (launch, tech, qa), phase
+(launch-audit, rollout, post-launch), entity-type (launch, bug-fix,
+infra).
+
+**When**: next iteration after current Tier 1 (stub-filler, tables).
+
+---
+
+## Wiki page metadata visible to users
+
+**Shipped in this session (mkdocs_hooks.py)**:
+- Metadata banner under h1: `**Last updated:** YYYY-MM-DD · **Sources:** N ·
+  **Status:** current`
+- Fix: blank line inserted before any list whose predecessor is a
+  paragraph (MkDocs was rendering `text\n- item` as a single paragraph)
+
+**Still missing** (user requested):
+- Number of updates (count of commits / recompiles per page) — needs
+  tracking in frontmatter or git log
+- Inline reference links to raw emails per section (currently all at
+  bottom in collapsible blocks)
+- Per-section update dates when a page's history spans weeks/months
+- Tags rendered in banner (blocked on tag implementation above)
+
+---
+
 ## Multiple mailing lists
 
 **The dedup story is already fine** — we key off `Message-ID` (global, set by
