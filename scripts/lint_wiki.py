@@ -15,7 +15,6 @@ from typing import Any
 from typing import Literal
 
 import click
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -41,17 +40,12 @@ VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict
 WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
+from src.utils import extract_frontmatter as _shared_extract  # noqa: E402
+
+
 def _extract_frontmatter(content: str) -> dict[str, Any]:
-    if not content.startswith("---"):
-        return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    try:
-        parsed = yaml.safe_load(parts[1])
-        return parsed if isinstance(parsed, dict) else {}
-    except yaml.YAMLError:
-        return {}
+    """Delegate to shared line-aware parser."""
+    return _shared_extract(content)
 
 
 def _extract_wikilinks(content: str) -> list[str]:

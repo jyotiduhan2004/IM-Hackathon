@@ -21,7 +21,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import click
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -33,23 +32,7 @@ from src.config import settings  # noqa: E402
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_")
 
 
-def _extract_frontmatter(content: str) -> dict:
-    """Line-aware split; see src.compile.compiler._split_frontmatter."""
-    if not content.startswith("---"):
-        return {}
-    lines = content.splitlines(keepends=True)
-    if not lines or lines[0].rstrip() != "---":
-        return {}
-    fm_lines: list[str] = []
-    for line in lines[1:]:
-        if line.rstrip() == "---":
-            break
-        fm_lines.append(line)
-    try:
-        fm = yaml.safe_load("".join(fm_lines))
-        return fm if isinstance(fm, dict) else {}
-    except yaml.YAMLError:
-        return {}
+from src.utils import extract_frontmatter as _extract_frontmatter  # noqa: E402
 
 
 @click.command()
@@ -117,15 +100,9 @@ def main(days_back: int) -> None:
             click.echo(f"Implied cost per compiled email: ${cost_per_email:.4f}")
             uncompiled = grand_total - grand_compiled
             projected = uncompiled * cost_per_email
-            click.echo(
-                f"Uncompiled: {uncompiled}. Projected cost to finish: ${projected:.2f}"
-            )
+            click.echo(f"Uncompiled: {uncompiled}. Projected cost to finish: ${projected:.2f}")
             if budget.remaining is not None:
-                affordable = (
-                    int(budget.remaining / cost_per_email)
-                    if cost_per_email > 0
-                    else "∞"
-                )
+                affordable = int(budget.remaining / cost_per_email) if cost_per_email > 0 else "∞"
                 click.echo(
                     f"Affordable at current rate with remaining budget: ~{affordable} emails"
                 )

@@ -55,19 +55,21 @@ class Error:
     reason: str
 
 
+from src.utils import split_frontmatter  # noqa: E402
+
+
 def _extract_frontmatter(content: str) -> tuple[dict[str, Any], str]:
-    if not content.startswith("---"):
-        return {}, content
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return {}, content
+    """Line-aware frontmatter extraction. See src.utils.split_frontmatter."""
+    fm_text, body = split_frontmatter(content)
+    if not fm_text:
+        return {}, body
     try:
-        fm = yaml.safe_load(parts[1]) or {}
+        fm = yaml.safe_load(fm_text) or {}
         if not isinstance(fm, dict):
             fm = {}
     except yaml.YAMLError:
         fm = {}
-    return fm, parts[2].lstrip("\n")
+    return fm, body
 
 
 def validate_page(path: Path) -> list[Error]:

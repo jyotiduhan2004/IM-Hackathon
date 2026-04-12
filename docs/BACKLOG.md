@@ -484,7 +484,10 @@ about what was easy/hard/ambiguous. Capture that structured commentary to
 compound improvement over runs.
 
 **Design**:
-- New tool `log_insight(category, message, suggested_action="")`
+- New tool `log_insight(category, message, suggested_action="")` — action
+  is optional. User explicitly said: it's fine to emit raw doubts like
+  "this is conflicting and confusing, not sure which is right" without
+  proposing any fix. Just the signal is valuable.
 - Categories: `missing_page` | `prompt_ambiguity` | `tool_gap` |
   `supersession_doubt` | `conflict_candidate` | `pattern_noticed` |
   `improvement_suggestion`

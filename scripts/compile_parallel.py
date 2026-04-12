@@ -192,6 +192,7 @@ def main(batch_size: int, concurrency: int, model: str | None, dry_run: bool) ->
     # Budget snapshot (parity with compile_all.py)
     try:
         from src.budget import fetch_budget
+
         budget_before = fetch_budget()
         if budget_before:
             click.echo(f"Budget (pre-run): {budget_before}")
