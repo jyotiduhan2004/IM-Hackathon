@@ -143,6 +143,45 @@ def check_duplicates(wiki_dir: Path) -> list[Error]:
     return errors
 
 
+def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
+    """Fail-hard on wikilinks that don't resolve to a real page.
+
+    Previously only the advisory lint flagged these. Broken wikilinks mean
+    users click and 404 in the browser — promoted to blocking error.
+    """
+    errors: list[Error] = []
+    known: set[str] = set()
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if cat.exists():
+            known.update(p.stem for p in cat.glob("*.md"))
+
+    import re as _re
+
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        for path in cat.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            broken = [
+                link.split("|")[0].strip()
+                for link in _re.findall(r"\[\[([^\]]+)\]\]", content)
+                if link.split("|")[0].strip() not in known
+            ]
+            if broken:
+                # Report one line per page, listing first 3 broken targets
+                preview = ", ".join(broken[:3])
+                more = f" (+{len(broken) - 3} more)" if len(broken) > 3 else ""
+                errors.append(
+                    Error(path, f"{len(broken)} broken wikilink(s): {preview}{more}")
+                )
+    return errors
+
+
 def run(wiki_dir: Path) -> list[Error]:
     errors: list[Error] = []
     for category in CATEGORY_TO_TYPE:
@@ -152,6 +191,7 @@ def run(wiki_dir: Path) -> list[Error]:
         for path in cat_dir.glob("*.md"):
             errors.extend(validate_page(path))
     errors.extend(check_duplicates(wiki_dir))
+    errors.extend(check_broken_wikilinks(wiki_dir))
     return errors
 
 
