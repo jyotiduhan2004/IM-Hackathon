@@ -106,9 +106,7 @@ def validate_page(path: Path) -> list[Error]:
     category = path.parent.name
     want = CATEGORY_TO_TYPE.get(category)
     if want and pt and pt != want:
-        errors.append(
-            Error(path, f"in {category}/ but page_type={pt!r}, expected {want!r}")
-        )
+        errors.append(Error(path, f"in {category}/ but page_type={pt!r}, expected {want!r}"))
 
     # Body exists (empty body is suspicious)
     if not body.strip():
@@ -130,9 +128,7 @@ def check_duplicates(wiki_dir: Path) -> list[Error]:
                 content = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            normalized = re.sub(
-                r"^last_compiled:.*$", "", content, flags=re.MULTILINE
-            ).strip()
+            normalized = re.sub(r"^last_compiled:.*$", "", content, flags=re.MULTILINE).strip()
             digest = hashlib.sha256(normalized.encode()).hexdigest()
             by_hash.setdefault(digest, []).append(path)
 

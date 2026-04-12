@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC
+from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +45,7 @@ class RawMessage:
 
     @property
     def date(self) -> datetime:
-        return datetime.fromtimestamp(self.internal_date_ms / 1000)
+        return datetime.fromtimestamp(self.internal_date_ms / 1000, tz=UTC)
 
 
 @dataclass
@@ -95,9 +97,7 @@ class GmailClient:
                         "Download OAuth 2.0 Client ID JSON from Google Cloud Console."
                     )
                 logger.info("running oauth flow", credentials=str(self.credentials_path))
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(self.credentials_path), SCOPES
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), SCOPES)
                 creds = flow.run_local_server(port=0)
 
             self.token_path.write_text(creds.to_json())
@@ -196,9 +196,7 @@ class GmailClient:
             internal_date_ms=int(msg.get("internalDate", "0")),
         )
 
-    def _walk_parts(
-        self, payload: dict[str, Any]
-    ) -> tuple[str, str, list[AttachmentRef]]:
+    def _walk_parts(self, payload: dict[str, Any]) -> tuple[str, str, list[AttachmentRef]]:
         """Recursively walk MIME parts to extract body and attachments."""
         body_plain = ""
         body_html = ""
@@ -221,17 +219,13 @@ class GmailClient:
             if mime_type == "text/plain" and not filename:
                 data = body.get("data", "")
                 if data:
-                    body_plain = base64.urlsafe_b64decode(data).decode(
-                        "utf-8", errors="replace"
-                    )
+                    body_plain = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
                 return
 
             if mime_type == "text/html" and not filename:
                 data = body.get("data", "")
                 if data:
-                    body_html = base64.urlsafe_b64decode(data).decode(
-                        "utf-8", errors="replace"
-                    )
+                    body_html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
                 return
 
             # Attachment

@@ -25,7 +25,9 @@ import json
 import signal
 import sys
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -35,15 +37,15 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import (  # noqa: E402
-    list_uncompiled_emails,
-    run_compilation,
-    update_wiki_index,
-)
+from src.compile.compiler import list_uncompiled_emails  # noqa: E402
+from src.compile.compiler import run_compilation  # noqa: E402
+from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.ingest.attachments import save_attachments  # noqa: E402
 from src.ingest.gmail import GmailClient  # noqa: E402
-from src.ingest.parser import generate_filename, parse_message, write_raw_email  # noqa: E402
+from src.ingest.parser import generate_filename  # noqa: E402
+from src.ingest.parser import parse_message  # noqa: E402
+from src.ingest.parser import write_raw_email  # noqa: E402
 
 structlog.configure(
     processors=[
@@ -193,17 +195,13 @@ def main(
             fetched = 0
             if not compile_only and client is not None:
                 fetched = fetch_new_emails(client, list_address, since)
-                click.echo(
-                    f"[{loop_start.isoformat()}] fetched {fetched} new email(s)"
-                )
+                click.echo(f"[{loop_start.isoformat()}] fetched {fetched} new email(s)")
 
             processed = 0
             if not fetch_only:
                 processed = compile_some(compile_limit, compile_batch_size)
                 if processed:
-                    click.echo(
-                        f"[{loop_start.isoformat()}] compiled {processed} email(s)"
-                    )
+                    click.echo(f"[{loop_start.isoformat()}] compiled {processed} email(s)")
 
             # Advance since cursor so next tick doesn't re-scan same window
             since = loop_start

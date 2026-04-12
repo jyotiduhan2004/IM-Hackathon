@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -204,9 +205,7 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
                 if "last_compiled" not in fm and has_real_fields:
                     fm["last_compiled"] = now_iso
                     body = _extract_body(content)
-                    md_file.write_text(
-                        _render_with_frontmatter(fm, body), encoding="utf-8"
-                    )
+                    md_file.write_text(_render_with_frontmatter(fm, body), encoding="utf-8")
                     stamped += 1
                 title = fm.get("title", md_file.stem)
                 status = fm.get("status", "current")
@@ -260,14 +259,10 @@ def append_to_log(entry: str, wiki_dir: str = "wiki") -> str:
     wiki_path.mkdir(parents=True, exist_ok=True)
     log_path = wiki_path / "log.md"
 
-    timestamp = datetime.now().isoformat() + "Z"
+    timestamp = datetime.now(UTC).isoformat()
 
     if not log_path.exists():
-        header = (
-            "# Compilation Log\n\n"
-            "| Timestamp | Event |\n"
-            "|---|---|\n"
-        )
+        header = "# Compilation Log\n\n| Timestamp | Event |\n|---|---|\n"
         log_path.write_text(header, encoding="utf-8")
 
     with log_path.open("a", encoding="utf-8") as f:
@@ -386,8 +381,8 @@ def create_compiler(
         + "- ALL file paths MUST be relative (no leading /, no ..). Examples:\n"
         + f"  - GOOD: `{raw_dir}/2026-04-11_subject_abc.md`\n"
         + f"  - GOOD: `{wiki_dir}/topics/my-topic.md`\n"
-        + f"  - BAD: `/Users/...` (absolute paths are blocked)\n"
-        + f"  - BAD: `/raw/foo.md` (leading slash means absolute; blocked)\n"
+        + "  - BAD: `/Users/...` (absolute paths are blocked)\n"
+        + "  - BAD: `/raw/foo.md` (leading slash means absolute; blocked)\n"
         + "- Do NOT call `ls` on absolute paths or `/`. Use `ls raw` or "
         + f"`ls {wiki_dir}/topics` or use `glob` with patterns.\n"
     )
@@ -457,8 +452,7 @@ def run_compilation(
         instruction=instruction[:100],
         recursion_limit=recursion_limit,
     )
-    result = agent.invoke(
+    return agent.invoke(
         {"messages": [{"role": "user", "content": instruction}]},
         config=config,
     )
-    return result

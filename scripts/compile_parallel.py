@@ -29,7 +29,6 @@ import asyncio
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 import click
 import structlog
@@ -38,11 +37,9 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import (  # noqa: E402
-    create_compiler,
-    list_uncompiled_emails,
-    update_wiki_index,
-)
+from src.compile.compiler import create_compiler  # noqa: E402
+from src.compile.compiler import list_uncompiled_emails  # noqa: E402
+from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
 
 structlog.configure(
@@ -115,9 +112,7 @@ async def _run_batch_async(
 
         click.echo(f"[batch {batch_num}/{total_batches}] starting ({len(batch)} emails)")
 
-        agent = create_compiler(
-            model_name=model, raw_dir=raw_dir, wiki_dir=wiki_dir
-        )
+        agent = create_compiler(model_name=model, raw_dir=raw_dir, wiki_dir=wiki_dir)
 
         try:
             # Run the sync .invoke in a thread so we don't block the event loop

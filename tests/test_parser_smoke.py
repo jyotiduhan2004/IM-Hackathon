@@ -11,12 +11,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.ingest.gmail import RawMessage  # noqa: E402
-from src.ingest.parser import (  # noqa: E402
-    generate_filename,
-    parse_message,
-    to_raw_markdown,
-    write_raw_email,
-)
+from src.ingest.parser import generate_filename  # noqa: E402
+from src.ingest.parser import parse_message  # noqa: E402
+from src.ingest.parser import to_raw_markdown  # noqa: E402
+from src.ingest.parser import write_raw_email  # noqa: E402
 
 
 def _make_fake_message() -> RawMessage:

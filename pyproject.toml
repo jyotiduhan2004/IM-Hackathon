@@ -53,12 +53,60 @@ packages = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+src = ["src", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "BLE",    # flake8-blind-except
+    "PIE",    # flake8-pie
+    "RET",    # flake8-return
+    "FURB",   # refurb
+    "FLY",    # flynt
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "ICN",    # flake8-import-conventions
+    "PGH",    # pygrep-hooks
+    "RSE",    # flake8-raise
+    "DTZ",    # flake8-datetimez
+    "ISC",    # flake8-implicit-str-concat
+    "A",      # flake8-builtins
+    "N",      # pep8-naming
+    "PTH",    # flake8-use-pathlib
+    "FA",     # flake8-future-annotations
+    "TID",    # flake8-tidy-imports
+    "ASYNC",  # flake8-async
+    "SLF",    # flake8-self
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",     # line too long (handled by formatter)
+    "B008",     # do not perform function calls in argument defaults
+    "ARG001",   # unused function argument
+    "ARG002",   # unused method argument
+    "ISC001",   # conflicts with ruff formatter
+    "ASYNC109", # httpx timeout config false positive
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["ARG", "S", "SLF"]
 
 [tool.ruff.format]
 quote-style = "double"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
+indent-style = "space"
+docstring-code-format = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

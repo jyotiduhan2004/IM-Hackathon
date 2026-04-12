@@ -10,7 +10,9 @@ Usage:
 from __future__ import annotations
 
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -24,7 +26,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import settings  # noqa: E402
 from src.ingest.attachments import save_attachments  # noqa: E402
 from src.ingest.gmail import GmailClient  # noqa: E402
-from src.ingest.parser import parse_message, write_raw_email  # noqa: E402
+from src.ingest.parser import parse_message  # noqa: E402
+from src.ingest.parser import write_raw_email  # noqa: E402
 
 # Configure structlog for pretty CLI output
 structlog.configure(
@@ -60,12 +63,8 @@ logger = structlog.get_logger(__name__)
     help="Maximum messages to fetch (default 500)",
 )
 @click.option("--dry-run", is_flag=True, help="List messages without saving")
-@click.option(
-    "--skip-attachments", is_flag=True, help="Skip attachment downloads"
-)
-@click.option(
-    "--query", default="", help="Additional Gmail search query"
-)
+@click.option("--skip-attachments", is_flag=True, help="Skip attachment downloads")
+@click.option("--query", default="", help="Additional Gmail search query")
 def main(
     days: int | None,
     after: datetime | None,
@@ -90,9 +89,7 @@ def main(
     if days:
         after = datetime.now(UTC) - timedelta(days=days)
     if not after and not before and not days:
-        click.echo(
-            "ERROR: specify --days or --after/--before date range", err=True
-        )
+        click.echo("ERROR: specify --days or --after/--before date range", err=True)
         sys.exit(1)
 
     click.echo(f"Ingesting emails from: {list_address or '(query only)'}")

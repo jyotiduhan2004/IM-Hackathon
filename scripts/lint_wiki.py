@@ -11,7 +11,8 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
+from typing import Literal
 
 import click
 import yaml
@@ -21,7 +22,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
-
 
 Severity = Literal["error", "warning", "info"]
 
@@ -74,7 +74,7 @@ def check_frontmatter(wiki_dir: Path) -> list[LintIssue]:
     issues: list[LintIssue] = []
     pages = _get_wiki_pages(wiki_dir)
 
-    for name, path in pages.items():
+    for _name, path in pages.items():
         content = path.read_text(encoding="utf-8")
         fm = _extract_frontmatter(content)
 
@@ -129,7 +129,7 @@ def check_broken_wikilinks(wiki_dir: Path) -> list[LintIssue]:
     pages = _get_wiki_pages(wiki_dir)
     known_names = set(pages.keys())
 
-    for name, path in pages.items():
+    for _name, path in pages.items():
         content = path.read_text(encoding="utf-8")
         links = _extract_wikilinks(content)
         for link in links:
@@ -218,8 +218,7 @@ def check_missing_index_entries(wiki_dir: Path) -> list[LintIssue]:
 def _slugify(text: str) -> str:
     """Convert a string to a kebab-case slug for filename matching."""
     text = re.sub(r"[^\w\s-]", "", text.lower())
-    text = re.sub(r"[\s_]+", "-", text).strip("-")
-    return text
+    return re.sub(r"[\s_]+", "-", text).strip("-")
 
 
 def create_missing_stubs(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue]:
@@ -237,7 +236,7 @@ def create_missing_stubs(wiki_dir: Path, dry_run: bool = False) -> list[LintIssu
     created: set[str] = set()
     issues: list[LintIssue] = []
 
-    for name, path in pages.items():
+    for _name, path in pages.items():
         content = path.read_text(encoding="utf-8")
         for link in _extract_wikilinks(content):
             target = link.split("|")[0].strip()
@@ -304,7 +303,7 @@ def normalize_wikilinks(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue
 
     issues: list[LintIssue] = []
 
-    for name, path in pages.items():
+    for _name, path in pages.items():
         content = path.read_text(encoding="utf-8")
         original = content
 
@@ -366,9 +365,7 @@ def check_duplicate_bodies(wiki_dir: Path) -> list[LintIssue]:
     for path in _get_wiki_pages(wiki_dir).values():
         content = path.read_text(encoding="utf-8")
         # Strip last_compiled line so timestamp differences don't mask dupes
-        normalized = re.sub(
-            r"^last_compiled:.*$", "", content, flags=re.MULTILINE
-        ).strip()
+        normalized = re.sub(r"^last_compiled:.*$", "", content, flags=re.MULTILINE).strip()
         digest = hashlib.sha256(normalized.encode()).hexdigest()
         by_hash.setdefault(digest, []).append(path)
 
@@ -456,7 +453,7 @@ def print_report(issues: list[LintIssue]) -> None:
         items = by_severity[severity]
         if not items:
             continue
-        marker = {"error": "✗", "warning": "⚠", "info": "ℹ"}[severity]
+        marker = {"error": "✗", "warning": "⚠", "info": "ℹ"}[severity]  # noqa: RUF001
         click.echo(f"\n{severity.upper()}S ({len(items)}):")
         for issue in items:
             click.echo(f"  {marker} [{issue.category}] {issue.page}")

@@ -7,7 +7,8 @@ from pathlib import Path
 
 import structlog
 
-from src.ingest.gmail import AttachmentRef, GmailClient
+from src.ingest.gmail import AttachmentRef
+from src.ingest.gmail import GmailClient
 from src.ingest.parser import ParsedEmail
 
 logger = structlog.get_logger(__name__)
@@ -35,8 +36,7 @@ def save_attachments(
 
     if skip_download:
         return [
-            f"raw/attachments/{parsed.msg_id_short}/{att.filename}"
-            for att in parsed.attachments
+            f"raw/attachments/{parsed.msg_id_short}/{att.filename}" for att in parsed.attachments
         ]
 
     attachments_root = raw_dir / "attachments" / parsed.msg_id_short
@@ -92,7 +92,10 @@ async def caption_image(image_path: Path, model: str = "gpt-4o") -> str | None:
         return None
 
     try:
-        data = image_path.read_bytes()
+        # Image files are small (< 10MB typically); sync read is fine here even
+        # from an async context. Wrapping in asyncio.to_thread would add more
+        # noise than it's worth.
+        data = image_path.read_bytes()  # noqa: ASYNC240
         mime = _detect_image_mime(image_path)
         b64 = base64.b64encode(data).decode("utf-8")
         data_url = f"data:{mime};base64,{b64}"

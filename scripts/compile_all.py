@@ -19,11 +19,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.budget import fetch_budget  # noqa: E402
-from src.compile.compiler import (  # noqa: E402
-    list_uncompiled_emails,
-    run_compilation,
-    update_wiki_index,
-)
+from src.compile.compiler import list_uncompiled_emails  # noqa: E402
+from src.compile.compiler import run_compilation  # noqa: E402
+from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
 
 structlog.configure(
@@ -83,11 +81,14 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
     # Auto-snapshot before compiling so we can roll back if the run corrupts
     # wiki pages. Snapshots are cheap (local copy) and have saved us pain.
     if not dry_run:
-        from datetime import UTC, datetime
+        from datetime import UTC
+        from datetime import datetime
+
         label = f"pre-compile-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
         snapshot_path = REPO_ROOT / ".snapshots" / label
         if (REPO_ROOT / wiki_dir).exists():
             import shutil
+
             snapshot_path.mkdir(parents=True, exist_ok=True)
             shutil.copytree(REPO_ROOT / wiki_dir, snapshot_path / "wiki")
             click.echo(f"Pre-compile snapshot: .snapshots/{label}/wiki")
@@ -145,6 +146,7 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
     # snapshot is already captured above for rollback.
     click.echo("\nValidating wiki integrity...")
     import subprocess
+
     result = subprocess.run(
         ["uv", "run", "python", "scripts/validate_wiki.py"],
         capture_output=True,
@@ -155,8 +157,8 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
     if result.returncode != 0:
         click.echo(result.stderr)
         click.echo(
-            f"\n⚠ Validation failed. Pre-compile snapshot is saved. "
-            f"Restore with: uv run python scripts/snapshot_wiki.py restore <label>"
+            "\n⚠ Validation failed. Pre-compile snapshot is saved. "
+            "Restore with: uv run python scripts/snapshot_wiki.py restore <label>"
         )
 
     budget_after = fetch_budget()

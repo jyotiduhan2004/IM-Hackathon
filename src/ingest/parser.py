@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
 import structlog
 import yaml
 
-from src.ingest.gmail import AttachmentRef, RawMessage
+from src.ingest.gmail import AttachmentRef
+from src.ingest.gmail import RawMessage
 
 logger = structlog.get_logger(__name__)
 
@@ -145,13 +148,11 @@ def to_raw_markdown(parsed: ParsedEmail, attachment_paths: list[str] | None = No
         "has_attachments": bool(parsed.attachments),
         "attachment_files": attachment_paths or [],
         "inline_images": parsed.inline_images,
-        "ingested_at": datetime.now().isoformat() + "Z",
+        "ingested_at": datetime.now(UTC).isoformat(),
         "compiled": False,
     }
 
-    yaml_block = yaml.safe_dump(
-        frontmatter, sort_keys=False, allow_unicode=True, width=120
-    )
+    yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True, width=120)
 
     parts = [
         "---",

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import shutil
 import sys
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -128,9 +129,7 @@ def reset_raw_compiled(confirm: bool) -> None:
             if confirm:
                 fm["compiled"] = False
                 fm.pop("compiled_at", None)
-                new_fm = yaml.safe_dump(
-                    fm, sort_keys=False, allow_unicode=True, width=120
-                ).rstrip()
+                new_fm = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=120).rstrip()
                 p.write_text(f"---\n{new_fm}\n---\n{parts[2]}")
     if confirm:
         click.echo(f"Reset compiled flag on {count} raw emails.")
