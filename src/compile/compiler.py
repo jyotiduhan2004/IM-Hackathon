@@ -113,10 +113,19 @@ def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
 
     now_iso = datetime.now(UTC).isoformat()
     frontmatter["last_compiled"] = now_iso
+    frontmatter["updated_by"] = settings.llm_model
+    # Track running count of recompiles
+    frontmatter["update_count"] = int(frontmatter.get("update_count") or 0) + 1
 
     new_content = _render_with_frontmatter(frontmatter, body)
     path.write_text(new_content, encoding="utf-8")
-    return {"ok": "true", "last_compiled": now_iso, "path": file_path}
+    return {
+        "ok": "true",
+        "last_compiled": now_iso,
+        "updated_by": settings.llm_model,
+        "update_count": frontmatter["update_count"],
+        "path": file_path,
+    }
 
 
 @tool
@@ -204,6 +213,8 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
                 has_real_fields = "title" in fm or "page_type" in fm
                 if "last_compiled" not in fm and has_real_fields:
                     fm["last_compiled"] = now_iso
+                    fm.setdefault("updated_by", settings.llm_model)
+                    fm["update_count"] = int(fm.get("update_count") or 0) + 1
                     body = _extract_body(content)
                     md_file.write_text(_render_with_frontmatter(fm, body), encoding="utf-8")
                     stamped += 1

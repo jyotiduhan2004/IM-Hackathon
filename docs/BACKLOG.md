@@ -531,6 +531,44 @@ infra).
 
 ---
 
+## Agent skills + MCP server + tools for downstream consumers
+
+Once the KB is stable, expose it to other agents and tools:
+
+1. **Claude Agent Skill** — package the KB as a skill bundle so Claude Code
+   users can ask questions like "what's the current reimbursement policy"
+   and get cited answers from their org's compiled wiki without manual
+   setup.
+
+2. **MCP server** — standardized read interface. Tools:
+   - `list_topics(category?)` / `list_entities()` / `list_systems()`
+   - `read_page(slug)` with structured metadata
+   - `search(query, filters?)` — full-text + metadata filters
+   - `find_sources(person_email)` — return raw mails referencing a person
+   - `timeline(topic)` — chronological events on a topic
+   - `conflicts()` — surfaces unresolved contradictions
+   - `summarize_thread(thread_id)` — on-demand rollup
+   MCP makes the KB usable from any MCP-speaking client (Claude, Gemini,
+   Cursor, Windsurf, etc.).
+
+3. **Python library** — `pip install email-kb` exposing the same surface
+   programmatically for scripts and notebooks.
+
+4. **REST API** — thin FastAPI wrapper around the library for non-MCP
+   consumers (Slack bot, internal tools).
+
+**When**: after the wiki has enough content (500+ pages) and quality is
+stable. The MCP + skill bundle are each ~1-2 days. The library + API come
+free once the data model is versioned (schema_version frontmatter
+already in BACKLOG).
+
+**Why this matters**: the KB isn't just for browsing — it should be the
+authoritative source for any agent answering org-specific questions. A
+Slack bot, a "new hire onboarding" agent, a project-status dashboard —
+all should query this KB rather than re-deriving.
+
+---
+
 ## Multiple mailing lists
 
 **The dedup story is already fine** — we key off `Message-ID` (global, set by

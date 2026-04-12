@@ -108,17 +108,27 @@ def _fix_list_gaps(body: str) -> str:
 
 
 def _page_metadata_banner(fm: dict) -> str:
-    """Small metadata banner at the top of each page: last updated, source count."""
+    """Small metadata banner at the top of each page.
+
+    Shows: last updated date, number of source emails, update count, and
+    which model last touched the page (updated_by) — so readers can tell
+    whether content is fresh and which model to credit/blame.
+    """
     last_compiled = fm.get("last_compiled", "")
     sources_count = len(fm.get("sources") or [])
     status = fm.get("status", "current")
+    updated_by = fm.get("updated_by") or ""
+    update_count = fm.get("update_count") or 0
     parts: list[str] = []
-    if last_compiled and last_compiled != "stub":
-        # Trim fractional seconds for display
+    if last_compiled and last_compiled not in ("stub", "stub-backfilled"):
         date_part = last_compiled.split("T")[0] if "T" in last_compiled else last_compiled
         parts.append(f"**Last updated:** {date_part}")
+    if update_count:
+        parts.append(f"**Updates:** {update_count}")
     if sources_count:
         parts.append(f"**Sources:** {sources_count}")
+    if updated_by:
+        parts.append(f"**Compiled by:** `{updated_by}`")
     if status != "current":
         parts.append(f"**Status:** {status}")
     if not parts:
