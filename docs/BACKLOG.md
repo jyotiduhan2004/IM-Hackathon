@@ -5,6 +5,71 @@ them up.
 
 ---
 
+## Agent scaffolding investigation — step-count reminders, hooks, context pruning (2026-04-13)
+
+**Problem observed today**: 1-email compile batches take 8-14 minutes at
+z-ai/glm-4.6. Pathological threads (e.g. 16-email Tender Audit Automation,
+`thread_id=19b10ae9d236af98`) hit the default 150-step LangGraph
+recursion limit and crash after ~14 min burning ~$0.20 per failure. The
+workaround landed — `--recursion-limit 60` (see `scripts/compile_all.py`) —
+which at least fails fast instead of bleeding budget, but it does NOT
+attack the root cause: the agent loops because it has no "you've done
+enough" signal beyond `mark_as_compiled`, context bloat confuses the
+model about what it already did, and the agent can't self-notice
+repetition on the same entity page.
+
+**The right fix is agent-level scaffolding, not a harder recursion cap.**
+This is a discrete research task and should be picked up by a separate
+agent (don't interleave with the forward compile push).
+
+What to deeply investigate:
+
+1. **Step-count reminder middleware** (the Claude Code pattern).
+   Wrap `create_deep_agent` with a pre-model hook that counts turns and
+   injects a `system` message every N steps:
+   _"You have used N of your ~40 expected tool calls for this email. If
+   the core pages are updated, call `mark_as_compiled` and stop."_
+   Likely surface: `src/compile/compiler.py:create_compiler`. LangGraph
+   supports this via `pre_model_hook` or a compiled-graph wrapper.
+   References: https://langchain-ai.github.io/langgraph/,
+   https://github.com/langchain-ai/deepagents.
+
+2. **Hooks for tool-call de-duplication.** If the agent has called
+   `edit_file` on `entities/ruchi-gupta.md` three times in one batch,
+   that's thrash. A hook can detect it and reply "you already edited
+   that file twice, move on."
+
+3. **Context pruning.** After N steps, summarize the earlier turns or
+   drop the raw file bodies from the running message history. The agent
+   doesn't need the raw markdown re-shown every turn.
+
+4. **Stronger exit discipline in the prompt** (`src/compile/prompts.py`).
+   Tool-audit review at `docs/reviews/tool-audit-20260413T050000Z.md`
+   already noted exit conditions are vague. Codex's priority review
+   (`docs/reviews/codex-priority-review-20260413T090000Z.md`) flagged
+   the prompt as actively fighting the Postgres migration.
+
+5. **Parallel compile with safety.** `scripts/compile_parallel.py`
+   already exists but is marked experimental. Shared-entity-page races
+   are the blocker. Once per-page locking is on the catalog
+   (Codex priority review PR3), parallel becomes safe.
+
+6. **Measure before optimizing.** Instrument the agent to emit per-step
+   metrics: tool name, duration, cumulative context size, cumulative
+   cost. Persist to `compile_runs` (Codex priority review PR5). Then we
+   can tell which of the four root causes above actually dominates for
+   a real batch — right now we're guessing.
+
+Success criteria for this investigation:
+- Median per-email compile time under 3 minutes at z-ai/glm-4.6
+- <10% batch failure rate on backlog of 6,500+ emails
+- No repeated `edit_file` on the same page within a single batch
+
+Do NOT implement before running a measurement pass. A wrong hook
+design wastes more time than the loops it replaces.
+
+---
+
 ## Langfuse callback stalls compile when proxy is slow (2026-04-13)
 
 **Symptom**: `compile_all.py` hangs after the first "running compilation"
