@@ -5,6 +5,35 @@ them up.
 
 ---
 
+## QMD (Tobi Lütke) — local semantic search for the wiki (2026-04-13)
+
+https://github.com/tobi/qmd — TypeScript CLI, local-first, three-stage
+retrieval: BM25 → vector embeddings → local LLM rerank. ~2 GB of GGUF
+models, no cloud APIs.
+
+Why it's useful for this project (complementary to #8, not overlapping):
+
+1. **Agent tool during compile** — replaces the `list_wiki_pages` +
+   slug-guess loop. Agent calls `qmd search "voice eval automated"` and
+   gets top-3 existing pages ranked by semantic relevance. This is the
+   right fix for the duplicate-page problem (compiler keeps making
+   `foo-new.md` because it can't tell there's already a `foo.md`).
+2. **Replaces mkdocs built-in search** — lunr is weak on a 463-page wiki,
+   QMD rerank is substantially better. Ship once the wiki is prose-heavy
+   (after issue #8 Phase 4 strips the source bloat).
+3. **Chat-with-wiki** — future mobile UX, "what's the latest on iOS fix?"
+   QMD is the retrieval layer.
+
+**Tactical ordering**: don't adopt before #8 Phase 2 ships — indexing 95%
+frontmatter is wasted. After strip-sources, the wiki is real knowledge
+and QMD's rerank has signal to work with.
+
+Pair with the Anthropic "writing tools for agents" reading below — QMD
+exposed as a compile-time tool is the first candidate for our next tool
+improvement.
+
+---
+
 ## Reading list — Anthropic engineering posts (2026-04-13)
 
 User flagged these to digest "eventually, not right away." Once read, pull out
