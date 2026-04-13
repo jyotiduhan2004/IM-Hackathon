@@ -663,6 +663,115 @@ failures that aren't just structural.
 
 ---
 
+## Inline citations instead of long Sources section
+
+User: "Endless list of email threads at the bottom doesn't seem the best.
+Move to citation format."
+
+**Current** (messy):
+```
+## Main content
+The API launched on April 11 with 87% uptime and improved latency.
+
+## Sources
+📧 Email 1 subject (collapsible with full body)
+📧 Email 2 subject (collapsible)
+... (50 more)
+```
+
+**Proposed** (clean, academic-style):
+```
+## Main content
+The API launched on April 11 [^api-launch] with 87% uptime [^perf-audit].
+Metrics aligned with the Q1 target [^q1-review].
+
+## References
+[^api-launch]: [API Launch] (2026-04-11, from Amit) — launch@im thread
+[^perf-audit]: [Performance Audit] (2026-04-12, from QA) — perf-test thread
+[^q1-review]: [Q1 Review] (2026-03-28, from Yashwant)
+```
+
+MkDocs Material already renders pymdownx footnotes nicely — clickable,
+pops up on hover, can have back-refs.
+
+**Compiler prompt change**:
+- For every factual claim, emit `[^short-slug]` citation
+- Define footnotes at the bottom, each pointing to the right raw email
+- Keep `sources:` in frontmatter for machine use, but don't render raw
+  email bodies in the page anymore
+
+**What to preserve vs drop**:
+- Keep: source lineage, click-through to raw email
+- Drop: 50 collapsible email body blocks taking up 10KB of HTML per page
+- Add: inline citation markers at the exact claim they support
+
+**Migration path**:
+1. Compile new pages with new citation prompt going forward
+2. Old pages stay old until touched
+3. Per-page migration script that runs a compile pass in "reformat mode"
+   — re-read the sources, rewrite body with inline citations, don't change
+   facts
+
+**Expected visual improvement**:
+- No 20KB of collapsible `<details>` at the bottom of every page
+- Reader sees claim+citation together, not bolted-on-bottom
+- Aligns with how the MkDocs Material community publishes docs
+
+**When**: after source-dedup + CC-filter land; this is the "polish"
+layer. Probably after 500+ pages compiled.
+
+---
+
+## De-noise entity pages: drop CC-only sources
+
+**User insight**: "Does CC'd on this email really matter?" — no, usually
+not. CC-only means informational, not active. Including these on an
+entity page creates 3× noise vs real "work this person did."
+
+**Proposed filter rules** (multi-level — not just header position):
+
+Tier 1 — STRONG signal, always include:
+- Person is From **AND** email body from them is >30 words / has numbers /
+  URLs / code / decisions
+
+Tier 2 — MEDIUM signal, include with caveat:
+- Person is To (expected to act)
+- Person is From but message is short (<30 words) AND not an ack phrase
+
+Tier 3 — WEAK signal, exclude from main sources but keep searchable:
+- CC-only
+- From but message is just acknowledgement ("thanks", "+1", "lgtm",
+  "adding X to thread", emoji-only)
+- Body-mention only without header presence
+
+Classification:
+- Deterministic for CC-only and word-count heuristic (free)
+- Cheap classifier (gpt-4.1-nano ~\$0.001) for borderline cases:
+  ack vs substantive
+
+**Expected impact**: Entity pages drop from 50 sources to 10-15 sources
+of MEANINGFUL contribution. Page becomes "what did this person actually
+do" instead of "every thread they were CC'd on."
+
+**Expected impact**: Bharat Agarwal 48 sources → ~18. Himanshu-Jain 47 →
+maybe ~25. Page size and render noise both drop significantly.
+
+**Where to implement**:
+1. **Compile prompt**: tell the agent "Do not include an email as a source
+   on an entity page if the person is only in CC. From or To only."
+2. **backfill_stubs.py**: exclude CC-only matches from the hits list
+3. **One-off migration script**: walk existing entity pages, re-classify
+   each source as From/To/CC/body, drop the CC-only ones, update
+   frontmatter
+
+**Risk**: we lose some context. "Bharat was informed of X" is gone.
+Mitigation: keep a low-priority `also_mentioned_in:` frontmatter list
+with CC-only raws, not rendered by default but searchable.
+
+**When**: after current backfill stabilizes. One prompt change + migration.
+
+---
+
 ## Multiple mailing lists
 
 **The dedup story is already fine** — we key off `Message-ID` (global, set by
