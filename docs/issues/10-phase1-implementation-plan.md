@@ -56,7 +56,7 @@ Do not treat these as blockers for this phase:
 
 - semantic search
 - chat / QA over the wiki
-- multi-mailing-list scale
+- additional mailing lists beyond the current corpus and same-list year-backfill
 - deep folder hierarchies in the repo
 - perfect historical cleanup of every legacy page before shipping improvements
 
@@ -389,9 +389,9 @@ consistently.
 
 ### Code areas
 
-- [src/compile/prompts.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/src/compile/prompts.py)
-- [scripts/validate_wiki.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/scripts/validate_wiki.py)
-- [mkdocs.yml](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/mkdocs.yml)
+- [src/compile/prompts.py](../../src/compile/prompts.py)
+- [scripts/validate_wiki.py](../../scripts/validate_wiki.py)
+- [mkdocs.yml](../../mkdocs.yml)
 - docs
 
 ### Deliverables
@@ -451,8 +451,8 @@ Replace sidebar dumps and file-driven navigation with reader-facing structure.
 
 ### Code areas
 
-- [mkdocs.yml](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/mkdocs.yml)
-- [mkdocs_hooks.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/mkdocs_hooks.py)
+- [mkdocs.yml](../../mkdocs.yml)
+- [mkdocs_hooks.py](../../mkdocs_hooks.py)
 - generated wiki landing pages
 
 ### Acceptance criteria
@@ -484,13 +484,14 @@ Keep evidence strong while reducing page clutter.
 - make raw-email evidence expandable or separately linked
 - cap visible source lists on noisy pages, especially entities
 - support inline citations for sensitive claims when useful
+- build on the existing MkDocs tags plugin for facets rather than inventing a parallel tag system
 
 ### Code areas
 
-- [mkdocs_hooks.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/mkdocs_hooks.py)
-- [scripts/compile_all.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/scripts/compile_all.py)
-- [src/db/wiki_pages.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/src/db/wiki_pages.py)
-- [src/db/touched_pages.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/src/db/touched_pages.py)
+- [mkdocs_hooks.py](../../mkdocs_hooks.py)
+- [scripts/compile_all.py](../../scripts/compile_all.py)
+- [src/db/wiki_pages.py](../../src/db/wiki_pages.py)
+- [src/db/touched_pages.py](../../src/db/touched_pages.py)
 
 ### Acceptance criteria
 
@@ -521,6 +522,7 @@ Reduce LLM guesswork and stop failure-recovery behavior from creating visible wi
 - add structured page-update helpers for frontmatter and `Related`
 - block user-visible stub creation as the default recovery path
 - distinguish strong vs weak evidence for entity inclusion
+- route unresolved page creation into a hidden review queue rather than reader-facing nav
 
 ### Recommended new tools
 
@@ -532,6 +534,7 @@ Reduce LLM guesswork and stop failure-recovery behavior from creating visible wi
 - `wiki_verify_quote`
 - `wiki_merge_pages`
 - `wiki_compact_entity_sources`
+- `log_insight`
 
 ### Preferred tool shapes
 
@@ -629,6 +632,10 @@ def wiki_write_page(
     - page_type matches path
     - required sections exist
     - sources are unique
+
+    On `expected_prior_hash` mismatch, return a structured conflict response
+    with the current hash and do not write. Caller should re-read once and retry;
+    if it still conflicts, log an insight and stop.
     """
 ```
 
@@ -638,6 +645,8 @@ def wiki_write_page(
 def wiki_record_touch(message_id: str, slug: str) -> dict:
     """
     Deterministically records that a source message contributed to a page.
+    This should be implemented as a thin tool over the existing
+    `message_touched_pages` join, not as new storage.
     """
 ```
 
@@ -675,9 +684,52 @@ The referenced Anthropic material points in the same direction:
 That matches what this repo needs: fewer generic file operations in the main
 loop, more wiki-shaped primitives.
 
-### Database-backed tools
+### How to give the right filters
 
-The database should become the primary structured context layer for the agent.
+The longstanding advice is:
+
+- start from the user's goal, not from the storage shape
+- expose the most discriminative filters first
+- default to high-signal narrowing
+- paginate and sort explicitly
+- support broad-to-narrow exploration instead of giant dumps
+
+In practice:
+
+- prefer `find_new_sources(date_from=..., sender=..., subject_contains=..., thread_id=...)`
+  over `list_all_sources()`
+- prefer `resolve_page(name, allowed_types=[...])` over `list_pages()`
+- prefer `find_related_pages(slug, via="shared_sources", limit=20)` over
+  `search_everything(query)`
+
+Good filter dimensions for this repo:
+
+- date range
+- sender / participant
+- thread
+- source family
+- page type
+- status
+- recency
+- limit / offset
+
+Good defaults:
+
+- sort by recency or relevance
+- return a compact summary list first
+- require the caller to drill deeper for full bodies
+- cap default result counts
+
+This is consistent with the external guidance:
+
+- tools should return just enough context for the current task
+- search/filter tools are usually better than dump/list tools
+- context should be curated and incremental, not maximized upfront
+
+### Storage-agnostic context tools
+
+The implementation should use the catalog/database aggressively, but the agent-facing
+tool contract should usually stay storage-agnostic.
 
 The current schema already supports this:
 
@@ -692,42 +744,43 @@ The current schema already supports this:
 
 Relevant code:
 
-- [src/db/schema.sql](/Users/amtagrwl/git/email-knowledge-base/src/db/schema.sql)
-- [src/db/messages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/messages.py)
-- [src/db/users.py](/Users/amtagrwl/git/email-knowledge-base/src/db/users.py)
-- [src/db/threads.py](/Users/amtagrwl/git/email-knowledge-base/src/db/threads.py)
-- [src/db/participants.py](/Users/amtagrwl/git/email-knowledge-base/src/db/participants.py)
-- [src/db/wiki_pages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/wiki_pages.py)
-- [src/db/touched_pages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/touched_pages.py)
+- [src/db/schema.sql](../../src/db/schema.sql)
+- [src/db/messages.py](../../src/db/messages.py)
+- [src/db/users.py](../../src/db/users.py)
+- [src/db/threads.py](../../src/db/threads.py)
+- [src/db/participants.py](../../src/db/participants.py)
+- [src/db/wiki_pages.py](../../src/db/wiki_pages.py)
+- [src/db/touched_pages.py](../../src/db/touched_pages.py)
 
 Recommended rule:
 
-- the agent should almost never query raw files first when a structured DB lookup can answer the question
+- the agent should almost never query raw files first when a structured catalog
+  lookup can answer the question
 
-#### Recommended DB-backed tool set
+#### Recommended context tool set
 
-##### `db_get_message`
+##### `get_source_context`
 
 ```python
-def db_get_message(message_id: str | None = None, raw_path: str | None = None) -> dict:
+def get_source_context(source_id: str | None = None, raw_path: str | None = None) -> dict:
     """
-    Returns one message row with subject, sender, date, thread_id, compile state,
-    and basic provenance metadata.
+    Returns one normalized source with title, sender, date, thread_id,
+    participants, status, and compact provenance metadata.
     """
 ```
 
 Use for:
 
-- locating a message deterministically
-- bridging from raw path to message id
-- checking compile state before or after processing
+- locating a source deterministically
+- bridging from raw path to canonical source id
+- checking context before processing
 
-##### `db_get_thread`
+##### `get_thread_context`
 
 ```python
-def db_get_thread(thread_id: str, include_messages: bool = True) -> dict:
+def get_thread_context(thread_id: str, include_sources: bool = True) -> dict:
     """
-    Returns thread metadata plus chronologically ordered message summaries.
+    Returns thread metadata plus chronologically ordered source summaries.
     """
 ```
 
@@ -737,12 +790,13 @@ Use for:
 - understanding how a discussion evolved
 - deciding whether a topic page or timeline page is warranted
 
-##### `db_get_user`
+##### `get_person_context`
 
 ```python
-def db_get_user(email: str) -> dict:
+def get_person_context(email: str) -> dict:
     """
-    Returns canonical user metadata, display names, first_seen_at, last_seen_at.
+    Returns canonical person metadata, display names, first_seen_at, last_seen_at,
+    and major related topics/systems.
     """
 ```
 
@@ -752,11 +806,11 @@ Use for:
 - avoiding name-collision logic in the prompt
 - showing better entity-page context
 
-##### `db_list_participants`
+##### `find_people_involved`
 
 ```python
-def db_list_participants(
-    message_id: str | None = None,
+def find_people_involved(
+    source_id: str | None = None,
     thread_id: str | None = None,
     role: str | None = None,
 ) -> dict:
@@ -771,16 +825,17 @@ Use for:
 - building high-confidence entity provenance
 - separating strong and weak evidence for person pages
 
-##### `db_resolve_page`
+##### `resolve_page`
 
 ```python
-def db_resolve_page(
+def resolve_page(
     slug: str | None = None,
     title: str | None = None,
     canonical_user_email: str | None = None,
 ) -> dict:
     """
-    Returns canonical page metadata from wiki_pages.
+    Returns canonical page metadata regardless of whether it was resolved
+    from catalog rows, aliases, or existing markdown.
     """
 ```
 
@@ -790,12 +845,12 @@ Use for:
 - entity-page resolution by email
 - avoiding duplicate page creation
 
-##### `db_pages_for_message`
+##### `get_pages_for_source`
 
 ```python
-def db_pages_for_message(message_id: str) -> dict:
+def get_pages_for_source(source_id: str) -> dict:
     """
-    Returns wiki pages touched by a given message.
+    Returns wiki pages already touched by a given source.
     """
 ```
 
@@ -805,12 +860,12 @@ Use for:
 - understanding where a source already landed
 - avoiding redundant page updates
 
-##### `db_messages_for_page`
+##### `get_references_for_page`
 
 ```python
-def db_messages_for_page(page_id: int | None = None, slug: str | None = None) -> dict:
+def get_references_for_page(page_id: int | None = None, slug: str | None = None) -> dict:
     """
-    Returns messages that contributed to a page, newest first.
+    Returns the sources that contributed to a page, newest first.
     """
 ```
 
@@ -820,10 +875,10 @@ Use for:
 - change summaries
 - timeline generation
 
-##### `db_related_pages`
+##### `find_related_pages`
 
 ```python
-def db_related_pages(
+def find_related_pages(
     slug: str,
     via: str = "shared_messages",
     limit: int = 20,
@@ -840,10 +895,10 @@ Use for:
 - building rollups and cluster landing pages
 - reducing ad hoc related-link drift
 
-##### `db_queue_stats`
+##### `get_compile_health`
 
 ```python
-def db_queue_stats() -> dict:
+def get_compile_health() -> dict:
     """
     Returns compile queue counts, failure counts, stale claims, recent throughput.
     """
@@ -855,10 +910,10 @@ Use for:
 - compile health gates
 - deciding whether automation is safe
 
-##### `db_recent_runs`
+##### `get_recent_runs`
 
 ```python
-def db_recent_runs(limit: int = 20) -> dict:
+def get_recent_runs(limit: int = 20) -> dict:
     """
     Returns recent compile runs with status, counts, cost, and notes.
     """
@@ -869,6 +924,30 @@ Use for:
 - recent-change awareness
 - operational debugging
 - feeding `log.md` and release reports
+
+##### `find_new_sources`
+
+```python
+def find_new_sources(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sender_contains: str | None = None,
+    subject_contains: str | None = None,
+    thread_id: str | None = None,
+    source_family: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """
+    Returns a compact, paginated list of candidate new sources to ingest.
+    """
+```
+
+Use for:
+
+- backlog selection
+- targeted recompile windows
+- narrowing the ingest surface without huge context dumps
 
 #### What not to expose
 
@@ -905,6 +984,9 @@ The file layer should answer:
 - what are the raw source documents
 - what will the reader see
 
+The agent-facing tool should care about the job; the implementation can answer
+from the DB, markdown, or both.
+
 ### Agent responsibilities after refactor
 
 - choose which durable pages need updating
@@ -923,8 +1005,8 @@ The file layer should answer:
 
 ### Code areas
 
-- [src/compile/compiler.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/src/compile/compiler.py)
-- [src/compile/prompts.py](/Users/amtagrwl/.codex/worktrees/a70d/email-knowledge-base/src/compile/prompts.py)
+- [src/compile/compiler.py](../../src/compile/compiler.py)
+- [src/compile/prompts.py](../../src/compile/prompts.py)
 - `new helper modules under src/compile/`
 
 ### Acceptance criteria
@@ -1045,6 +1127,35 @@ Do not publish a build when any of these are true:
 
 ---
 
+## Workstream 7 — Observability and agent feedback loops
+
+### Goal
+
+Make tool usage, agent uncertainty, and compile behavior measurable enough to
+improve the system deliberately.
+
+### Current issues
+
+- aggregate tool-call counts exist, but per-tool behavior is still opaque
+- the agent has no first-class channel for "this was ambiguous" or "this likely needs human review"
+- it is hard to tell whether new tools are actually replacing freeform file thrash
+
+### Changes
+
+- add per-tool-name logging for compile runs
+- persist a compact record of tool inputs/outputs and outcomes
+- add `log_insight(kind, message, suggested_action=None)` for agent meta-observations
+- track which tools are actually used for page resolution, quote verification, and source narrowing
+- expose a simple operational report for the last N compile runs
+
+### Acceptance criteria
+
+- operators can see which tools are being used and how often
+- ambiguous cases are captured without reading full traces
+- new tooling work can be judged by actual usage, not guesswork
+
+---
+
 ## How to get it to reality
 
 ### Recommended PR sequence
@@ -1068,6 +1179,15 @@ Keep each PR narrow and shippable.
 - compact metadata banner
 - compact references rendering
 - move raw-email blocks behind expansion or separate detail views
+
+Adjacent open work:
+
+- #49 already proposes the metadata banner
+- #48 is adjacent for attachment visibility
+- #52 is adjacent on category hygiene
+- #50 is adjacent on compile health
+
+This plan should absorb those changes where they land rather than re-propose them blindly.
 
 #### PR 4 — Tooling for canonical pages
 
@@ -1093,7 +1213,13 @@ Keep each PR narrow and shippable.
 - add quality metrics
 - add release checklist / QA script
 
-#### PR 8 — Recompile and publish
+#### PR 8 — Observability and feedback loops
+
+- per-tool logging
+- `log_insight`
+- operational compile reports
+
+#### PR 9 — Recompile and publish
 
 - re-run targeted compile / repair
 - verify against audit sampling
@@ -1302,6 +1428,12 @@ Check:
 - absence of unsupported role/ownership claims
 - absence of wrong-source joins
 - structural readability
+
+Operationalize this as:
+
+- a repeatable checklist in docs
+- `scripts/audit.py` for reproducible samples
+- eventually a dedicated audit skill for release-candidate review
 
 ## 5. Success metrics
 
