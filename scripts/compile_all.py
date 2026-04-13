@@ -8,10 +8,13 @@ Usage:
 
 from __future__ import annotations
 
+import concurrent.futures
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal
@@ -96,16 +99,34 @@ def _stamp_recently_modified_pages(
                 fm["updated_by"] = model_name
                 fm["update_count"] = int(fm.get("update_count") or 0) + 1
                 body = extract_body(content)
-                md_file.write_text(
-                    render_with_frontmatter(fm, body), encoding="utf-8"
-                )
+                md_file.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
                 stamped += 1
             except (OSError, UnicodeDecodeError) as exc:
-                logger.warning(
-                    "stamp skip", path=str(md_file), error=str(exc)
-                )
+                logger.warning("stamp skip", path=str(md_file), error=str(exc))
                 skipped += 1
     return stamped, skipped
+
+
+def _run_with_timeout[T](fn: Callable[[], T], timeout_s: float | None) -> T:
+    """Run ``fn()`` in a worker thread, raising
+    ``concurrent.futures.TimeoutError`` after ``timeout_s`` seconds.
+    A falsy ``timeout_s`` (0 or None) runs ``fn`` inline.
+
+    Caveat — Python threads are cooperative. On timeout the worker is
+    orphaned (``shutdown(wait=False)``) and may linger until process
+    exit if it's wedged in C code or a blocking socket. Acceptable
+    trade-off: the outer batch loop progresses instead of freezing the
+    whole run. For the same reason we avoid ``with ThreadPoolExecutor``
+    — its ``__exit__`` would block on ``shutdown(wait=True)``.
+    """
+    if not timeout_s:
+        return fn()
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout_s)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 _LOG_HEADER = (
@@ -158,20 +179,14 @@ def _append_batch_log(
     if not log_path.exists():
         log_path.write_text(_LOG_HEADER, encoding="utf-8")
 
-    row = (
-        f"| {timestamp} | {batch_idx} | {n_emails} | {thread_id} | "
-        f"{outcome} | {safe_notes} |\n"
-    )
+    row = f"| {timestamp} | {batch_idx} | {n_emails} | {thread_id} | {outcome} | {safe_notes} |\n"
     with log_path.open("a", encoding="utf-8") as f:
         f.write(row)
 
 
 def _batch_paths(batch: list) -> list[str]:
     """Extract raw_path strings from a batch list (dicts or bare strings)."""
-    return [
-        item["path"] if isinstance(item, dict) else str(item)
-        for item in batch
-    ]
+    return [item["path"] if isinstance(item, dict) else str(item) for item in batch]
 
 
 def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
@@ -335,6 +350,18 @@ def _group_by_thread(
         "pathological threads instead of burning budget up to 150 steps."
     ),
 )
+@click.option(
+    "--batch-timeout",
+    type=int,
+    default=900,
+    help=(
+        "Per-batch wall-clock timeout in seconds (default 900 = 15 min, "
+        "matching scripts/compile_overnight.sh). Pass 0 to disable. "
+        "Guards interactive runs against a single hung batch "
+        "(slow OTel export, stuck LLM provider, rare deadlock) freezing "
+        "the whole compile loop."
+    ),
+)
 def main(
     batch_size: int,
     limit: int | None,
@@ -342,6 +369,7 @@ def main(
     model: str | None,
     model_pool: str | None,
     recursion_limit: int,
+    batch_timeout: int,
 ) -> None:
     """Compile uncompiled raw emails into wiki pages using Deep Agents."""
     import random
@@ -476,13 +504,20 @@ def main(
             )
             cache_cb = BatchStatsCallback(model=batch_model)
             try:
-                run_compilation(
-                    instruction=instruction,
-                    model_name=batch_model,
-                    raw_dir=raw_dir,
-                    wiki_dir=wiki_dir,
-                    recursion_limit=recursion_limit,
-                    cache_stats=cache_cb,
+                # ``concurrent.futures.TimeoutError`` is a subclass of
+                # ``Exception``, so the outer ``except`` below handles it
+                # via ``_mark_batch_failed`` + ``_append_batch_log``.
+                _run_with_timeout(
+                    partial(
+                        run_compilation,
+                        instruction=instruction,
+                        model_name=batch_model,
+                        raw_dir=raw_dir,
+                        wiki_dir=wiki_dir,
+                        recursion_limit=recursion_limit,
+                        cache_stats=cache_cb,
+                    ),
+                    timeout_s=batch_timeout,
                 )
                 marked, not_cited, missing = _mark_batch_compiled(
                     batch, Path(wiki_dir), compile_model=batch_model
@@ -490,9 +525,7 @@ def main(
                 processed += marked
                 suffix_parts = []
                 if not_cited:
-                    suffix_parts.append(
-                        f"{not_cited} not-yet-cited (kept pending)"
-                    )
+                    suffix_parts.append(f"{not_cited} not-yet-cited (kept pending)")
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
                 cache = cache_cb.snapshot()
@@ -512,12 +545,20 @@ def main(
                 log_notes = "; ".join(log_notes_parts) if log_notes_parts else ""
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
             except Exception as e:  # noqa: BLE001
-                logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
-                failed_marked = _mark_batch_failed(batch, str(e), compile_model=batch_model)
+                # concurrent.futures.TimeoutError has an empty str(),
+                # so fall back to a synthesized message that names the
+                # timeout budget — otherwise wiki/log.md gets a blank
+                # notes column and the run looks silently broken.
+                if isinstance(e, concurrent.futures.TimeoutError):
+                    err_msg = f"TimeoutError: batch exceeded {batch_timeout}s"
+                else:
+                    err_msg = str(e)
+                logger.error("batch compilation failed", batch_index=batch_idx, error=err_msg)
+                failed_marked = _mark_batch_failed(batch, err_msg, compile_model=batch_model)
                 failed += failed_marked
-                click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
+                click.echo(f"ERROR in batch ({failed_marked} marked failed): {err_msg}")
                 click.echo("Continuing with next batch...")
-                _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=str(e)[:200])
+                _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=err_msg[:200])
         run_status = "completed"
     except KeyboardInterrupt:
         run_status = "killed"
@@ -548,9 +589,7 @@ def main(
     # `last_compiled` is missing entirely, so re-edits of older pages slip
     # through with stale timestamps. Coordinator owns this now.
     click.echo("\nStamping recently modified wiki pages...")
-    stamped, skipped = _stamp_recently_modified_pages(
-        wiki_dir, run_start, resolved_model
-    )
+    stamped, skipped = _stamp_recently_modified_pages(wiki_dir, run_start, resolved_model)
     click.echo(
         f"Stamped {stamped} pages with last_compiled"
         + (f" ({skipped} skipped — corrupt frontmatter)" if skipped else "")
