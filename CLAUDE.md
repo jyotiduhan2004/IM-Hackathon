@@ -88,13 +88,20 @@ uv run pytest tests/test_file.py -x
 - Handled by `scripts/ingest_backlog.py`
 
 ### COMPILE (primary agent job)
-1. List uncompiled emails (`compiled: false` in frontmatter)
-2. Process chronologically, grouped by thread_id
+1. List uncompiled emails via `list_uncompiled_emails` (reads the
+   Postgres `messages` table — NOT raw frontmatter; that field is
+   legacy dead state)
+2. Process chronologically, grouped by `thread_id`
 3. For each email, determine affected topics/entities/policies
-4. Create or update wiki pages with proper frontmatter and cross-references
+4. Create or update wiki pages with proper frontmatter + cross-references
 5. Detect supersession and conflicts
-6. Update wiki/index.md and append to wiki/log.md
-7. Mark processed emails as `compiled: true`
+6. Return. The coordinator (`scripts/compile_all.py`) handles the rest
+   deterministically: it flips `compile_state` in Postgres (only for
+   emails whose raw_path is actually cited in a content-type wiki
+   page — entity-only citation doesn't count); it stamps
+   `last_compiled` on modified wiki pages via mtime diff; it appends
+   a structured batch row to `wiki/log.md`; and it regenerates
+   `wiki/index.md`.
 
 ### QUERY
 - Search wiki pages for the user's question
@@ -156,7 +163,16 @@ Policy pages additionally require:
 
 ## What you MUST NOT do
 
-- NEVER modify files in raw/ (except setting `compiled: true`)
+- NEVER modify files in `raw/` — not the body, not the frontmatter.
+  The Postgres `messages` table owns compile state, not raw YAML.
+- NEVER invent entity slugs. Call `create_entity(email, display_name)`
+  — it returns a deterministic email-canonical slug + creates the
+  stub page. Identity is email; display names collide.
+- NEVER call `mark_as_compiled`, `stamp_page_compiled_at`,
+  `append_to_log`, or `update_wiki_index` (these are no longer agent
+  tools as of 2026-04-13). The coordinator flips compile state,
+  stamps pages, logs structured batch rows, and rebuilds the index
+  deterministically after you return. Do your wiki work, then return.
 - NEVER invent information not in source emails
 - NEVER delete a wiki page — supersede it instead
 - NEVER remove history — only add to it
@@ -164,6 +180,43 @@ Policy pages additionally require:
 - NEVER catch bare `Exception` — use specific types
 - NEVER use pip — use `uv add` / `uv remove` for dependencies
 - NEVER put secrets in code — use environment variables
+
+## Guardrail principles (learned 2026-04-13)
+
+**Coordinators verify, LLMs propose.** Every LLM-claimed state
+transition needs independent external evidence showing the agent did
+the WORK, not just that it called a tool or set a flag. Three
+incidents produced this rule in one session:
+
+1. `mark_as_compiled` was 68% unreliable — agent forgot to call it
+   on 19/28 batch emails.
+2. Entity slug invention produced `vishakha-indiamart`,
+   `arjun-gaur-clean`, `akash-singh6` (garbage / duplicates / numeric
+   noise).
+3. Naïve reconcile-by-citation would have false-flipped 715 of 748
+   candidates because the agent name-drops emails in entity
+   `sources:` lists without writing a topic page.
+
+**Practical rules**:
+
+- If a tool writes state the coordinator could compute, move it to
+  the coordinator.
+- If identity is stable (email address, message_id, thread_id, file
+  mtime), compute it deterministically — never ask the LLM.
+- Citation alone is not evidence of content extraction. Tighten the
+  check to "cited in a content-type page" (topic/system/policy/
+  timeline/conflict), not "cited anywhere".
+- Migration is iterative, not big-bang. Ship the deterministic rule
+  for NEW data; let the migration script clean legacy data in
+  `--limit N` batches. Legacy that hasn't been migrated keeps
+  working via compatibility-shim lookups (e.g.
+  `find_entity_by_email` scans legacy display-name slugs).
+- When in doubt, leave state `pending`. The compile queue's
+  claim/finish loop re-processes it automatically — self-healing.
+
+Design rationale + migration plan in `docs/BACKLOG.md`
+("Coordinators verify, LLMs propose" + "Migrate hand-rolled
+coordinator hooks → LangChain AgentMiddleware").
 
 ## Code conventions
 

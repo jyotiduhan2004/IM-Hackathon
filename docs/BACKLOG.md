@@ -5,6 +5,118 @@ them up.
 
 ---
 
+## Migrate hand-rolled coordinator hooks → LangChain AgentMiddleware (2026-04-13)
+
+**Priority: high.** Found during today's guardrails work. LangChain v1 /
+DeepAgents ships a native middleware system that does exactly what
+we've been hand-rolling in `scripts/compile_all.py`. Migrating cuts
+code, colocates verification with execution, and opens the door to
+proper "active self-correction" (coordinator re-invokes the agent with
+evidence-based feedback, not just leaves it pending for the next run).
+
+### What we have today (hand-rolled, scattered across compile_all.py)
+
+| Today | What it does |
+|---|---|
+| `_mark_batch_compiled(batch, wiki_dir)` | post-agent: verify wiki citation, flip messages.compile_state |
+| `_mark_batch_failed(batch, error)` | post-agent exception handler |
+| `_collect_cited_raw_paths(wiki_dir)` | the citation-evidence scan |
+| `_stamp_recently_modified_pages(wiki_dir, since, model)` | post-agent: stamp `last_compiled` on mtime-new wiki pages |
+| `_append_batch_log(batch_idx, batch, result, wiki_dir)` | post-agent: write structured log row |
+| `start_run() / finish_run()` via try/finally wrap | per-run observability |
+| `scripts/reconcile_compile_state.py` (strict mode) | retro-active citation check |
+| Prompt reminders to "not invent entity slugs, call `create_entity`" | pre-model reminder encoded as text |
+
+### What LangChain v1 ships natively
+
+Docs: https://docs.langchain.com/oss/python/langchain/guardrails (the
+whole "After agent guardrails" page is this exact pattern).
+
+- **`AgentMiddleware`**: the idiomatic wrapper. Subclass it, pass to
+  `create_deep_agent(middleware=[...])`.
+- **`wrap_model_call(request, handler)`**: called on every LLM
+  invocation. Can mutate the request (inject system reminders), run
+  the handler, then post-process the response. Perfect for
+  step-count-reminder (the Claude-Code pattern from the other
+  backlog entry), context pruning, enforced exit signalling.
+- **`wrap_tool_call(request, handler)`**: called on every tool
+  invocation. Pre-validate args, run the tool, verify the result,
+  optionally rewrite the `ToolMessage` the agent sees.
+- **`interrupt_on`**: pauses the agent at specified tool calls.
+  Coordinator inspects live state, can send feedback back to the
+  paused run. This is the "active self-correction" primitive.
+- **`response_format` (Pydantic `BaseModel`)**: schema-validated
+  final output. Replaces our prose `append_to_log` instruction with
+  a typed structured summary the coordinator reads directly.
+- **Node-style hooks** (`before_agent`, `after_agent`, etc.): the
+  simplest form when you don't need to intercept individual tool
+  calls.
+
+### Migration sketch
+
+One new module, one class:
+
+```python
+# src/compile/middleware.py
+class CompileCoordinatorMiddleware(AgentMiddleware):
+    def __init__(self, *, batch, wiki_dir, run_id):
+        self.batch = batch
+        self.wiki_dir = wiki_dir
+        self.run_id = run_id
+        self.batch_start = datetime.now(UTC)
+        self.step_count = 0
+
+    def wrap_model_call(self, request, handler):
+        self.step_count += 1
+        if self.step_count % 30 == 0:
+            request.messages.append(SystemMessage(
+                f"{self.step_count} tool calls so far. Wrap up and return."
+            ))
+        return handler(request)
+
+    def wrap_tool_call(self, request, handler):
+        return handler(request)
+
+    def after_agent(self, state):
+        # The current _mark_batch_compiled + _stamp_recently_modified_pages
+        # + _append_batch_log all collapse here. Citation scan scoped to
+        # this batch's wiki deltas (mtime >= self.batch_start).
+        ...
+```
+
+### Why it's worth doing
+
+1. **Active self-correction** — today the 714 entity-only-cited emails
+   just stay pending. With `interrupt_on` + a post-tool hook, the
+   coordinator can re-invoke the agent inline: *"you wrote an entity
+   mention for `raw/foo.md` but no topic page cites it yet. Write
+   the topic page before you return."*
+2. **Single source of truth** for the compile loop's verification
+   rules. Today they're scattered across `compile_all.py` +
+   `reconcile_compile_state.py` + the tests the W4-W6 PRs added.
+3. **Testability** — middleware is testable with fake agent state,
+   no real deep_agent needed.
+4. **The step-count-reminder** backlog entry collapses into a 10-line
+   `wrap_model_call` instead of its own separate design.
+
+### Scope + ordering
+
+- `src/compile/middleware.py` (~200 lines) — one class, 3-4 methods
+- `src/compile/compiler.py` — inject middleware into `create_deep_agent`
+- `scripts/compile_all.py` — drop `_mark_batch_compiled`,
+  `_mark_batch_failed`, `_stamp_recently_modified_pages`,
+  `_append_batch_log` (~150 lines deleted). Keep `_group_by_thread`
+  + the runner shell.
+- Tests move from `tests/test_compile_all_*.py` →
+  `tests/test_compile_middleware.py` (fake agent state, no DB).
+
+Don't ship before PR #26 (`create_entity`) merges — that gives
+`wrap_tool_call` a concrete target. Don't ship before the 500-email
+milestone — current scaffolding works, migrating now trades forward
+motion for cleanup.
+
+---
+
 ## Design principle: coordinators verify, LLMs propose (2026-04-13)
 
 **Rule**: every LLM-claimed state transition must be backed by an
