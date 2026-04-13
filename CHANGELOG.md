@@ -85,6 +85,15 @@ Detailed incident postmortems live under `docs/incidents/`.
   sources-heavy pages observed in audits. Covered by
   `tests/test_mkdocs_sources_rendering.py` with fixtures under
   `tests/fixtures/sources_fixture/wiki/`.
+- `COMPILER_SYSTEM_PROMPT` gains two Phase 1 taxonomy sections:
+  "Topic vs system" (what-is-happening vs what-is-this-thing, with Lens
+  and WhatsApp 9696 worked examples) and "Entity evidence strength"
+  (From/To/quoted owner = strong; CC-only or incidental first-name
+  mention = weak, skip on entity pages). Reconciled against existing
+  "Populate sources exhaustively" / "Source completeness for entity pages"
+  sections: CC-only emails still belong in `sources:` for audit-trail
+  citation, but do NOT justify creating a new entity page or writing new
+  prose about the person.
 - Default `LLM_MODEL` reverted `z-ai/glm-5.1` → `z-ai/glm-4.6`. glm-5.1
   does NOT cache prompts through OpenRouter on this proxy (zero cached
   tokens across 5 sequential identical-prompt calls), while glm-4.6 caches

@@ -100,6 +100,53 @@ a "Current Policy" section, and a "History" table with dates + source links.
 - **conflict** (`wiki/conflicts/{slug}.md`): Two+ emails disagree, no clear
   supersession.
 
+## Topic vs system
+
+A **topic** answers "what is happening?" — projects, rollouts, decisions,
+migrations, incidents, initiatives, feature changes. Topic pages describe
+ongoing work, changed numbers, open questions, or recent decisions.
+
+A **system** answers "what is this thing?" — durable products, platforms,
+services, tools, mailing lists. System pages describe the durable noun
+itself: what role it plays in the org, what it does, which topics are
+happening around it.
+
+If both apply, create one canonical `system` page for the durable thing
+AND multiple `topic` pages for the initiatives around it. The system page
+points to the topics; each topic page links back to the system.
+
+Worked examples:
+
+- `Lens` = system (a durable product).
+- `City-based filters on Lens results page` = topic (a rollout on Lens).
+- `WhatsApp 9696` = system (a durable channel / mailing list target).
+- `Complaint agent v2 on WhatsApp 9696` = topic (an initiative on WhatsApp 9696).
+
+Explicit rule: If the page is mostly about **status and change**, it is a
+`topic`. If it is mostly about **the thing itself**, it is a `system`.
+
+## Entity evidence strength
+
+When deciding whether an email is strong enough evidence to create or grow
+an entity page for a person, use this rule:
+
+- **Strong evidence**: the person is in the email's `From`, in `To`, OR is
+  directly quoted / named as owner / decision-maker in the body.
+- **Weak evidence**: the person is only in `CC` (CC-only presence), OR is
+  merely mentioned by first name in an unrelated paragraph with no
+  attributed action, quote, or ownership.
+
+Rules:
+
+- Do NOT create a new entity page from weak evidence alone.
+- Do NOT grow an existing entity page's `sources:` list from weak evidence
+  alone.
+- Skip weak-evidence emails when populating entity pages — they add noise
+  without adding signal about the person.
+
+Weak evidence is still fine for topic / system / policy pages; the rule
+above applies specifically to the entity category.
+
 ## Wikilink rules — CRITICAL
 
 Every `[[wikilink]]` target MUST be:
