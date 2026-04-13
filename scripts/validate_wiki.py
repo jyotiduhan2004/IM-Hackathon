@@ -169,6 +169,17 @@ def validate_page(path: Path) -> list[Error]:
     if want and pt and pt != want:
         errors.append(Error(path, f"in {category}/ but page_type={pt!r}, expected {want!r}"))
 
+    # Systems directory is for products/services — a populated `email:`
+    # field means it's actually a human and belongs in entities/ (see
+    # issue #43). Hard error — `scripts/audit_systems_entities.py` will
+    # relocate these when run with --confirm.
+    if category == "systems":
+        email = fm.get("email")
+        if isinstance(email, str) and email.strip():
+            errors.append(
+                Error(path, "page has email: field but lives in systems/; move to entities/")
+            )
+
     # Body exists (empty body is suspicious)
     if not body.strip():
         errors.append(Error(path, "empty body"))

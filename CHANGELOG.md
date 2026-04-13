@@ -11,6 +11,17 @@ Detailed incident postmortems live under `docs/incidents/`.
 ## [Unreleased] — 2026-04-13
 
 ### Added
+- `scripts/audit_systems_entities.py`: CLI that flags + relocates human
+  pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
+  by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to
+  move each flagged page into `wiki/entities/`. Detects misclassification
+  via frontmatter (`email:` populated, `page_type: entity`) and a simple
+  slug heuristic (`firstname-lastname[digits]` minus a system-word
+  stop-list). Wikilink rewrites are not required — `mkdocs-roamlinks-plugin`
+  resolves `[[slug]]` by whole-tree filename search, so a move between
+  `systems/` and `entities/` keeps every inbound link working.
+  `scripts/validate_wiki.py` now hard-errors on any `wiki/systems/*.md`
+  with a populated `email:` field, wired as an error in `validate_page`.
 - GCP Phase A viewer deploy scaffolding (PR #36): `Dockerfile` +
   `nginx.conf` (python:3.12-slim builder → nginx:alpine runtime);
   `.dockerignore` + `.gcloudignore` scoped so `mkdocs_hooks.py` can still
