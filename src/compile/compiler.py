@@ -680,6 +680,7 @@ def run_compilation(
     wiki_dir: str = "wiki",
     recursion_limit: int = 150,
     cache_stats: Any | None = None,
+    tool_log: Any | None = None,
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 
@@ -691,6 +692,10 @@ def run_compilation(
     Pass a `CacheStatsCallback` as `cache_stats` to capture per-batch prompt-
     caching metrics (hit rate, cached tokens, total tokens). See
     `src/compile/cache_stats.py`.
+
+    Pass a `ToolCallLogHandler` as `tool_log` to capture per-tool-call
+    telemetry (name, inputs, latency, status). See
+    `src/compile/tool_call_log.py`.
     """
     agent = create_compiler(model_name=model_name, raw_dir=raw_dir, wiki_dir=wiki_dir)
 
@@ -700,6 +705,8 @@ def run_compilation(
         callbacks.append(lf)
     if cache_stats is not None:
         callbacks.append(cache_stats)
+    if tool_log is not None:
+        callbacks.append(tool_log)
 
     config: dict[str, Any] = {}
     if callbacks:

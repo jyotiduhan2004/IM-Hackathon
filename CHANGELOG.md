@@ -53,6 +53,20 @@ Detailed incident postmortems live under `docs/incidents/`.
   (unit tests for slug validation + idempotent overwrite, plus an end-to-end
   `mkdocs build` on `tests/fixtures/drafts_fixture/` that asserts drafts
   stay out of the built site while normal pages are still published).
+- Per-tool-call structured logging: `ToolCallLogHandler`
+  (`src/compile/tool_call_log.py`) buffers `on_tool_start`/`on_tool_end`/
+  `on_tool_error` into `ToolCallRecord` rows (name, inputs, output preview,
+  latency, status); `compile_all.py` flushes to the new `compile_tool_calls`
+  Postgres table via `src/db/tool_call_log.py::insert_many` after each
+  batch, then appends `top_tools=name:count,…` into the `wiki/log.md` Notes
+  column via `summarize`. On DB failure, records fall back to
+  `docs/audits/tool_calls-<run_id>.jsonl` (repo-relative — base_dir param)
+  so telemetry isn't dropped silently. `flush_all()` also drains in-flight
+  tool calls on crash with `status='abandoned'` so the most-diagnostic
+  records survive. `run_id` is a UUID with FK to `compile_runs(run_id)`.
+  `BatchStatsCallback` only tracked aggregate tool-call *count* — this
+  surfaces per-tool latency + error rate so we can see which tool is slow
+  or flaky rather than guessing from the roll-up.
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to

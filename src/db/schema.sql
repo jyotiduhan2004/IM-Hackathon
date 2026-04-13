@@ -222,3 +222,33 @@ CREATE INDEX IF NOT EXISTS message_touched_pages_page_idx
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS compile_model TEXT;
+
+
+-- ---------------------------------------------------------------------------
+-- Per-tool-call telemetry (2026-04-13)
+--
+-- BatchStatsCallback only aggregates tool-call COUNT. This table records one
+-- row per tool invocation so we can answer "which tool is slowest / most
+-- error-prone / called most often" per run. Written from
+-- `src/compile/tool_call_log.py` after every batch; JSONL fallback under
+-- `docs/audits/` when the DB is unreachable.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS compile_tool_calls (
+  id serial PRIMARY KEY,
+  run_id text,
+  tool_name text NOT NULL,
+  inputs_json jsonb,
+  output_preview varchar(500),
+  output_bytes int,
+  latency_ms int,
+  status text CHECK (status IN ('ok', 'error')),
+  error_message text,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS compile_tool_calls_run_id_idx
+  ON compile_tool_calls(run_id);
+CREATE INDEX IF NOT EXISTS compile_tool_calls_tool_started_idx
+  ON compile_tool_calls(tool_name, started_at DESC);

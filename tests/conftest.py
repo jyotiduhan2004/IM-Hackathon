@@ -205,6 +205,25 @@ def _load_messages_ddl() -> str:
 
     CREATE INDEX message_touched_pages_page_idx
       ON {TEST_SCHEMA}.message_touched_pages (page_id, compiled_at DESC);
+
+    CREATE TABLE {TEST_SCHEMA}.compile_tool_calls (
+      id serial PRIMARY KEY,
+      run_id text,
+      tool_name text NOT NULL,
+      inputs_json jsonb,
+      output_preview varchar(500),
+      output_bytes int,
+      latency_ms int,
+      status text CHECK (status IN ('ok', 'error')),
+      error_message text,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz
+    );
+
+    CREATE INDEX compile_tool_calls_run_id_idx
+      ON {TEST_SCHEMA}.compile_tool_calls(run_id);
+    CREATE INDEX compile_tool_calls_tool_started_idx
+      ON {TEST_SCHEMA}.compile_tool_calls(tool_name, started_at DESC);
     """
 
 
@@ -256,6 +275,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     import src.db.messages as db_messages
     import src.db.participants as db_participants
     import src.db.threads as db_threads
+    import src.db.tool_call_log as db_tool_call_log
     import src.db.touched_pages as db_touched_pages
     import src.db.users as db_users
     import src.db.wiki_pages as db_wiki_pages
@@ -269,6 +289,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(db_cursors, "connect", _scoped_connect)
     monkeypatch.setattr(db_wiki_pages, "connect", _scoped_connect)
     monkeypatch.setattr(db_touched_pages, "connect", _scoped_connect)
+    monkeypatch.setattr(db_tool_call_log, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
         # message_participants + message_touched_pages → messages/users/
@@ -284,6 +305,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
         )
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_runs")
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.ingest_cursors")
+        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_tool_calls")
 
     yield
 

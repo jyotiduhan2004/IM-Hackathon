@@ -18,8 +18,10 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal
+from uuid import UUID
 
 import click
+import psycopg
 import structlog
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -31,12 +33,16 @@ from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
+from src.compile.tool_call_log import ToolCallLogHandler  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db.compile_runs import finish_run  # noqa: E402
 from src.db.compile_runs import start_run  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
+from src.db.tool_call_log import fallback_to_jsonl as tool_log_fallback_to_jsonl  # noqa: E402
+from src.db.tool_call_log import insert_many as tool_log_insert_many  # noqa: E402
+from src.db.tool_call_log import summarize as tool_log_summarize  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
@@ -141,6 +147,56 @@ _LOG_HEADER = (
 
 
 BatchOutcome = Literal["compiled", "failed", "partial"]
+
+
+def _format_top_tools(pairs: list[tuple[str, int]]) -> str:
+    """Render a `top_tools=name:count,…` suffix for the batch log, or ''."""
+    if not pairs:
+        return ""
+    return "top_tools=" + ",".join(f"{n}:{c}" for n, c in pairs)
+
+
+def _flush_tool_calls(run_id: UUID, tool_cb: ToolCallLogHandler) -> str:
+    """Persist buffered tool-call records for this batch and return a log suffix.
+
+    Writes to Postgres via `src.db.tool_call_log.insert_many`; on DB failure
+    falls back to `docs/audits/tool_calls-<run_id>.jsonl` so telemetry isn't
+    dropped silently. Returns a `top_tools=name:count,…` string for the
+    batch-log `Notes` column, or empty string if no calls were captured.
+
+    Uses `flush_all()` so in-flight tool calls (agent crashed mid-call) are
+    captured with `status='abandoned'` instead of silently dropped — those
+    are the most diagnostic records.
+    """
+    records: list[dict[str, Any]] = [dict(r) for r in tool_cb.flush_all()]
+    if not records:
+        return ""
+
+    try:
+        tool_log_insert_many(run_id, records)
+    except psycopg.Error as exc:
+        logger.warning(
+            "tool-call DB insert failed; falling back to JSONL",
+            run_id=run_id,
+            error=str(exc),
+        )
+        try:
+            tool_log_fallback_to_jsonl(run_id, records)
+        except OSError as fs_exc:
+            logger.warning("tool-call JSONL fallback failed", run_id=run_id, error=str(fs_exc))
+        # Without DB, we can't summarize across this run's prior batches —
+        # compute a local top-5 from the just-flushed records instead.
+        counts: dict[str, int] = {}
+        for r in records:
+            counts[r["tool_name"]] = counts.get(r["tool_name"], 0) + 1
+        return _format_top_tools(sorted(counts.items(), key=lambda kv: -kv[1])[:5])
+
+    try:
+        summary = tool_log_summarize(run_id)
+    except psycopg.Error as exc:
+        logger.warning("tool-call summarize failed", run_id=run_id, error=str(exc))
+        return ""
+    return _format_top_tools(summary.get("top_by_count") or [])
 
 
 def _append_batch_log(
@@ -259,9 +315,7 @@ def _mark_batch_compiled(
     return marked, not_cited, missing
 
 
-def _mark_batch_failed(
-    batch: list, error: str, compile_model: str | None = None
-) -> int:
+def _mark_batch_failed(batch: list, error: str, compile_model: str | None = None) -> int:
     """Mark every email in a crashed batch as failed. Returns marked count.
 
     Records the model that failed so per-model failure rates are
@@ -507,6 +561,7 @@ def main(
                 f"earliest={earliest}, model={batch_model}) ==="
             )
             cache_cb = BatchStatsCallback(model=batch_model)
+            tool_cb = ToolCallLogHandler()
             try:
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it
@@ -520,6 +575,7 @@ def main(
                         wiki_dir=wiki_dir,
                         recursion_limit=recursion_limit,
                         cache_stats=cache_cb,
+                        tool_log=tool_cb,
                     ),
                     timeout_s=batch_timeout,
                 )
@@ -542,12 +598,21 @@ def main(
                     f"tools/turn={cache['tools_per_turn']} "
                     f"total_tok={cache['total_tokens']}"
                 )
+                tool_suffix = _flush_tool_calls(run_id, tool_cb)
+                if tool_suffix:
+                    suffix_parts.append(tool_suffix)
                 suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
                 click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
                 log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
                 log_notes_parts = list(suffix_parts)
                 log_notes = "; ".join(log_notes_parts) if log_notes_parts else ""
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
+            except KeyboardInterrupt:
+                # Ctrl+C: flush any in-flight tool records before letting the
+                # outer handler mark the run 'killed'. Without this, every
+                # tool call since the last batch boundary is lost.
+                _flush_tool_calls(run_id, tool_cb)
+                raise
             except Exception as e:  # noqa: BLE001
                 # concurrent.futures.TimeoutError has an empty str(),
                 # so fall back to a synthesized message that names the
@@ -563,11 +628,18 @@ def main(
                     # repr(e) keeps the type name so the log row stays useful.
                     err_msg = str(e) or repr(e)
                 logger.error("batch compilation failed", batch_index=batch_idx, error=err_msg)
+                # Flush tool-call records BEFORE _mark_batch_failed so a secondary
+                # DB failure on the mark step doesn't swallow the primary telemetry.
+                # In-flight records get `status='abandoned'` via flush_all.
+                fail_notes = err_msg[:200]
+                tool_suffix = _flush_tool_calls(run_id, tool_cb)
+                if tool_suffix:
+                    fail_notes = f"{fail_notes}; {tool_suffix}"
                 failed_marked = _mark_batch_failed(batch, err_msg, compile_model=batch_model)
                 failed += failed_marked
                 click.echo(f"ERROR in batch ({failed_marked} marked failed): {err_msg}")
                 click.echo("Continuing with next batch...")
-                _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=err_msg[:200])
+                _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=fail_notes)
         run_status = "completed"
     except KeyboardInterrupt:
         run_status = "killed"
