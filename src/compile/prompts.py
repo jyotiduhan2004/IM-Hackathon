@@ -33,9 +33,15 @@ base by compiling raw emails into interlinked wiki pages.
    a. Read the raw file with `read_file`.
    b. Determine what topics/people/systems/policies it mentions.
    c. For each affected wiki page:
-      - Does it already exist (per step 1)? If yes: `read_file`, merge new info,
-        `write_file` the updated version.
-      - If not: `write_file` a new page in the correct subdirectory.
+      - **People (entities)**: ALWAYS call `create_entity(email, display_name)` —
+        do NOT invent the slug yourself, do NOT `write_file` a new entity page
+        directly. The tool returns the canonical slug; use it in wikilinks.
+        If `created: true`, enrich the stub the tool wrote with
+        `read_file` + `edit_file`. If `created: false`, merge new info into
+        the existing page with `read_file` + `edit_file`.
+      - **Topics / systems / policies / timelines / conflicts**: if a page
+        exists (per step 1), `read_file` + `edit_file` to merge; otherwise
+        `write_file` a new page in the correct subdirectory.
    d. Check for supersession: does this email explicitly override earlier
       guidance? If yes, mark OLD page `status: superseded`, add `superseded_by`,
       update/create NEW current page.
@@ -76,9 +82,14 @@ a "Current Policy" section, and a "History" table with dates + source links.
 
 - **topic** (`wiki/topics/{slug}.md`): A project, initiative, feature, or
   discussion theme. e.g., `dynamic-smart-rfq-form`, `ios-performance-fix`.
-- **entity** (`wiki/entities/{slug}.md`): A HUMAN PERSON ONLY. Filename is the
-  lowercase-hyphenated form of their name, e.g., `lucky-agarwal`. If you know
-  their email, include it in the body as `Email: first.last@domain.com`.
+- **entity** (`wiki/entities/{slug}.md`): A HUMAN PERSON ONLY. You MUST NOT
+  invent the slug — email is identity, display names collide. Call
+  `create_entity(email, display_name)` to get the canonical slug and (if
+  the page didn't exist) a pre-written stub. The slug will look like
+  `amit-indiamart-com` or `akash-singh6-indiamart-com` — use it in
+  wikilinks exactly as returned. Legacy pages with display-name slugs
+  (`amit-agarwal`, `ruchi-gupta`) still work; the tool finds them by
+  their `email:` frontmatter and returns their existing slug.
 - **system** (`wiki/systems/{slug}.md`): A product, platform, service, tool,
   URL, or mailing list. e.g., `buyermy`, `whatsapp`, `m-site`,
   `marketplace-launch-mailing-list`, `ai-intermesh-net`. Do NOT put these in
@@ -101,7 +112,9 @@ Wikilinks are lowercase-hyphenated (kebab-case). Examples:
 
 ✅ CORRECT:
 - `[[dynamic-smart-rfq-form]]` (links to `wiki/topics/dynamic-smart-rfq-form.md`)
-- `[[lucky-agarwal]]` (links to `wiki/entities/lucky-agarwal.md`)
+- `[[amit-indiamart-com]]` (entity slug returned by `create_entity`)
+- `[[lucky-agarwal]]` (legacy display-name slug, still valid — `create_entity`
+  found it via `email:` frontmatter and returned this slug)
 - `[[buyermy]]` (links to `wiki/systems/buyermy.md`)
 
 ❌ WRONG — NEVER do these:

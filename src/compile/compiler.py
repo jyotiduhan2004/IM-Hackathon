@@ -262,6 +262,41 @@ def append_to_log(entry: str, wiki_dir: str = "wiki") -> str:
     return f"logged: {entry}"
 
 
+@tool
+def create_entity(email: str, display_name: str = "") -> dict[str, Any]:
+    """Resolve or create an entity page by EMAIL. Call this INSTEAD of
+    inventing entity slugs yourself.
+
+    The returned `slug` is deterministic — identical email always gives
+    the identical slug. Use it in every `[[wikilink]]` that references
+    this person. Never hand-craft entity slugs.
+
+    - If an entity page already exists for this email (by canonical slug
+      OR by legacy display-name slug with `email:` frontmatter), the
+      existing slug is returned. `created: false`.
+    - If no page exists, a minimal stub page is written with
+      `title`, `page_type: entity`, `status: current`, `email:`, empty
+      `sources` and `related`. `created: true`. Enrich it with
+      `read_file` + `edit_file` afterward as you do today.
+
+    Args:
+        email: Required. The person's email address, e.g.
+            "amit@indiamart.com". Case-insensitive.
+        display_name: Optional. Used as the stub page title only when a
+            new page is created. Ignored for existing pages. Examples:
+            "Amit Jain", "Ruchi Gupta".
+
+    Returns:
+        On success: {"ok": True, "slug": "amit-indiamart-com",
+        "path": "wiki/entities/amit-indiamart-com.md",
+        "created": True|False, "email": "amit@indiamart.com"}.
+        On invalid email: {"ok": False, "error": "..."}.
+    """
+    from src.compile.entities import create_entity_page
+
+    return create_entity_page(email, display_name or None)
+
+
 # === Frontmatter helpers ===
 
 
@@ -368,6 +403,7 @@ def create_compiler(
         tools=[
             list_uncompiled_emails,
             list_wiki_pages,
+            create_entity,
         ],
         system_prompt=system_prompt,
         backend=backend,
