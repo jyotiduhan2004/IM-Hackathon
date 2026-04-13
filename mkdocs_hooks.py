@@ -143,6 +143,40 @@ def _render_external_badge(fm: dict) -> str:
     return '<span class="ext-badge" title="External contact (not @indiamart.com)">external</span>'
 
 
+# Three ref shapes we rewrite — each captures the filename in group 1. The
+# link pattern uses a `(?<!!)` lookbehind so it doesn't double-match the
+# markdown image form, which shares the `[…](…)` tail.
+_ATTACHMENT_REWRITES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"!\[[^\]]*\]\(raw/attachments/([^\s\")]+)\)"),  # ![alt](raw/attachments/x.png)
+    re.compile(r"(?<!!)\[[^\]]*\]\(raw/attachments/([^\s\")]+)\)"),  # [text](raw/attachments/x.pdf)
+    re.compile(  # <img src="raw/attachments/x.jpg" …>
+        r"""<img\b[^>]*\bsrc=["']raw/attachments/([^"']+)["'][^>]*/?>""",
+        flags=re.IGNORECASE,
+    ),
+)
+
+
+def _attachment_marker(match: re.Match[str]) -> str:
+    """Inline marker shown in place of an excluded attachment reference.
+
+    The viewer container excludes `raw/attachments/` (see `.dockerignore`)
+    so live wiki pages would render broken images / dead links without a
+    cue. We preserve the filename so curious readers know what was elided.
+    """
+    filename = match.group(1)
+    return (
+        f"> 📎 *attachment `{filename}` not published on the viewer* "
+        "([why?](https://github.com/indiamart-ai/email-knowledge-base/issues/46))"
+    )
+
+
+def _replace_attachment_refs(body: str) -> str:
+    """Swap every `raw/attachments/...` ref in `body` with a visible marker."""
+    for pattern in _ATTACHMENT_REWRITES:
+        body = pattern.sub(_attachment_marker, body)
+    return body
+
+
 def _page_metadata_banner(fm: dict) -> str:
     """Small metadata banner at the top of each page.
 
@@ -195,6 +229,11 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
 
     # Fix markdown rendering issues at the source
     body = _fix_list_gaps(body)
+
+    # Swap excluded `raw/attachments/...` refs for a visible marker — the
+    # viewer container ships without those binaries so a literal img/link
+    # would render as a broken icon with no explanation. See issue #46.
+    body = _replace_attachment_refs(body)
 
     # Inject an external-contact badge near the title when flagged.
     # Entity pages rely on MkDocs Material to auto-generate the h1 from

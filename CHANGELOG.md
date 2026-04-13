@@ -66,6 +66,14 @@ Detailed incident postmortems live under `docs/incidents/`.
   cooperative; `shutdown(wait=False)` only, no `cancel_futures=True`
   because the orphaned socket runs to completion regardless);
   documented in the helper's docstring as acceptable.
+- Visible marker for attachment images excluded from the viewer (issue #46):
+  `mkdocs_hooks.py::_replace_attachment_refs` rewrites every
+  `![](raw/attachments/…)`, `[text](raw/attachments/…)`, and
+  `<img src="raw/attachments/…">` ref into an inline `📎 attachment
+  foo.png not published on the viewer ([why?](…))` callout so readers
+  see a contextual placeholder instead of a broken-image icon on the
+  live site (which ships without `raw/attachments/` per
+  `.dockerignore` / `.gcloudignore`).
 - GCP Phase A viewer deploy scaffolding (PR #36): `Dockerfile` +
   `nginx.conf` (python:3.12-slim builder → nginx:alpine runtime);
   `.dockerignore` + `.gcloudignore` scoped so `mkdocs_hooks.py` can still
