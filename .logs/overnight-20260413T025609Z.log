@@ -1,0 +1,18 @@
+Found 6591 uncompiled emails total.
+Processing oldest 20 this run (chronological).
+Pre-compile snapshot: .snapshots/pre-compile-20260413T025613Z/wiki
+Compiling in batches of 8...
+Model: z-ai/glm-4.6
+Wiki dir: wiki
+Budget (pre-run): $16.4277 spent of $20.00 ($3.57 left) [82.14%] — key=poc-aa@indiamart.com
+
+Thread-grouped into 17 batches (avg 1.2 emails/batch)
+
+=== Batch 1/17 (1 emails, thread=198e0cf3d3dc, earliest=2026-01-02) ===
+[2m2026-04-13T02:56:13.912135Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:56:14.205382Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=198e0cf3d3dc7905, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 1/20
+
+=== Batch 2/17 (1 emails, thread=19b6eb14bcb6, earliest=2026-01-02) ===
+[2m2026-04-13T02:59:54.270347Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:59:54.286545Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b6eb14bcb68611, earliest='[0m [36mrecursion_limit[0m=[35m150[0m

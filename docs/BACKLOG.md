@@ -601,6 +601,27 @@ all should query this KB rather than re-deriving.
 
 ---
 
+## Compile stall detection
+
+Overnight run hit a stuck batch — compile_all stayed in "running
+compilation" for 28+ min with no TCP activity, no budget movement, no
+file writes. I killed it manually and the loop resumed.
+
+For unattended runs, the overnight script should:
+1. Timeout each compile_all invocation (e.g., 15 min max per batch of 20)
+2. When hung, kill and resume next iteration
+3. Log the stall as a data point in .logs/ so we can see frequency
+
+Implementation: `timeout 900 uv run python scripts/compile_all.py ...`
+in scripts/compile_overnight.sh. Or `gtimeout` via coreutils on macOS.
+
+Also: per-batch `asyncio.wait_for` inside compile_parallel (already
+queued in the Tier 2 plan from overnight-plan).
+
+**When**: before next multi-hour run.
+
+---
+
 ## Multiple mailing lists
 
 **The dedup story is already fine** — we key off `Message-ID` (global, set by
