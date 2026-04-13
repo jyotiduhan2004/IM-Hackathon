@@ -1,0 +1,43 @@
+Found 6600 uncompiled emails total.
+Processing oldest 20 this run (chronological).
+Pre-compile snapshot: .snapshots/pre-compile-20260413T022524Z/wiki
+Compiling in batches of 8...
+Model: z-ai/glm-4.6
+Wiki dir: wiki
+Budget (pre-run): $15.9941 spent of $20.00 ($4.01 left) [79.97%] — key=poc-aa@indiamart.com
+
+Thread-grouped into 14 batches (avg 1.4 emails/batch)
+
+=== Batch 1/14 (1 emails, thread=19b6fc410654, earliest=2026-01-02) ===
+[2m2026-04-13T02:25:24.890142Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:25:25.181452Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b6fc410654a93b, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 1/20
+
+=== Batch 2/14 (1 emails, thread=19b5042ad9c5, earliest=2026-01-02) ===
+[2m2026-04-13T02:26:39.381893Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:26:39.396070Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b5042ad9c5c720, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 2/20
+
+=== Batch 3/14 (1 emails, thread=19b78d989bb8, earliest=2026-01-02) ===
+[2m2026-04-13T02:28:48.967738Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:28:48.984476Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b78d989bb8b30d, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 3/20
+
+=== Batch 4/14 (4 emails, thread=19b7d659ce9b, earliest=2026-01-02) ===
+[2m2026-04-13T02:30:52.400141Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:30:52.417059Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 4 uncompiled raw emails from one thread (thread_id=19b7d659ce9b0073, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 7/20
+
+=== Batch 5/14 (1 emails, thread=198e0cf3d3dc, earliest=2026-01-02) ===
+[2m2026-04-13T02:35:18.322648Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:35:18.341637Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=198e0cf3d3dc7905, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 8/20
+
+=== Batch 6/14 (2 emails, thread=19b74046c8f6, earliest=2026-01-02) ===
+[2m2026-04-13T02:36:48.711540Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:36:48.730427Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 2 uncompiled raw emails from one thread (thread_id=19b74046c8f60167, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 10/20
+
+=== Batch 7/14 (1 emails, thread=19b6eb14bcb6, earliest=2026-01-02) ===
+[2m2026-04-13T02:42:32.447037Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T02:42:32.464077Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b6eb14bcb68611, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
