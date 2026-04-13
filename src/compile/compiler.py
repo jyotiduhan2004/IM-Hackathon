@@ -371,24 +371,51 @@ def get_langfuse_handler() -> Any | None:
     Langfuse v3+ removed the legacy `langfuse.callback` module. The handler
     now lives in `langfuse.langchain` and pulls credentials from the global
     Langfuse client (initialized via env vars or `Langfuse(...)`).
+
+    **Hang-safety**: the self-hosted server's OTLP ingestion endpoint
+    (`/api/public/otel/v1/traces`) has been observed to Read-timeout for
+    minutes at a time. Without bounded export timeouts, LangChain's
+    synchronous callback path can block compile runs for ~8+ minutes per
+    batch when the queue fills. We cap each export attempt at 2s via OTel
+    env vars so failures drain the queue quickly and tracing degrades to a
+    best-effort no-op instead of stalling the agent.
     """
     if not settings.langfuse_enabled:
         return None
     if not (settings.langfuse_public_key and settings.langfuse_secret_key):
         return None
+
+    # Bound OTel span-export timeouts BEFORE importing langfuse — the SDK
+    # wires its exporter at import time. `setdefault` lets operators
+    # override if they know their server is healthy.
+    import os as _os
+
+    _os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "2000")  # 2s per export
+    _os.environ.setdefault("OTEL_BSP_SCHEDULE_DELAY", "5000")  # flush every 5s
+    _os.environ.setdefault("OTEL_BSP_MAX_QUEUE_SIZE", "512")  # drop old on full
+    _os.environ.setdefault("OTEL_EXPORTER_OTLP_TIMEOUT", "2")  # seconds
+
     try:
         from langfuse import Langfuse
         from langfuse.langchain import CallbackHandler
+    except ImportError:
+        logger.warning("langfuse not installed, tracing disabled")
+        return None
 
+    try:
         Langfuse(
             public_key=settings.langfuse_public_key,
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
+            timeout=2,
+            flush_at=50,
+            flush_interval=5.0,
         )
-        return CallbackHandler()
-    except ImportError:
-        logger.warning("langfuse not installed, tracing disabled")
+    except (TypeError, ValueError) as exc:
+        logger.warning("langfuse init rejected args, tracing disabled", error=str(exc))
         return None
+
+    return CallbackHandler()
 
 
 def run_compilation(

@@ -45,3 +45,10 @@ Detailed incident postmortems live under `docs/incidents/`.
   doesn't emit, so the LangChain callback wouldn't instantiate.
   Smoke-tested end-to-end: a real LiteLLM call via the callback
   handler lands a trace in the `email-kb-wiki` project.
+- Langfuse span-export hang safeguard: `get_langfuse_handler()` now
+  sets OTel env vars (`OTEL_BSP_EXPORT_TIMEOUT=2000`, `OTEL_BSP_MAX_QUEUE_SIZE=512`,
+  `OTEL_EXPORTER_OTLP_TIMEOUT=2`) and passes `timeout=2`, `flush_at=50`,
+  `flush_interval=5.0` to the client. Caps each span-export attempt at
+  ~2s so a slow server degrades tracing to best-effort rather than
+  stalling `compile_all` for minutes (previously observed 8+ min hangs
+  when the server's `/api/public/otel/v1/traces` was slow).
