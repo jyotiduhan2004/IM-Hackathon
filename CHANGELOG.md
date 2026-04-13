@@ -14,6 +14,47 @@ Format: newest first. Group by session/date. Each entry has:
 
 ## 2026-04-13 — Phase 0 bootstrap + first compile iterations
 
+### Entity page bloat → compile stalls on hot threads
+
+**Issue**: Overnight iteration 5 and iteration 6 both hung at the same
+point — a single-email batch from a 10-email SonarQube thread that
+mentioned many core IndiaMART engineers. Each hang: no TCP activity, no
+budget movement, no file writes, but process alive. After ~28min I
+killed manually.
+
+**Root cause**: NOT the email length (~10KB), NOT the thread length
+(67KB total). The problem is **accumulated entity pages**. After
+hundreds of prior compiles, hot entities like Himanshu Jain (26KB),
+Bharat Agarwal (20KB), Neeraj Vardhan Ponnada (19KB), Sayan Samanta
+(17KB) have grown massive — mostly bloated `sources:` lists with 100+
+entries each.
+
+When the compiler agent processes a new email that touches 2-3 such
+entities, it reads each 20KB+ entity page into its context. Plus email,
+plus system prompt, plus accumulating tool call history. Effective
+context per LLM call can exceed 80-100k tokens. At that size, either
+the LiteLLM proxy times out silently or the model becomes pathologically
+slow.
+
+**Short-term fix**: skip-mark the hung thread's 10 emails so the loop
+moves on. We already have a canonical wiki page
+(`sonarqube-quality-profile-transformation.md`) covering that topic.
+
+**Long-term fix (BACKLOG)**:
+- Cap entity page size: compressed summary sections, don't append
+  forever. Maybe cap sources at most-recent N + link to git history for
+  full list.
+- Don't load full entity pages into agent context: expose
+  `summarize_entity(slug)` tool that returns ≤500 tokens instead of raw
+  read. Agent uses summary; full read only on demand.
+- Stall timeout in compile_overnight.sh: wrap compile_all in
+  `timeout 900` so stalls auto-terminate after 15min.
+
+Noted in docs/BACKLOG.md.
+
+---
+
+
 ### Frontmatter parser broke on `---` inside raw filenames
 
 **Issue**: After TPM bump, 3 wiki pages corrupted mid-compile: frontmatter

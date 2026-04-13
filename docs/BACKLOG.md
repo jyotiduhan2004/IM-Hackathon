@@ -622,6 +622,47 @@ queued in the Tier 2 plan from overnight-plan).
 
 ---
 
+## Entity page bloat + context management
+
+**Cause diagnosed**: hot entity pages accumulate 100+ sources and 20-26KB
+of body text. When compiler reads them to merge new info, context fills
+up, LLM call hangs silently.
+
+**Fixes (Phase 2)**:
+1. **Size cap on entity pages**: summary of role + recent 20 sources +
+   link to "older sources" list. No unbounded growth.
+2. **Summarize tool**: `summarize_entity(slug) → ≤500 tokens` so the
+   compiler never loads full bloated pages. Only `read_file` the full
+   page if the summary isn't sufficient.
+3. **Auto-compact pass**: scheduled job that walks entity pages, merges
+   overlapping sources, rewrites into canonical summary. Ideally
+   triggered by RLM / DSPy prompt optimization (see below).
+
+**RLM-based quality loop** (extending earlier BACKLOG entry):
+User asked: "later we should set up RLM or something to solve these
+kinds of issues" — meaning auto-detect and auto-fix recurring failure
+modes via reinforcement learning on compile trajectories.
+
+Concrete shape:
+- Log every compile as a trace (Langfuse or Arize Phoenix)
+- Label traces that stalled, hit recursion limit, created duplicates, or
+  produced broken wikilinks
+- Use DSPy COPRO/MIPRO to tune the system prompt against these negative
+  examples
+- Iterative loop: bad behavior → label → retrain prompt → redeploy
+- Cost: the eval compute (probably 10× a normal compile run once)
+- Payoff: each prompt iteration fixes a class of failure (e.g., never
+  again create `foo-new.md` when `foo.md` exists)
+
+Prereqs: persistent trace storage, golden eval set of ~30 hand-compiled
+reference pages, a metric (fidelity / dupe rate / broken-link rate /
+context usage).
+
+**When**: after Phase 3 chatbot — need real user feedback to label
+failures that aren't just structural.
+
+---
+
 ## Multiple mailing lists
 
 **The dedup story is already fine** — we key off `Message-ID` (global, set by
