@@ -11,3 +11,13 @@ Thread-grouped into 17 batches (avg 1.2 emails/batch)
 === Batch 1/17 (1 emails, thread=19b7f245e2ce, earliest=2026-01-03) ===
 [2m2026-04-13T03:17:25.878909Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
 [2m2026-04-13T03:17:26.145042Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b7f245e2ceba7a, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 1/20
+
+=== Batch 2/17 (1 emails, thread=19b0760c1618, earliest=2026-01-03) ===
+[2m2026-04-13T03:25:34.033149Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T03:25:34.047662Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b0760c16186328, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 2/20
+
+=== Batch 3/17 (3 emails, thread=19b59cdc863a, earliest=2026-01-03) ===
+[2m2026-04-13T03:32:07.159508Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T03:32:07.174548Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 3 uncompiled raw emails from one thread (thread_id=19b59cdc863ac109, earliest='[0m [36mrecursion_limit[0m=[35m150[0m

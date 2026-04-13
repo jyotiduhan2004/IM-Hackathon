@@ -24,3 +24,8 @@ Continuing with next batch...
 === Batch 3/17 (1 emails, thread=19b731f7978a, earliest=2026-01-03) ===
 [2m2026-04-13T03:14:45.527698Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
 [2m2026-04-13T03:14:45.541969Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b731f7978a7f7a, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+Batch complete. Progress: 2/20
+
+=== Batch 4/17 (1 emails, thread=19b7f245e2ce, earliest=2026-01-03) ===
+[2m2026-04-13T03:28:45.239065Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T03:28:45.253762Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b7f245e2ceba7a, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
