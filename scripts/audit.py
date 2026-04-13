@@ -15,6 +15,7 @@ from __future__ import annotations
 import random
 import re
 import sys
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
 from io import StringIO
@@ -123,7 +124,7 @@ def _section_orphans(buf: StringIO, pages: dict[str, list[Path]]) -> None:
 
 def _section_validator(buf: StringIO) -> None:
     """Reuse validate_wiki's checks; report counts + first 10 errors."""
-    from scripts import validate_wiki  # noqa: PLC0415
+    from scripts import validate_wiki
 
     errors, _warnings = validate_wiki.run(settings.wiki_dir)
     buf.write(f"## Validator: **{len(errors)}** error(s)\n\n")
@@ -141,6 +142,122 @@ def _section_validator(buf: StringIO) -> None:
     for e in errors[:10]:
         rel = _rel_to_repo(e.page)
         buf.write(f"- `{rel}`: {e.reason}\n")
+    buf.write("\n")
+
+
+def count_entity_shapes(
+    entities_dir: Path,
+    email_to_slug_fn: Callable[[str], str] | None,
+) -> dict[str, int]:
+    """Categorize every entity page by slug/frontmatter shape.
+
+    Three buckets, intended to track the email-canonical migration:
+    - email-canonical: stem matches `email_to_slug_fn(fm['email'])`
+    - legacy-displayname: has `email:` but stem doesn't match
+    - no-email-frontmatter: page has no `email:` field in frontmatter
+
+    If `email_to_slug_fn` is None (W0 not merged yet), the caller should
+    skip the section — we still return zero counts so tests can exercise
+    the tally shape.
+    """
+    counts = {"email-canonical": 0, "legacy-displayname": 0, "no-email-frontmatter": 0}
+    if not entities_dir.exists():
+        return counts
+    for md in sorted(entities_dir.glob("*.md")):
+        try:
+            fm = extract_frontmatter(md.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        fm_email = fm.get("email")
+        if not isinstance(fm_email, str) or not fm_email.strip():
+            counts["no-email-frontmatter"] += 1
+            continue
+        if email_to_slug_fn is None:
+            # Shouldn't reach here — caller gates on import — but keep safe.
+            counts["legacy-displayname"] += 1
+            continue
+        try:
+            expected = email_to_slug_fn(fm_email)
+        except (ValueError, TypeError):
+            counts["legacy-displayname"] += 1
+            continue
+        if md.stem == expected:
+            counts["email-canonical"] += 1
+        else:
+            counts["legacy-displayname"] += 1
+    return counts
+
+
+def _section_entity_shapes(buf: StringIO) -> None:
+    """Track entity-slug migration progress (email-canonical vs legacy)."""
+    buf.write("## Entities by slug shape\n\n")
+    try:
+        from src.compile.entities import email_to_slug
+    except ImportError:
+        buf.write(
+            "_Skipped: `src.compile.entities.email_to_slug` not importable — "
+            "W0 not merged yet._\n\n"
+        )
+        return
+    entities_dir = settings.wiki_dir / "entities"
+    counts = count_entity_shapes(entities_dir, email_to_slug)
+    buf.write("| Shape | Count |\n|---|---:|\n")
+    buf.writelines(
+        f"| {shape} | {counts[shape]} |\n"
+        for shape in ("email-canonical", "legacy-displayname", "no-email-frontmatter")
+    )
+    total = sum(counts.values())
+    canonical = counts["email-canonical"]
+    pct = (100 * canonical / total) if total else 0.0
+    buf.write(f"\nMigration progress: {canonical}/{total} ({pct:.1f}%).\n\n")
+
+
+def _section_compile_runs(buf: StringIO) -> None:
+    """Top 10 recent compile_runs rows — gracefully skip if table missing."""
+    buf.write("## Recent compile runs (top 10)\n\n")
+    import psycopg
+    from src.db import connect
+
+    try:
+        with connect() as conn:
+            gate = conn.execute(
+                "SELECT 1 FROM pg_tables WHERE tablename = 'compile_runs' LIMIT 1"
+            ).fetchone()
+            if not gate:
+                buf.write(
+                    "_Skipped: `compile_runs` table does not exist — "
+                    "W3 not merged yet._\n\n"
+                )
+                return
+            rows = conn.execute(
+                """
+                SELECT started_at, status, emails_processed, emails_failed,
+                       cost_cents, notes
+                FROM compile_runs
+                ORDER BY started_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+    except psycopg.Error as exc:
+        buf.write(f"_Skipped: database error querying compile_runs: {exc}_\n\n")
+        return
+    if not rows:
+        buf.write("_No compile_runs rows yet._\n\n")
+        return
+    buf.write("| Started | Status | Processed | Failed | Cost | Notes |\n")
+    buf.write("|---|---|---:|---:|---:|---|\n")
+    for r in rows:
+        started = r["started_at"]
+        started_s = started.strftime("%Y-%m-%d %H:%M") if started is not None else "-"
+        status = r["status"] or "-"
+        processed = r["emails_processed"] if r["emails_processed"] is not None else 0
+        failed = r["emails_failed"] if r["emails_failed"] is not None else 0
+        cents = r["cost_cents"]
+        cost_s = f"${cents / 100:.2f}" if cents is not None else "-"
+        notes = (r["notes"] or "").replace("\n", " ").replace("|", "\\|")
+        buf.write(
+            f"| {started_s} | {status} | {processed} | {failed} | {cost_s} | {notes} |\n"
+        )
     buf.write("\n")
 
 
@@ -192,6 +309,8 @@ def main(save: bool, quiet: bool, note: str) -> None:
     _section_pages(buf, pages)
     _section_orphans(buf, pages)
     _section_validator(buf)
+    _section_entity_shapes(buf)
+    _section_compile_runs(buf)
     _section_spot_check(buf, pages, n=5)
 
     report = buf.getvalue()
