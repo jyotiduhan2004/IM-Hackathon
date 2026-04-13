@@ -33,3 +33,9 @@ Detailed incident postmortems live under `docs/incidents/`.
   survived the shell's `Killed: 9` after gtimeout didn't propagate
   through `uv run`.
 - Removed unused `yaml` import in `scripts/backfill_stubs.py`.
+- `scripts/snapshot_wiki.py::reset-raw-compiled` replaced a broken
+  `content.split("---", 2)` frontmatter parse with
+  `src/utils.py::extract_frontmatter`. The old parser mangled any raw
+  file whose subject or body contained a literal `---` (e.g.
+  `Informational---Transforming SonarQube`). Codex flagged this in
+  `docs/reviews/codex-priority-review-20260413T090000Z.md`.

@@ -23,6 +23,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
+from src.utils import extract_body  # noqa: E402
+from src.utils import extract_frontmatter  # noqa: E402
+from src.utils import render_with_frontmatter  # noqa: E402
 
 SNAPSHOT_ROOT = REPO_ROOT / ".snapshots"
 
@@ -115,22 +118,19 @@ def clean(confirm: bool) -> None:
 @click.option("--confirm", is_flag=True, help="Actually reset; otherwise dry-run")
 def reset_raw_compiled(confirm: bool) -> None:
     """Reset compiled: true → false on all raw emails. Useful after clearing wiki."""
-    import yaml
-
     count = 0
     for p in settings.raw_dir.glob("*.md"):
-        content = p.read_text()
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+        content = p.read_text(encoding="utf-8")
+        fm = extract_frontmatter(content)
+        if not fm:
             continue
-        fm = yaml.safe_load(parts[1])
         if fm.get("compiled") is True:
             count += 1
             if confirm:
                 fm["compiled"] = False
                 fm.pop("compiled_at", None)
-                new_fm = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=120).rstrip()
-                p.write_text(f"---\n{new_fm}\n---\n{parts[2]}")
+                body = extract_body(content)
+                p.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
     if confirm:
         click.echo(f"Reset compiled flag on {count} raw emails.")
     else:
