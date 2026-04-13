@@ -20,6 +20,16 @@ Detailed incident postmortems live under `docs/incidents/`.
   the topic/entity ratio collapses. Complements `scripts/audit.py`'s
   prose report; this one is designed to be diff-able and
   release-gate-parseable.
+- `resolve_page` compiler tool + `src/db/wiki_pages.lookup_page` helper:
+  canonical slug/title/canonical-entity-email lookup against the
+  `wiki_pages` catalog. Replaces the agent's habit of grep/ls'ing the
+  `wiki/` filesystem to decide whether a page already exists, so the
+  compiler can consult the catalog before creating a new page and avoid
+  duplicate slugs. Resolution order is slug → case-insensitive title →
+  entity email; confidences are 1.0 / 0.9 / 1.0 respectively. Response
+  includes `status` so the agent can distinguish `current` from
+  `superseded`/`contested` pages. Registered alongside the existing
+  `list_wiki_pages` / `create_entity` tools in `create_compiler`.
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to

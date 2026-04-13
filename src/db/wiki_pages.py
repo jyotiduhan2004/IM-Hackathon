@@ -69,6 +69,88 @@ def find_by_slug(slug: str) -> dict[str, Any] | None:
         ).fetchone()
 
 
+def lookup_page(
+    *,
+    slug: str | None = None,
+    title: str | None = None,
+    canonical_user_email: str | None = None,
+) -> dict[str, Any] | None:
+    """Find a wiki page by slug, title, or canonical entity email.
+
+    Resolution order (first match wins):
+      1. Exact slug match → confidence 1.0.
+      2. Exact title match (case-insensitive) → confidence 0.9.
+      3. Exact email match on entity pages → confidence 1.0.
+      4. None if nothing matches.
+
+    Raises ValueError if no lookup key is supplied.
+
+    Returns:
+        Dict with keys {slug, title, page_type, path, status, confidence} or None.
+    """
+    if slug is None and title is None and canonical_user_email is None:
+        raise ValueError("lookup_page requires at least one of: slug, title, canonical_user_email")
+
+    def _stamp(row: Any, confidence: float) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        row["confidence"] = confidence
+        return row  # type: ignore[no-any-return]
+
+    with connect() as conn:
+        if slug is not None:
+            hit = _stamp(
+                conn.execute(
+                    """
+                    SELECT slug, title, page_type, path, status
+                      FROM wiki_pages
+                     WHERE slug = %s
+                    """,
+                    (slug,),
+                ).fetchone(),
+                1.0,
+            )
+            if hit is not None:
+                return hit
+
+        if title is not None:
+            hit = _stamp(
+                conn.execute(
+                    """
+                    SELECT slug, title, page_type, path, status
+                      FROM wiki_pages
+                     WHERE lower(title) = lower(%s)
+                     ORDER BY (status = 'current') DESC,
+                              last_compiled_at DESC NULLS LAST
+                     LIMIT 1
+                    """,
+                    (title,),
+                ).fetchone(),
+                0.9,
+            )
+            if hit is not None:
+                return hit
+
+        if canonical_user_email is not None:
+            hit = _stamp(
+                conn.execute(
+                    """
+                    SELECT slug, title, page_type, path, status
+                      FROM wiki_pages
+                     WHERE page_type = 'entity'
+                       AND canonical_user_email = %s
+                     LIMIT 1
+                    """,
+                    (canonical_user_email,),
+                ).fetchone(),
+                1.0,
+            )
+            if hit is not None:
+                return hit
+
+    return None
+
+
 def count_wiki_pages_by_type() -> dict[str, int]:
     """Distribution of wiki pages by page_type — used by backfill smoke check."""
     with connect() as conn:

@@ -223,9 +223,7 @@ def _compile_progress_block() -> list[str]:
             bar_width = round(20 * r["total"] / max_total) or 1
             compiled_width = round(20 * r["compiled"] / max_total)
             bar = "█" * compiled_width + "░" * (bar_width - compiled_width)
-            lines.append(
-                f"| {r['week']} | {r['total']} | {r['compiled']} | `{bar}` |"
-            )
+            lines.append(f"| {r['week']} | {r['total']} | {r['compiled']} | `{bar}` |")
         lines.append("")
 
     return lines
@@ -346,6 +344,67 @@ def append_to_log(entry: str, wiki_dir: str = "wiki") -> str:
         f.write(f"| {timestamp} | {entry} |\n")
 
     return f"logged: {entry}"
+
+
+@tool
+def resolve_page(
+    slug: str | None = None,
+    title: str | None = None,
+    canonical_user_email: str | None = None,
+) -> dict[str, Any]:
+    """Find the canonical wiki page for a slug, title, or entity email.
+
+    Use this BEFORE creating a new page — consults the `wiki_pages` catalog
+    so the agent stops duplicating pages by grepping the filesystem.
+
+    Args (at least one required):
+        slug: Try exact slug match first (confidence 1.0).
+        title: Case-insensitive exact title match (confidence 0.9).
+        canonical_user_email: Exact match on entity-page email (confidence 1.0).
+
+    Returns:
+        Dict with keys {exists, slug, title, page_type, path, status, confidence}.
+        `status` surfaces `current`/`superseded`/`contested` so the agent can
+        decide whether to create a replacement page.
+        When nothing matches, `exists` is False and the ID fields are None.
+        When called with no arguments, returns exists=False with an `error`
+        describing the missing input.
+    """
+    # deferred to avoid circular import at module load time
+    from src.db.wiki_pages import lookup_page
+
+    if slug is None and title is None and canonical_user_email is None:
+        return {
+            "exists": False,
+            "slug": None,
+            "title": None,
+            "page_type": None,
+            "path": None,
+            "status": None,
+            "confidence": 0.0,
+            "error": "provide at least one of: slug, title, canonical_user_email",
+        }
+
+    row = lookup_page(slug=slug, title=title, canonical_user_email=canonical_user_email)
+    if row is None:
+        return {
+            "exists": False,
+            "slug": None,
+            "title": None,
+            "page_type": None,
+            "path": None,
+            "status": None,
+            "confidence": 0.0,
+        }
+    return {
+        "exists": True,
+        "slug": row["slug"],
+        "title": row["title"],
+        "page_type": row["page_type"],
+        "path": row["path"],
+        "status": row["status"],
+        "confidence": float(row["confidence"]),
+    }
 
 
 @tool
@@ -489,6 +548,7 @@ def create_compiler(
         tools=[
             list_uncompiled_emails,
             list_wiki_pages,
+            resolve_page,
             create_entity,
         ],
         system_prompt=system_prompt,
