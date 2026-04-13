@@ -62,3 +62,9 @@ coverage.xml
 
 # MkDocs build
 site/
+
+# Compile run logs
+logs/
+
+# Claude Code local settings / worktrees
+.claude/

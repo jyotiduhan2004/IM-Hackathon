@@ -5,6 +5,47 @@ them up.
 
 ---
 
+## Langfuse callback stalls compile when proxy is slow (2026-04-13)
+
+**Symptom**: `compile_all.py` hangs after the first "running compilation"
+log line, no further output for 8+ minutes. Log shows:
+`Failed to export span batch code: None, reason: HTTPSConnectionPool(host='langfuse.intermesh.net', port=443): Read timed out.`
+Killing the process and re-running with `LANGFUSE_ENABLED=false` lets the
+exact same batch finish in ~30s per email.
+
+**Root cause hypothesis**: the langchain `CallbackHandler` from langfuse
+v3 emits per-step events to a Langfuse client whose default flush
+interval (0.5s) and httpx timeout (5s) compound when the langfuse proxy
+is slow. Each agent tool call blocks waiting on a span flush.
+
+**Workaround in use**: `LANGFUSE_ENABLED=false` for compile runs.
+**Real fix**: in `src/compile/compiler.py:get_langfuse_handler`, pass
+`flush_at=100` and a short `httpx_client` timeout (~2s) to `Langfuse(...)`
+so flushes batch and fail fast. Confirm against
+https://langfuse.com/docs/sdk/python/sdk-v3 once we have time.
+
+---
+
+## Entity pages compile to stubs (2026-04-13)
+
+**Observation** (audit `docs/audits/audit-20260413T081547Z.md`): 72% of
+entity pages are <500B (221/307). Compare topic pages: 0 stubs, avg 2.7KB.
+Spot-checks (`csd-tester.md` at 124B with 1 source; `ruchi-gupta.md` at
+152B with 10 sources) show the agent extracts an `Email:` line and a
+`Related` list but no role context.
+
+**Why it matters**: Codex's priority review flagged "team-ready browse"
+as a non-goal for week 1 partially because of this. A 152B Ruchi Gupta
+page is a hyperlink target, not knowledge.
+
+**Probable fix surface**: prompt instruction. The agent is told to
+create entity pages but not to enrich them on subsequent mentions. Add
+a "for each entity touched, append a one-line role-in-this-thread note
+to their page" rule in `src/compile/prompts.py`. Run a small batch and
+re-audit. Trade-off: longer agent steps per email = higher cost.
+
+---
+
 ## QMD (Tobi Lütke) — local semantic search for the wiki (2026-04-13)
 
 https://github.com/tobi/qmd — TypeScript CLI, local-first, three-stage
