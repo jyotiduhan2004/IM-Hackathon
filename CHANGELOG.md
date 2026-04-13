@@ -11,6 +11,15 @@ Detailed incident postmortems live under `docs/incidents/`.
 ## [Unreleased] — 2026-04-13
 
 ### Added
+- `scripts/wiki_quality_metrics.py`: CI-friendly structured wiki
+  quality metrics for release gates (Phase 1 plan Workstream 6).
+  Emits a single-line summary plus JSON with page counts by type,
+  stub counts, topic-to-entity ratio, orphan count, pages reachable
+  only from `index.md`, and avg body size by type. Gates on
+  `--min-topic-ratio` (default `0.3`) so CI can fail the build when
+  the topic/entity ratio collapses. Complements `scripts/audit.py`'s
+  prose report; this one is designed to be diff-able and
+  release-gate-parseable.
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to
