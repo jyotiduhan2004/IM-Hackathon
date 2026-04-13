@@ -369,50 +369,53 @@ def get_langfuse_handler() -> Any | None:
     """Return a Langfuse callback handler if configured, else None.
 
     Langfuse v3+ removed the legacy `langfuse.callback` module. The handler
-    now lives in `langfuse.langchain` and pulls credentials from the global
-    Langfuse client (initialized via env vars or `Langfuse(...)`).
+    now lives in `langfuse.langchain` and instantiates its own internal
+    Langfuse client — it does NOT take a `langfuse_client` arg (verified
+    against 3.14.6). That means a `Langfuse(...)` constructor call we make
+    here is discarded by the time `CallbackHandler()` runs. So we configure
+    everything via env vars instead, which both the OTel pipeline and the
+    Langfuse client read at instantiation time.
 
     **Hang-safety**: the self-hosted server's OTLP ingestion endpoint
     (`/api/public/otel/v1/traces`) has been observed to Read-timeout for
     minutes at a time. Without bounded export timeouts, LangChain's
     synchronous callback path can block compile runs for ~8+ minutes per
-    batch when the queue fills. We cap each export attempt at 2s via OTel
-    env vars so failures drain the queue quickly and tracing degrades to a
-    best-effort no-op instead of stalling the agent.
+    batch when the queue fills. Capping per-export attempts via env vars
+    drains failures fast so tracing degrades to best-effort no-op instead
+    of stalling the agent. See issue #17 for the server-side root cause.
     """
     if not settings.langfuse_enabled:
         return None
     if not (settings.langfuse_public_key and settings.langfuse_secret_key):
         return None
 
-    # Bound OTel span-export timeouts BEFORE importing langfuse — the SDK
-    # wires its exporter at import time. `setdefault` lets operators
-    # override if they know their server is healthy.
+    # Set timeouts via env vars so they apply to BOTH the OTel exporter
+    # (used by CallbackHandler internally) AND the Langfuse client
+    # singletons. `setdefault` lets operators override when the server
+    # is known-healthy.
     import os as _os
 
-    _os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "2000")  # 2s per export
-    _os.environ.setdefault("OTEL_BSP_SCHEDULE_DELAY", "5000")  # flush every 5s
-    _os.environ.setdefault("OTEL_BSP_MAX_QUEUE_SIZE", "512")  # drop old on full
-    _os.environ.setdefault("OTEL_EXPORTER_OTLP_TIMEOUT", "2")  # seconds
+    # OTel BatchSpanProcessor + OTLP exporter (the actual span shipping)
+    _os.environ.setdefault("OTEL_BSP_EXPORT_TIMEOUT", "2000")  # ms per export
+    _os.environ.setdefault("OTEL_BSP_SCHEDULE_DELAY", "5000")  # ms between flushes
+    _os.environ.setdefault("OTEL_BSP_MAX_QUEUE_SIZE", "512")  # drop oldest on full
+    # NB: opentelemetry-sdk Python parses OTEL_EXPORTER_OTLP_TIMEOUT as
+    # SECONDS despite the OTel spec defining it in ms. Don't normalize to
+    # 2000 to "fix the units" — that would give a 2s timeout, not 2 ms.
+    _os.environ.setdefault("OTEL_EXPORTER_OTLP_TIMEOUT", "2")
+
+    # Langfuse client config — picked up by CallbackHandler's internal client.
+    _os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key)
+    _os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
+    _os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
+    _os.environ.setdefault("LANGFUSE_TIMEOUT", "2")  # seconds for the SDK's HTTP client
+    _os.environ.setdefault("LANGFUSE_FLUSH_AT", "50")  # batch size before forced flush
+    _os.environ.setdefault("LANGFUSE_FLUSH_INTERVAL", "5")  # seconds between flushes
 
     try:
-        from langfuse import Langfuse
         from langfuse.langchain import CallbackHandler
     except ImportError:
         logger.warning("langfuse not installed, tracing disabled")
-        return None
-
-    try:
-        Langfuse(
-            public_key=settings.langfuse_public_key,
-            secret_key=settings.langfuse_secret_key,
-            host=settings.langfuse_host,
-            timeout=2,
-            flush_at=50,
-            flush_interval=5.0,
-        )
-    except (TypeError, ValueError) as exc:
-        logger.warning("langfuse init rejected args, tracing disabled", error=str(exc))
         return None
 
     return CallbackHandler()
