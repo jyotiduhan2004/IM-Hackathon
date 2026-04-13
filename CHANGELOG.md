@@ -76,6 +76,15 @@ Detailed incident postmortems live under `docs/incidents/`.
 - `docs/incidents/` directory holding postmortems (carved out of CHANGELOG).
 
 ### Changed
+- Wiki `## Sources` block is now wrapped in a collapsed `<details markdown="1">`
+  so evidence stays on the page without scrolling past the synthesized prose
+  (`mkdocs_hooks.py`). Entity pages with more than 20 sources render only the
+  10 newest (tail of the chronologically-ordered list) plus a
+  `+N older sources not shown` hint, so high-volume contacts no longer drown
+  the main content. Topic pages are not capped — entities are the only
+  sources-heavy pages observed in audits. Covered by
+  `tests/test_mkdocs_sources_rendering.py` with fixtures under
+  `tests/fixtures/sources_fixture/wiki/`.
 - Default `LLM_MODEL` reverted `z-ai/glm-5.1` → `z-ai/glm-4.6`. glm-5.1
   does NOT cache prompts through OpenRouter on this proxy (zero cached
   tokens across 5 sequential identical-prompt calls), while glm-4.6 caches

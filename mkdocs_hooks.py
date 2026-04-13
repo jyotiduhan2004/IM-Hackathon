@@ -111,7 +111,8 @@ def _fix_list_gaps(body: str) -> str:
             and list_start.match(line)
             and lines[i - 1].strip() != ""
             and not list_start.match(lines[i - 1])
-            and lines[i - 1].strip().endswith((":", ",", ";")) is not False  # odd condition kept for clarity; see below
+            and lines[i - 1].strip().endswith((":", ",", ";"))
+            is not False  # odd condition kept for clarity; see below
         ):
             pass  # unreachable branch — see simpler version below
         out.append(line)
@@ -139,10 +140,7 @@ def _render_external_badge(fm: dict) -> str:
     """
     if not fm.get("is_external"):
         return ""
-    return (
-        '<span class="ext-badge" '
-        'title="External contact (not @indiamart.com)">external</span>'
-    )
+    return '<span class="ext-badge" title="External contact (not @indiamart.com)">external</span>'
 
 
 def _page_metadata_banner(fm: dict) -> str:
@@ -250,8 +248,27 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         if m:
             page_email = m.group(1)
 
-    blocks = ["", "---", "", "## Sources", ""]
-    for src in sources:
+    # Cap entity pages with many sources — show newest 10 inside the
+    # collapsed Sources block. Sources are stored chronologically
+    # oldest-first, so newest = tail.
+    is_entity = fm.get("page_type") == "entity"
+    show_recent = 10
+    cap_at = 20
+    sources_to_render = sources
+    older_count = 0
+    if is_entity and len(sources) > cap_at:
+        sources_to_render = sources[-show_recent:]
+        older_count = len(sources) - show_recent
+
+    blocks = [
+        "",
+        "---",
+        "",
+        '<details markdown="1">',
+        f"<summary>📚 Sources ({len(sources)})</summary>",
+        "",
+    ]
+    for src in sources_to_render:
         if not isinstance(src, str):
             continue
         rendered = _render_raw_source(REPO_ROOT / src, page_email)
@@ -260,5 +277,12 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
             blocks.append("")
         else:
             blocks.append(f"- `{src}` *(file missing)*")
+
+    if older_count:
+        blocks.append("")
+        blocks.append(f"> *+{older_count} older sources not shown — expand above to see all.*")
+
+    blocks.append("")
+    blocks.append("</details>")
 
     return body.rstrip() + "\n" + "\n".join(blocks) + "\n"
