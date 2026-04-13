@@ -308,6 +308,16 @@ def _group_by_thread(
     help="Override LLM model (default from .env LLM_MODEL)",
 )
 @click.option(
+    "--model-pool",
+    default=None,
+    help=(
+        "Comma-separated model IDs. If set, picks one at random per batch "
+        "(sticky for that batch) so per-batch cache stats compare models. "
+        "Overrides --model. Example: "
+        "'z-ai/glm-4.6,minimax/minimax-m2.7'"
+    ),
+)
+@click.option(
     "--recursion-limit",
     type=int,
     default=150,
@@ -321,9 +331,11 @@ def main(
     limit: int | None,
     dry_run: bool,
     model: str | None,
+    model_pool: str | None,
     recursion_limit: int,
 ) -> None:
     """Compile uncompiled raw emails into wiki pages using Deep Agents."""
+    import random
     import time
 
     # Capture the run start before any wiki work so we can stamp every page
@@ -333,6 +345,14 @@ def main(
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
     resolved_model = model or settings.llm_model
+
+    # Parse --model-pool. Empty list = no pool, use resolved_model for every
+    # batch. Non-empty list = sample one at random per batch.
+    pool: list[str] = (
+        [m.strip() for m in model_pool.split(",") if m.strip()] if model_pool else []
+    )
+    if pool:
+        click.echo(f"Model pool: {pool} (random pick per batch)")
 
     # Use the tool directly for listing, not through the agent
     all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
@@ -436,15 +456,17 @@ def main(
                 f"Files to compile:\n{batch_files}"
             )
 
+            batch_model = random.choice(pool) if pool else resolved_model
             click.echo(
                 f"\n=== Batch {batch_idx}/{len(groups)} "
-                f"({len(batch)} emails, thread={thread_id[:12]}, earliest={earliest}) ==="
+                f"({len(batch)} emails, thread={thread_id[:12]}, "
+                f"earliest={earliest}, model={batch_model}) ==="
             )
-            cache_cb = CacheStatsCallback()
+            cache_cb = CacheStatsCallback(model=batch_model)
             try:
                 run_compilation(
                     instruction=instruction,
-                    model_name=model,
+                    model_name=batch_model,
                     raw_dir=raw_dir,
                     wiki_dir=wiki_dir,
                     recursion_limit=recursion_limit,
@@ -461,8 +483,11 @@ def main(
                     suffix_parts.append(f"{missing} missing from catalog")
                 cache = cache_cb.snapshot()
                 suffix_parts.append(
-                    f"cache: {cache['cached_tokens']}/{cache['prompt_tokens']} "
-                    f"({cache['cache_pct']}%) across {cache['turns']} turns"
+                    f"model={cache['model']} cache={cache['cached_tokens']}/"
+                    f"{cache['prompt_tokens']} ({cache['cache_pct']}%) "
+                    f"turns={cache['turns']} tools={cache['tool_calls']} "
+                    f"tools/turn={cache['tools_per_turn']} "
+                    f"total_tok={cache['total_tokens']}"
                 )
                 suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
                 click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")

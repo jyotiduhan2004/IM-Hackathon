@@ -22,10 +22,18 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 
 class CacheStatsCallback(BaseCallbackHandler):
-    """Accumulate token usage across every LLM call in one agent run."""
+    """Accumulate per-batch model + token usage stats.
 
-    def __init__(self) -> None:
+    Tracks every LLM turn (prompt / cached / completion tokens) and every
+    tool call. Snapshot includes derived metrics (cache hit %, avg tool
+    calls per turn) suitable for logging into wiki/log.md and aggregating
+    across batches in dipstick / stats.
+    """
+
+    def __init__(self, model: str = "") -> None:
+        self.model = model
         self.turns = 0
+        self.tool_calls = 0
         self.prompt_tokens = 0
         self.cached_tokens = 0
         self.completion_tokens = 0
@@ -45,12 +53,21 @@ class CacheStatsCallback(BaseCallbackHandler):
                 details = u.get("input_token_details") or {}
                 self.cached_tokens += int(details.get("cache_read") or 0)
 
+    def on_tool_start(self, *_args: Any, **_kwargs: Any) -> None:
+        self.tool_calls += 1
+
     def snapshot(self) -> dict[str, Any]:
         pct = (self.cached_tokens / self.prompt_tokens * 100.0) if self.prompt_tokens else 0.0
+        tools_per_turn = (self.tool_calls / self.turns) if self.turns else 0.0
+        total_tokens = self.prompt_tokens + self.completion_tokens
         return {
+            "model": self.model,
             "turns": self.turns,
+            "tool_calls": self.tool_calls,
+            "tools_per_turn": round(tools_per_turn, 2),
             "prompt_tokens": self.prompt_tokens,
             "cached_tokens": self.cached_tokens,
             "completion_tokens": self.completion_tokens,
+            "total_tokens": total_tokens,
             "cache_pct": round(pct, 1),
         }
