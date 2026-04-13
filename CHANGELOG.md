@@ -1,14 +1,72 @@
 # Changelog
 
-Living record of issues encountered and how we fixed them. Each entry should
-be concrete enough that a future developer (or LLM) can understand *why* the
-code looks the way it does.
+All notable changes to this project. Format loosely based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/): dates YYYY-MM-DD,
+newest first, grouped under `Added`/`Changed`/`Fixed`/`Removed`/`Docs`.
 
-Format: newest first. Group by session/date. Each entry has:
-- **Issue**: what broke or hurt
-- **Root cause**: why
-- **Fix**: what we changed
-- **Commit**: sha (or "manual" for non-code fixes)
+Where the *why* is non-obvious (incident postmortems, root-cause analyses,
+specific bugs the code was written to avoid), we keep a detailed entry
+below the summary — see the **Historical incidents** section.
+
+---
+
+## [Unreleased] — 2026-04-13
+
+### Added
+- Audit framework: 5 parallel background agents (newbie, PM, IA, factcheck,
+  journalist personas) produce independent reports at
+  `docs/reviews/audit-persona-*-20260413T040000Z.md`; synthesis at
+  `audit-synthesis-20260413T040000Z.md` (commit `246bd7a`).
+- Sources rendering shows where the entity appears (From ✍️, To 📬, CC 📋,
+  body 💬) in `mkdocs_hooks.py::_render_raw_source` (commit `79fda4e`).
+- 15-min per-batch timeout wrapper in `scripts/compile_overnight.sh` to kill
+  silent LLM stalls (commit `9794efd`).
+- GitHub issue #8: full knowledge-vs-index separation plan (SQLite catalog),
+  with phased migration and feature-flag rollout.
+- `docs/reviews/knowledge-vs-index-20260413T032000Z.md` — architectural plan
+  for separating distilled knowledge (markdown) from email provenance
+  (SQLite catalog).
+- `docs/reviews/edit-tool-research-20260413T031839Z.md` — diagnosis of why
+  edit_file rewrites large payloads.
+- `docs/reviews/deepagents-learnings-20260413T050000Z.md` — deepagents
+  library audit with concrete middleware patterns we should adopt.
+- BACKLOG entries: inline-citation proposal, Anthropic engineering reading
+  list, QMD (Tobi Lütke) evaluation as local semantic search layer.
+
+### Changed
+- Suffix-dupe regex widened previously to include `-temp`/`-draft`/`-rev`;
+  still misses `-clean`, numeric (`\d+$`), and US/UK spelling variants —
+  tracked for widening in GitHub issues.
+
+### Fixed
+- Bharat Agarwal / Sumit Gore confusion in rendered Sources — annotated
+  each source with the page-owner's role on that email (commit `79fda4e`).
+- Zombie `compile_all` processes from prior timeouts that ignored SIGKILL
+  through `uv run`: cleaned up manually; root-cause kill not yet shipped.
+- `scripts/backfill_stubs.py` unused `yaml` import (commit `9130e9d`).
+
+### Known issues (not fixed yet — see GitHub issues)
+- 64% of wiki pages are stubs (<100 words body). Compiler auto-creates
+  stubs on unresolved `[[wikilinks]]`, hiding broken links.
+- 11 near-duplicate page pairs (`-clean` family, numeric suffixes,
+  US/UK spelling, cross-category collisions).
+- 5 humans in `systems/`, 4 products/teams in `entities/`.
+- `samarth` exists in both `entities/` AND `systems/` → ambiguous wikilink.
+- `topics/sonarqube-quality-profile-transformation.md` has duplicate
+  `last_compiled:` keys — validator doesn't catch it.
+- Hallucinated quote attribution (`vikram-varshney.md` attributes words
+  not present in any raw source).
+- Source coverage gaps: `whatsapp9696-agentic-buyer-chatbot` cites 2 raws;
+  raw/ has 30 on that thread.
+- No glossary for domain acronyms (PNS/ISQ/CSL/MCAT/BMC/HRS).
+- `conflicts/`, `policies/`, `timelines/` advertised but empty.
+
+---
+
+## Historical incidents — detailed postmortems
+
+Entries below document specific bugs and the reasoning that shaped the
+current code.
 
 ---
 
