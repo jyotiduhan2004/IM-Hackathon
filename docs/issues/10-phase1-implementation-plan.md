@@ -536,6 +536,10 @@ Reduce LLM guesswork and stop failure-recovery behavior from creating visible wi
 - `wiki_compact_entity_sources`
 - `log_insight`
 
+Operator-facing tools such as `get_compile_health` and `get_recent_runs`
+should not live in the main compile agent tool belt. They belong in
+ops/audit workflows, scripts, or skills.
+
 ### Preferred tool shapes
 
 Tool shapes should be:
@@ -1148,6 +1152,14 @@ improve the system deliberately.
 - track which tools are actually used for page resolution, quote verification, and source narrowing
 - expose a simple operational report for the last N compile runs
 
+Preferred storage target:
+
+- Langfuse when tracing is enabled
+- local JSONL fallback when `LANGFUSE_ENABLED=false`
+
+This keeps the first version simple while avoiding a hard dependency on a flaky
+remote tracing path.
+
 ### Acceptance criteria
 
 - operators can see which tools are being used and how often
@@ -1194,6 +1206,9 @@ This plan should absorb those changes where they land rather than re-propose the
 - similar-page detection
 - canonical page resolution
 - alias / redirect support
+- start by shimming existing tools (`create_entity`, `list_uncompiled_emails`,
+  `list_wiki_pages`) behind the new outcome-focused entry points, then deprecate
+  the old names once prompts and workflows stop depending on them
 
 #### PR 5 — Entity-page de-noising
 
@@ -1238,6 +1253,12 @@ flowchart LR
     G --> H["Recompile + publish"]
 ```
 
+Workstream 7 does not depend on AgentMiddleware landing first.
+
+- If AgentMiddleware lands early, use `wrap_tool_call` for cleaner interception.
+- If not, ship the first observability slice with callback handlers and the
+  `log_insight` tool, then migrate later.
+
 ### Recommended ownership split
 
 - Viewer / IA: MkDocs config, hooks, landing pages
@@ -1277,6 +1298,9 @@ The agent should use it for:
 - initial orientation
 - finding canonical pages and clusters
 - avoiding duplicate page creation
+
+Wikilinks remain the intra-page relationship layer. Hierarchy is for browsing;
+tags/facets are for filtering and alternate cuts.
 
 #### `log.md`
 
