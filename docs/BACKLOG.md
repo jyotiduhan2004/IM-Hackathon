@@ -5,6 +5,62 @@ them up.
 
 ---
 
+## Design principle: coordinators verify, LLMs propose (2026-04-13)
+
+**Rule**: every LLM-claimed state transition must be backed by an
+independent external-evidence check. The evidence has to show the agent
+did the WORK, not just that it called the tool or set a flag.
+
+**Why it exists**: we discovered this the hard way today. Over three
+separate incidents in one compile session:
+
+1. `mark_as_compiled` — agent called it on 9/28 batch emails, forgot on
+   19/28. Script reported "28/30 processed", DB disagreed. Coordinator
+   now flips state based on wiki-citation check, not agent tool calls.
+2. Entity slug generation — agent invented `vishakha-indiamart`,
+   `arjun-gaur-clean`, `akash-singh6` when it struggled with display
+   names. Deterministic `email_to_slug` in `src/compile/entities.py`
+   replaced LLM judgment.
+3. Reconcile-by-citation — a naïve "email is cited somewhere in wiki"
+   rule would have falsely flipped 715 of 748 candidates. The agent
+   had name-dropped them into entity `sources:` lists but never wrote
+   topic pages. Strict rule: citation in a CONTENT page (topic, system,
+   policy, timeline, conflict) is required. Entity-only citation gets
+   left pending so the next compile batch re-claims the email —
+   self-healing loop.
+
+**Two patterns to apply going forward**:
+
+- **Passive self-healing**: when the coordinator detects failed
+  verification (e.g., email cited only in entity), leave the state
+  pending so the queue re-claims it. The LLM gets another shot.
+- **Active self-correction (unbuilt)**: after each batch, inspect what
+  the LLM claimed vs. the evidence. If mismatched, inject a
+  system-reminder-style message into the next turn: *"You touched
+  these 3 emails but no topic page cites 2 of them. Go back and
+  finalize them before returning."* This is the Claude-Code-style
+  step-count-reminder pattern from the separate agent-scaffolding
+  investigation backlog entry.
+
+**Rule of thumb for reviewers**: whenever you see a tool that writes
+state the coordinator could compute itself, ask "why isn't the
+coordinator doing this?" If the answer is "because the agent is the
+one with the context," verify the agent's claim externally before
+trusting it.
+
+**Examples already shipped this session**:
+- `src/db/messages.py::find_by_raw_path` + coordinator-owned
+  `finish_message_compile` in `scripts/compile_all.py`
+- `src/compile/entities.py::email_to_slug` (pure function)
+- `scripts/compile_all.py::_collect_cited_raw_paths` (citation check)
+- `scripts/compile_all.py::_stamp_recently_modified_pages` (mtime-based)
+- `scripts/compile_all.py::_append_batch_log` (structured, not
+  LLM-prose)
+- `scripts/reconcile_compile_state.py` with strict-mode default (only
+  content-page citations count as evidence)
+
+---
+
 ## Per-batch random model A/B with stats tracking (2026-04-13)
 
 **Why**: `z-ai/glm-4.6` is the current default, but the proxy exposes several

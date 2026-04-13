@@ -7,11 +7,27 @@ actually transitioned to `compile_state='compiled'` in Postgres on
 run 20260413T092936Z). Those emails had their wiki content written
 but the queue never flipped.
 
-This script forensically reconciles state. For every pending message,
-if ANY wiki page's frontmatter `sources:` list contains the message's
-`raw_path`, we treat the message as actually compiled and flip it.
-The wiki is the durable evidence that the work was done; the `sources`
-list is the canonical provenance surface.
+This script forensically reconciles state by checking wiki evidence.
+
+**The citation-type trap (learned the hard way).** A first attempt
+flipped every pending message whose `raw_path` appeared in ANY wiki
+page's `sources:` list. That would have falsely marked 715 of 748
+matches as compiled. Why? The LLM frequently name-drops a raw email
+in an entity's `sources:` (because the email mentioned someone) but
+never writes a topic page extracting the email's actual content.
+Entity-only citation is "the person was tagged," NOT "the content was
+extracted."
+
+**Strict rule (default)**: flip only messages cited in a content-type
+page — topic, system, policy, timeline, or conflict. Entity pages
+don't count. That's the only signal that the agent actually wrote
+something about what the email said.
+
+Messages cited only in entity pages are LEFT PENDING on purpose — so
+the next compile batch re-claims them and the LLM gets another shot
+at writing a proper topic page. That's a self-healing feedback loop:
+coordinator catches the partial-processing case, LLM gets to finish
+the job.
 
 Safe to re-run. Idempotent. Prints what it would change under
 `--dry-run`.
@@ -19,6 +35,7 @@ Safe to re-run. Idempotent. Prints what it would change under
 Usage:
     uv run python scripts/reconcile_compile_state.py --dry-run
     uv run python scripts/reconcile_compile_state.py
+    uv run python scripts/reconcile_compile_state.py --include-entity-only  # diagnostics
 """
 
 from __future__ import annotations
@@ -36,17 +53,21 @@ from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 
-CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
+CONTENT_CATEGORIES = ("topics", "systems", "policies", "timelines", "conflicts")
+ALL_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
-def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
-    """Scan every wiki page's `sources:` list and collect raw paths cited.
+def _collect_cited_raw_paths(
+    wiki_dir: Path, categories: tuple[str, ...]
+) -> set[str]:
+    """Scan the given category directories' `sources:` lists.
 
-    Returns a set of `raw_path` strings — whatever the frontmatter lists,
-    normalized only by strip().
+    Only pages in `categories` are scanned. Pass `CONTENT_CATEGORIES` for
+    strict mode (ignores entity pages), `ALL_CATEGORIES` for diagnostic
+    mode.
     """
     cited: set[str] = set()
-    for cat in CATEGORIES:
+    for cat in categories:
         cat_dir = wiki_dir / cat
         if not cat_dir.exists():
             continue
@@ -96,20 +117,42 @@ def _mark_compiled(message_ids: list[str]) -> int:
 
 @click.command()
 @click.option("--dry-run", is_flag=True, help="Preview only; no DB writes.")
-def main(dry_run: bool) -> None:
+@click.option(
+    "--include-entity-only",
+    is_flag=True,
+    help=(
+        "Diagnostic: also flip messages cited only in entity pages. "
+        "Default (strict) excludes these because entity-only citation is "
+        "name-drop, not content extraction. Leaving them pending lets the "
+        "next compile batch re-claim them — self-healing loop."
+    ),
+)
+def main(dry_run: bool, include_entity_only: bool) -> None:
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
         click.echo(f"ERROR: {wiki_dir} not found", err=True)
         sys.exit(2)
 
-    cited = _collect_cited_raw_paths(wiki_dir)
+    categories = ALL_CATEGORIES if include_entity_only else CONTENT_CATEGORIES
+    mode = "loose (entity pages count)" if include_entity_only else "strict (content pages only)"
+    cited = _collect_cited_raw_paths(wiki_dir, categories)
+    click.echo(f"Mode: {mode}")
     click.echo(f"Wiki cites {len(cited)} distinct raw paths.")
 
     pending = _pending_messages()
     click.echo(f"DB has {len(pending)} pending/failed messages.")
 
     to_flip = [m for m in pending if m["raw_path"] in cited]
-    click.echo(f"Reconcile candidates (pending BUT cited in wiki): {len(to_flip)}")
+    click.echo(f"Reconcile candidates: {len(to_flip)}")
+
+    # Always report the entity-only leak count even in strict mode, so the
+    # operator sees the self-healing backlog forming.
+    if not include_entity_only:
+        entity_cited = _collect_cited_raw_paths(wiki_dir, ("entities",))
+        entity_only = (entity_cited - cited) & {m["raw_path"] for m in pending}
+        click.echo(
+            f"Entity-only-cited (left pending for re-compile): {len(entity_only)}"
+        )
 
     if not to_flip:
         click.echo("Nothing to reconcile.")
