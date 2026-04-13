@@ -149,6 +149,88 @@ def mark_as_compiled(file_path: str) -> dict[str, str | int]:
     }
 
 
+def _compile_progress_block() -> list[str]:
+    """Render a compile-progress section for wiki/index.md.
+
+    Pulls live state from Postgres: overall state counts + per-week email
+    volume (ingested vs compiled, bucketed by the email's send date). Fails
+    open with an empty list if the DB is unreachable so index generation
+    always succeeds.
+    """
+    try:
+        from src.db import connect
+    except ImportError:
+        return []
+
+    try:
+        with connect() as conn:
+            state_rows = conn.execute(
+                "SELECT compile_state, count(*)::int AS n FROM messages GROUP BY 1"
+            ).fetchall()
+            weekly_rows = conn.execute(
+                """
+                SELECT date_trunc('week', date)::date AS week,
+                       count(*)::int AS total,
+                       count(*) FILTER (WHERE compile_state = 'compiled')::int AS compiled
+                  FROM messages
+                 WHERE date IS NOT NULL
+                 GROUP BY 1
+                 ORDER BY 1
+                """
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — DB is best-effort for index rendering
+        return []
+
+    states = {r["compile_state"]: r["n"] for r in state_rows}
+    total = sum(states.values())
+    if total == 0:
+        return []
+    compiled = states.get("compiled", 0)
+    pending = states.get("pending", 0)
+    failed = states.get("failed", 0)
+    claimed = states.get("claimed", 0)
+    pct = (100 * compiled / total) if total else 0.0
+
+    lines: list[str] = [
+        "## Compile progress",
+        "",
+        f"**{compiled:,} of {total:,} emails compiled** ({pct:.1f}%). "
+        f"{pending:,} pending, {failed:,} failed, {claimed:,} in-flight.",
+        "",
+        "```mermaid",
+        "pie showData title Compile state",
+        f'    "compiled" : {compiled}',
+        f'    "pending" : {pending}',
+    ]
+    if failed:
+        lines.append(f'    "failed" : {failed}')
+    if claimed:
+        lines.append(f'    "in-flight" : {claimed}')
+    lines.extend(["```", ""])
+
+    if weekly_rows:
+        # Ascii bar chart: one bar per week, width scaled to the busiest week.
+        max_total = max(r["total"] for r in weekly_rows) or 1
+        lines.extend(
+            [
+                "### Emails per week (by send date)",
+                "",
+                "| Week starting | Ingested | Compiled | Coverage |",
+                "|---|---:|---:|---|",
+            ]
+        )
+        for r in weekly_rows:
+            bar_width = round(20 * r["total"] / max_total) or 1
+            compiled_width = round(20 * r["compiled"] / max_total)
+            bar = "█" * compiled_width + "░" * (bar_width - compiled_width)
+            lines.append(
+                f"| {r['week']} | {r['total']} | {r['compiled']} | `{bar}` |"
+            )
+        lines.append("")
+
+    return lines
+
+
 @tool
 def update_wiki_index(wiki_dir: str = "wiki") -> str:
     """Regenerate wiki/index.md by scanning all wiki pages and their frontmatter.
@@ -214,16 +296,20 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
         f"Last updated: {now_iso}",
         "",
     ]
+    lines.extend(_compile_progress_block())
+
     total = 0
+    cat_blocks: list[str] = []
     for cat_name, entries in categories.items():
         if entries:
-            lines.append(f"## {cat_name.title()} ({len(entries)})")
-            lines.extend(entries)
-            lines.append("")
+            cat_blocks.append(f"## {cat_name.title()} ({len(entries)})")
+            cat_blocks.extend(entries)
+            cat_blocks.append("")
             total += len(entries)
 
     lines.insert(3, f"Total pages: {total}")
     lines.insert(4, "")
+    lines.extend(cat_blocks)
 
     index_path = wiki_path / "index.md"
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

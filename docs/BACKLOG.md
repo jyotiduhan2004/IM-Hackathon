@@ -5,6 +5,28 @@ them up.
 
 ---
 
+## Most-cited topics / entities panel on the index page (2026-04-13)
+
+User request during the index-progress work: surface the top-N most
+cited topics / entities / systems on `wiki/index.md` — e.g. a
+"Top 10 people by mention count" + "Top 10 topics by source count"
+block. Gives visitors a fast way into the hot subjects without
+drilling per-category.
+
+Implementation path: the `message_touched_pages` table (PR3 /
+PR #31) already stores which messages touched which wiki pages. A
+query like `SELECT page_id, count(*) FROM message_touched_pages
+GROUP BY page_id ORDER BY 2 DESC LIMIT 10` joined to `wiki_pages`
+gives the answer cheaply. Until that PR merges, a fallback is "count
+`sources:` list length per wiki page" via a filesystem scan — same
+signal, slower.
+
+Ship after PR #31 merges. Don't ship before the 500-email milestone
+— the current `Compile progress` + `Emails per week` blocks are
+already more surface than the site had.
+
+---
+
 ## Migrate hand-rolled coordinator hooks → LangChain AgentMiddleware (2026-04-13)
 
 **Priority: high.** Found during today's guardrails work. LangChain v1 /
