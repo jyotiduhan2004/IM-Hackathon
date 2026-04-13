@@ -38,6 +38,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.budget import fetch_budget  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.db.messages import count_by_state  # noqa: E402
 from src.utils import extract_frontmatter as _shared_extract  # noqa: E402
 
 RUNS_DIR = REPO_ROOT / "docs" / "runs"
@@ -228,18 +229,21 @@ def _run_lint() -> str:
     return "(no summary line in lint output)"
 
 
-def _count_raw_compiled() -> tuple[int, int]:
-    total = 0
-    compiled = 0
-    for p in settings.raw_dir.glob("*.md"):
-        total += 1
-        try:
-            fm = _extract_frontmatter(p.read_text(encoding="utf-8"))
-            if fm.get("compiled") is True:
-                compiled += 1
-        except (OSError, UnicodeDecodeError):
-            continue
-    return compiled, total
+def _count_raw_compiled() -> dict[str, int]:
+    """Compile-state counts from the Postgres messages catalog.
+
+    Replaces the previous raw/*.md frontmatter scan. The DB is the
+    source of truth now; raw files no longer carry a `compiled: true`
+    marker. Keys: 'compiled', 'pending', 'failed', 'total' (sum of all
+    states, including 'claimed').
+    """
+    state = count_by_state()
+    return {
+        "compiled": state.get("compiled", 0),
+        "pending": state.get("pending", 0),
+        "failed": state.get("failed", 0),
+        "total": sum(state.values()),
+    }
 
 
 def build_report(
@@ -251,7 +255,9 @@ def build_report(
     started = datetime.now(UTC).isoformat()
 
     created, modified = _pages_modified_since(since)
-    compiled, total_raw = _count_raw_compiled()
+    state_counts = _count_raw_compiled()
+    compiled = state_counts["compiled"]
+    total_raw = state_counts["total"]
 
     budget = fetch_budget()
     cost_this_run: float | None = None
