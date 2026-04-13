@@ -1,4 +1,4 @@
-.PHONY: setup sync ingest compile lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish help
+.PHONY: setup sync ingest compile lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish publish-gate publish-force help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -86,7 +86,15 @@ serve: wiki ## Alias for `make wiki`
 bootstrap: ## One-time GCP bootstrap: create bucket + enable APIs (idempotent)
 	bash scripts/gcp/bootstrap.sh
 
-publish: ## Sync raw/wiki to GCS + redeploy Cloud Run viewer (Cloud Build rebuilds the site)
+publish-gate: ## Validate wiki before publish. Fails on any error in validate_wiki.
+	uv run python scripts/validate_wiki.py --quiet
+
+publish: publish-gate ## Sync raw/wiki to GCS + redeploy Cloud Run viewer (Cloud Build rebuilds the site)
+	gsutil -m rsync -r raw/  gs://indiamart-email-kb/raw/
+	gsutil -m rsync -r wiki/ gs://indiamart-email-kb/wiki/
+	bash scripts/gcp/deploy-viewer.sh
+
+publish-force: ## Escape hatch — publish without validation (use only if you know what you're doing)
 	gsutil -m rsync -r raw/  gs://indiamart-email-kb/raw/
 	gsutil -m rsync -r wiki/ gs://indiamart-email-kb/wiki/
 	bash scripts/gcp/deploy-viewer.sh
