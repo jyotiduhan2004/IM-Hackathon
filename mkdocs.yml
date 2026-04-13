@@ -4,13 +4,29 @@ site_url: http://localhost:8000
 
 docs_dir: wiki
 
-# Auto-discover pages — don't require an explicit nav (pages change as we compile)
 use_directory_urls: true
 
-# Keep log.md accessible by URL but hide from sidebar nav.
-# MkDocs 1.5+ supports not_in_nav.
-not_in_nav: |
-  log.md
+# Explicit top-level reader navigation. Individual topic/system/policy/
+# entity pages still auto-render under their section via the landing-page
+# index files — but the main nav is curated by hand, not a filesystem dump.
+# See docs/issues/10-phase1-implementation-plan.md (Workstream 2).
+nav:
+  - Home: home.md
+  - Topics:
+      - topics/index.md
+  - Products & Platforms:
+      - systems/index.md
+  - Policies:
+      - policies/index.md
+  - People:
+      - entities/index.md
+  - Changes: log.md
+  - About: about.md
+
+# Exclude draft pages from the build (anticipates the _drafts/ folder
+# added by the drafts-review workstream).
+exclude_docs: |
+  _drafts/**
 
 theme:
   name: material

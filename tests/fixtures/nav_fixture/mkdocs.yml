@@ -1,0 +1,39 @@
+site_name: Nav Fixture
+site_description: Synthetic fixture for the nav smoke test
+site_url: http://localhost:8000
+
+docs_dir: docs_dir
+
+use_directory_urls: true
+
+# Mirrors the real mkdocs.yml structure — see ../../../mkdocs.yml.
+nav:
+  - Home: home.md
+  - Topics:
+      - topics/index.md
+  - Products & Platforms:
+      - systems/index.md
+  - Policies:
+      - policies/index.md
+  - People:
+      - entities/index.md
+  - Changes: log.md
+  - About: about.md
+
+exclude_docs: |
+  _drafts/**
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+
+strict: false

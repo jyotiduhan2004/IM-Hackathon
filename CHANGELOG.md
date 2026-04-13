@@ -10,6 +10,17 @@ Detailed incident postmortems live under `docs/incidents/`.
 
 ## [Unreleased] — 2026-04-13
 
+### Changed
+- MkDocs viewer now uses an explicit `nav:` tree instead of filesystem
+  auto-discovery. Top level is `Home` / `Topics` / `Products & Platforms`
+  / `Policies` / `People` / `Changes` / `About`. The internal
+  `page_type: system` stays, but the reader-facing label becomes
+  `Products & Platforms`. Adds section landing pages (`wiki/home.md`,
+  `wiki/{topics,systems,policies,entities}/index.md`, `wiki/about.md`)
+  and an `exclude_docs: '_drafts/**'` rule so later draft-review work
+  can stage pages without polluting the build. Covers Workstream 2 /
+  PR 2 in `docs/issues/10-phase1-implementation-plan.md`.
+
 ### Added
 - `scripts/wiki_quality_metrics.py`: CI-friendly structured wiki
   quality metrics for release gates (Phase 1 plan Workstream 6).
