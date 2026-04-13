@@ -12,6 +12,8 @@ at render time only.
 from __future__ import annotations
 
 import re
+from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -178,32 +180,45 @@ def _replace_attachment_refs(body: str) -> str:
 
 
 def _page_metadata_banner(fm: dict) -> str:
-    """Small metadata banner at the top of each page.
+    """One-line provenance banner at the top of each page.
 
-    Shows: last updated date, number of source emails, update count, and
-    which model last touched the page (updated_by) — so readers can tell
-    whether content is fresh and which model to credit/blame.
+    Renders: `N sources · last compiled YYYY-MM-DD · status: current`
+
+    All three fields always render — missing `sources` becomes "0 sources",
+    missing `status` becomes "current" (the default), missing `last_compiled`
+    becomes "last compiled unknown". Stub pages (no real compilation yet)
+    surface `last compiled stub` rather than a fake date so readers can tell
+    backfilled-but-empty pages apart from freshly compiled ones.
+
+    YAML parsers coerce bare ISO timestamps into `datetime` objects, so the
+    last_compiled normalizer handles strings and datetime/date alike.
     """
-    last_compiled = fm.get("last_compiled", "")
-    sources_count = len(fm.get("sources") or [])
-    status = fm.get("status", "current")
-    updated_by = fm.get("updated_by") or ""
-    update_count = fm.get("update_count") or 0
-    parts: list[str] = []
-    if last_compiled and last_compiled not in ("stub", "stub-backfilled"):
-        date_part = last_compiled.split("T")[0] if "T" in last_compiled else last_compiled
-        parts.append(f"**Last updated:** {date_part}")
-    if update_count:
-        parts.append(f"**Updates:** {update_count}")
-    if sources_count:
-        parts.append(f"**Sources:** {sources_count}")
-    if updated_by:
-        parts.append(f"**Compiled by:** `{updated_by}`")
-    if status != "current":
-        parts.append(f"**Status:** {status}")
-    if not parts:
-        return ""
-    return " · ".join(parts) + "\n\n"
+    sources_raw = fm.get("sources") or []
+    sources_count = len(sources_raw) if isinstance(sources_raw, list) else 0
+
+    last_compiled_str = _format_last_compiled(fm.get("last_compiled"))
+
+    status = fm.get("status") or "current"
+
+    line = f"{sources_count} sources · last compiled {last_compiled_str} · status: {status}"
+    return line + "\n\n"
+
+
+def _format_last_compiled(value: object) -> str:
+    """Normalize `last_compiled` for display. Accepts strings, datetime, date,
+    None, or stub markers — always returns a short printable string.
+    """
+    if value is None or value == "":
+        return "unknown"
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value)
+    if text in ("stub", "stub-backfilled"):
+        return text
+    # Bare ISO strings like "2026-04-13T10:30:00+00:00" — keep only the date.
+    return text.split("T")[0] if "T" in text else text
 
 
 def on_page_markdown(markdown: str, *, page, config, files) -> str:
@@ -255,7 +270,10 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         else:
             body = badge_html + "\n\n" + body
 
-    # Inject a metadata banner at the top (after the h1)
+    # Inject a metadata banner at the top. Splice right after the h1 when
+    # there is one; otherwise prepend (entity pages rely on Material to
+    # auto-generate the h1 from `title:`, so there's nothing in the body to
+    # splice next to — the banner renders directly under the auto-h1).
     banner = _page_metadata_banner(fm)
     if banner:
         body_lines = body.splitlines(keepends=False)
@@ -268,6 +286,8 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
             body_lines.insert(h1_idx + 1, "")
             body_lines.insert(h1_idx + 2, banner.rstrip())
             body = "\n".join(body_lines)
+        else:
+            body = banner + body
 
     sources = fm.get("sources") or []
     if not sources or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):

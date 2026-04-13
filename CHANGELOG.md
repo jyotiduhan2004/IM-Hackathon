@@ -100,6 +100,16 @@ Detailed incident postmortems live under `docs/incidents/`.
   see a contextual placeholder instead of a broken-image icon on the
   live site (which ships without `raw/attachments/` per
   `.dockerignore` / `.gcloudignore`).
+- Per-page metadata header on every rendered wiki page (closes #44): a
+  one-liner banner reading `N sources · last compiled YYYY-MM-DD · status: X`
+  is spliced above the first heading on every topic / entity / system /
+  policy / timeline / conflict page. All three fields always render — pages
+  without `sources:` show "0 sources", pages without `last_compiled` show
+  "unknown", and stub-backfilled pages preserve the `stub` marker so readers
+  can distinguish real compilation from placeholders. Implemented in
+  `mkdocs_hooks.py::_page_metadata_banner`; the `_format_last_compiled`
+  helper normalizes strings, `datetime`, `date`, and YAML-coerced variants
+  to a date-only printable string.
 - GCP Phase A viewer deploy scaffolding (PR #36): `Dockerfile` +
   `nginx.conf` (python:3.12-slim builder → nginx:alpine runtime);
   `.dockerignore` + `.gcloudignore` scoped so `mkdocs_hooks.py` can still
