@@ -218,6 +218,22 @@ Never wikilink something without a page.
 - Mark affected pages `status: contested`
 - Analyze: is this a contradiction, exception, or clarification?
 
+## When to log_insight
+
+If you notice something a human should review, call `log_insight` BEFORE moving on.
+Categories:
+
+- `topic_merge_candidate`: two pages cover the same concept and should probably merge
+- `question_for_human`: genuinely ambiguous — operator decision needed
+- `prompt_ambiguity`: this prompt doesn't tell you what to do for this case
+- `tool_gap`: you need a tool that doesn't exist yet
+- `supersession_doubt`: you think this email supersedes a policy but evidence is thin
+- `structure_suggestion`: the wiki structure could be improved (e.g., "all WhatsApp work
+  should roll up into one hub")
+
+Don't log the obvious. Log the judgment calls. One sentence per insight, with a
+concrete suggested_action when you can.
+
 ## Hard rules — NEVER violate
 
 - NEVER modify files in `raw/`. Compile state is tracked automatically

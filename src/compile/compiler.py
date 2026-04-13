@@ -441,6 +441,68 @@ def append_to_log(entry: str, wiki_dir: str = "wiki") -> str:
     return f"logged: {entry}"
 
 
+_VALID_INSIGHT_CATEGORIES = frozenset(
+    {
+        "topic_merge_candidate",
+        "question_for_human",
+        "prompt_ambiguity",
+        "tool_gap",
+        "supersession_doubt",
+        "structure_suggestion",
+    }
+)
+
+
+@tool
+def log_insight(
+    category: str,
+    message: str,
+    email_path: str | None = None,
+    suggested_action: str | None = None,
+) -> dict[str, Any]:
+    """Record a structured meta-observation during compile.
+
+    Use this when you need to flag something for human review — uncertain
+    between page updates, weird thread structure, possible policy
+    supersession, missing tool. The coordinator surfaces the top few at
+    batch-end in the audit log.
+
+    Args:
+        category: One of 'topic_merge_candidate', 'question_for_human',
+            'prompt_ambiguity', 'tool_gap', 'supersession_doubt', or
+            'structure_suggestion'.
+        message: 1-2 sentence observation.
+        email_path: Optional raw email this is about (e.g.
+            ``raw/2026-04-11_subject_abc.md``).
+        suggested_action: Optional concrete fix the human could take.
+
+    Returns:
+        ``{"ok": True, "id": <int>}`` on success, or
+        ``{"ok": False, "error": "..."}`` on invalid category.
+    """
+    import os
+
+    from src.db.insights import record
+
+    if category not in _VALID_INSIGHT_CATEGORIES:
+        return {
+            "ok": False,
+            "error": (
+                f"invalid category {category!r}; must be one of {sorted(_VALID_INSIGHT_CATEGORIES)}"
+            ),
+        }
+
+    run_id = os.environ.get("COMPILE_RUN_ID")
+    new_id = record(
+        run_id=run_id,
+        category=category,
+        message=message,
+        email_path=email_path,
+        suggested_action=suggested_action,
+    )
+    return {"ok": True, "id": new_id}
+
+
 @tool
 def resolve_page(
     slug: str | None = None,
@@ -706,6 +768,7 @@ def create_compiler(
             resolve_page,
             create_entity,
             write_draft_page,
+            log_insight,
         ],
         system_prompt=system_prompt,
         backend=backend,

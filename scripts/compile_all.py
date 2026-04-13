@@ -37,6 +37,7 @@ from src.compile.tool_call_log import ToolCallLogHandler  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db.compile_runs import finish_run  # noqa: E402
 from src.db.compile_runs import start_run  # noqa: E402
+from src.db.insights import list_for_run as list_insights_for_run  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
@@ -242,6 +243,24 @@ def _append_batch_log(
     row = f"| {timestamp} | {batch_idx} | {n_emails} | {thread_id} | {outcome} | {safe_notes} |\n"
     with log_path.open("a", encoding="utf-8") as f:
         f.write(row)
+
+
+def _insights_suffix(run_id: str, limit: int = 3) -> str:
+    """Return a short ``insights=N: <preview>`` fragment for the log notes.
+
+    Pulls the newest `limit` rows from compile_insights for `run_id`. Fails
+    open with an empty string if the DB is unreachable — the audit log row
+    still gets written either way.
+    """
+    try:
+        rows = list_insights_for_run(run_id, limit=limit)
+    except Exception as exc:  # noqa: BLE001 — insights are best-effort
+        logger.warning("insights fetch failed", run_id=run_id, error=str(exc))
+        return ""
+    if not rows:
+        return ""
+    preview = (rows[0].get("message") or "").replace("\n", " ")[:40]
+    return f"insights={len(rows)}: {preview}"
 
 
 def _batch_paths(batch: list) -> list[str]:
@@ -529,6 +548,13 @@ def main(
     )
     click.echo(f"Run id: {run_id}")
 
+    # Expose the run id to in-process tools (see
+    # `src/compile/compiler.py::log_insight`) so every insight the agent
+    # records can be joined back to this run.
+    import os
+
+    os.environ["COMPILE_RUN_ID"] = str(run_id)
+
     processed = 0
     failed = 0
     # Pessimistic default — overwritten to 'completed' on clean loop exit or
@@ -605,6 +631,9 @@ def main(
                 click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
                 log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
                 log_notes_parts = list(suffix_parts)
+                insights_tail = _insights_suffix(str(run_id))
+                if insights_tail:
+                    log_notes_parts.append(insights_tail)
                 log_notes = "; ".join(log_notes_parts) if log_notes_parts else ""
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
             except KeyboardInterrupt:

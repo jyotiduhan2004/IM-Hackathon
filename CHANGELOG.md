@@ -82,6 +82,17 @@ Detailed incident postmortems live under `docs/incidents/`.
   instead of pulling the full pending queue via `list_uncompiled_emails`
   (now documented as DEPRECATED in its docstring). SQL is fully
   parameterized — no user input is spliced into the query.
+- `log_insight` agent tool + `compile_insights` Postgres table — gives the
+  compiler agent a structured channel to flag judgment calls (ambiguous
+  merges, thin supersession evidence, prompt gaps, tool gaps, structural
+  suggestions) during a run. Categories are CHECK-constrained in DB and
+  pre-validated in the tool so a bogus category returns a structured error
+  instead of crashing the batch. `scripts/compile_all.py` sets
+  `COMPILE_RUN_ID` after `start_run()` so every insight joins back to its
+  run, and appends `insights=N: <preview>` into the per-batch `wiki/log.md`
+  notes column at batch-end so the operator sees judgment calls in the
+  audit log. Prompt gets a new `## When to log_insight` section between
+  conflict rules and hard rules.
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to
