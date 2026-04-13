@@ -145,10 +145,11 @@ Never wikilink something without a page.
 - NEVER remove history — only add to it
 - NEVER guess at supersession — flag as conflict when unsure
 - NEVER create two pages with the same body content (post-compile lint checks hashes)
-- NEVER create a page with a `-new`, `-v2`, `-v3`, `-copy`, `-latest`, or
-  `-updated` suffix. If a page named `foo.md` exists and you want to update
-  it, EDIT `foo.md` directly. Creating `foo-new.md` or `foo-v2.md` is the
-  #1 source of duplicate pages we keep having to clean up.
+- NEVER create a page with a `-new`, `-v2`, `-v3`, `-copy`, `-latest`,
+  `-updated`, `-temp`, `-draft`, or `-rev` suffix. If a page named `foo.md`
+  exists and you want to update it, EDIT `foo.md` directly. Creating
+  `foo-new.md`, `foo-temp.md`, or `foo-v2.md` is the #1 source of
+  duplicate pages we keep having to clean up.
 - NEVER produce made-up summary stats (e.g., "5/5 parameters"). Use the exact
   numbers from the source (e.g., "8 Yes, 2 NA, 1 No; 91.67% score").
 

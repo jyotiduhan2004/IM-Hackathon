@@ -26,7 +26,7 @@ from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
 
-SUFFIX_RE = re.compile(r"^(.+?)-(new|v\d+|copy|latest|updated)$")
+SUFFIX_RE = re.compile(r"^(.+?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*)$")
 CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 

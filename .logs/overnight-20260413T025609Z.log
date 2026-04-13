@@ -16,3 +16,11 @@ Batch complete. Progress: 1/20
 === Batch 2/17 (1 emails, thread=19b6eb14bcb6, earliest=2026-01-02) ===
 [2m2026-04-13T02:59:54.270347Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
 [2m2026-04-13T02:59:54.286545Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b6eb14bcb68611, earliest='[0m [36mrecursion_limit[0m=[35m150[0m
+[2m2026-04-13T03:14:45.526767Z[0m [[31m[1merror    [0m] [1mbatch compilation failed      [0m [36mbatch_index[0m=[35m2[0m [36merror[0m=[35m'Recursion limit of 150 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.\nFor troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT'[0m
+ERROR in batch: Recursion limit of 150 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.
+For troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT
+Continuing with next batch...
+
+=== Batch 3/17 (1 emails, thread=19b731f7978a, earliest=2026-01-03) ===
+[2m2026-04-13T03:14:45.527698Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T03:14:45.541969Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b731f7978a7f7a, earliest='[0m [36mrecursion_limit[0m=[35m150[0m

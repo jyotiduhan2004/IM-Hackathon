@@ -154,7 +154,7 @@ def check_duplicate_suffix_variants(wiki_dir: Path) -> list[Error]:
     import re as _re
 
     errors: list[Error] = []
-    suffix_re = _re.compile(r"^(.*?)-(new|v\d+|copy|latest|updated)$")
+    suffix_re = _re.compile(r"^(.*?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*)$")
 
     for category in CATEGORY_TO_TYPE:
         cat = wiki_dir / category

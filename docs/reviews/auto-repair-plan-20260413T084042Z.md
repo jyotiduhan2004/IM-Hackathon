@@ -1,186 +1,38 @@
 # Auto-Repair Plan — 2026-04-13T08:40Z
 
-Catalog of recurring failure modes in `email-knowledge-base` with automated-fix
-proposals. Ranked by frequency × blast-radius. Counts drawn from `CHANGELOG.md`,
-`docs/BACKLOG.md`, `docs/runs/*.md` (6 dipsticks), `docs/reviews/*.md` (8 reports).
+Ranked by frequency × impact. Counts from CHANGELOG, 6 dipsticks, 8 reviews.
+Existing: `validate_wiki.py`, `lint_wiki.py --fix`, `merge_suffix_dupes.py`,
+`backfill_stubs.py`, snapshot wrap.
 
-Existing automation: `scripts/validate_wiki.py` (blocking), `scripts/lint_wiki.py
---fix` (advisory/auto-fix), `scripts/merge_suffix_dupes.py`,
-`scripts/backfill_stubs.py`, `compile_all.py` snapshot + post-validator.
+Legend: V=validator · L=lint-fix · H=hook · M=merge · P=prompt · T=timeout.
 
-Legend: (V) validator check · (L) lint auto-fix · (H) post-compile hook · (M)
-merge script · (P) prompt rule · (T) timeout wrapper.
+| # | Pattern | Detect | Seen | Root cause | Auto fix | Effort |
+|---|---|---|---|---|---|---|
+| 1 | `-new`/`-v2`/`-copy` suffix-dup | `check_duplicate_suffix_variants` live | 4/6 dipsticks; `nikhil-rathore-new` across 4 overnight runs | Agent can't see canonical stems | M+P: wire `merge_suffix_dupes.py` into `compile_all.py` post-step; inject `ls wiki/entities wiki/systems` into prompt | ~40 LOC, 1h |
+| 2 | Broken wikilinks | `check_broken_wikilinks`, `normalize_wikilinks` live | Grew 1→17 across audits; `[[buylead]]`, `althi-naveen` recur | Case drift + missing stubs; grows with wiki | L+H: run `lint_wiki --fix` after every batch, before validator | 5 LOC, <30min |
+| 3 | Stub never backfilled (`sources: []`) | `backfill_stubs._is_stub` live | Every audit: `lucky-agarwal`, `amarinder-s-dhaliwal`, `wazuh-mcp` | Prompt says grep; agent doesn't; no retry | H+V: append `backfill_stubs --recompile` to `make pipeline`; hard-fail empty-sources entity | 25 LOC, 1h |
+| 4 | Frontmatter corruption | `validate_page` live | 3 consecutive dipsticks; once corrupted 18 pages | `edit_file` YAML clipping; auto-stamp preserved damage | H+P: `repair_frontmatter.py` reconstructs `page_type` from dir, `title` from slug, sources from raw grep; auto-invoke on `validate --list-bad`. Prompt: forbid `edit_file` on frontmatter | 120 LOC, 2h |
+| 5 | Hot-thread compile stalls | No TCP/budget/write activity >15min | CHANGELOG: iters 5+6 hung ~28min | Hot entity pages >20KB × 2–3 loaded >80k ctx; LiteLLM silent timeout | T+L: `timeout 900` in `compile_overnight.sh`; `asyncio.wait_for(600)` in `compile_parallel.py`; entity-bloat lint (>12KB or >50 sources) + compactor truncating `sources:` to recent N | 90 LOC, 2h |
+| 6 | Bug/ticket table loss | Count `^\|.+\|$` rows in source vs wiki | Every audit: `ios-performance-fix`, `dynamic-smart-rfq-form` (12 bugs), `auditmate`, `trustpulse` 75% loss | Compiler summarises to prose | V+P: `tables` tag in raw frontmatter via `parser.py`; `check_table_rows_preserved` validator; prompt "copy tables byte-for-byte" | 90 LOC, 3h |
+| 7 | Trailing duplicate H2 block | Hash adjacent EOF H2s | 2 audits: `neeraj-agrawal`, `crashagent`, `mohak-saxena` | Chunking race in agent write | L: `dedupe_trailing_blocks` in `lint_wiki --fix` | 40 LOC, 1h |
+| 8 | Sources undercounting (habit-CCs) | Grep raw From/To/CC for email + "First Last" vs `sources:` | `sandeep-garg` 1 vs 54; `amit-agarwal` sparse | CC/signature mentions not linked | H: wire `backfill_stubs --refresh-sources` into pipeline | 1 line |
+| 9 | Budget exhaustion mid-run | `fetch_budget()` interim check | Improvement review flagged; overnight-plan accepts risk | Retry storms on 402 | H: abort if `spent/max > 0.85` every N batches | 15 LOC, 30min |
+| 10 | `.snapshots/` unbounded | `ls .snapshots/` | Flagged in improvement review | No retention | H: `snapshot_wiki prune --keep 10` end-of-run | 20 LOC, 30min |
+| 11 | Doc/code drift (README vaporware) | Path-exists check vs README layout | 8 drift points; 5 BACKLOG items shipped un-struck | Append-only docs | H+P: `check_docs_coherence.py` pre-commit; "strike BACKLOG same commit" rule in CLAUDE.md | 60 LOC, 1.5h |
 
----
+Already blocking (no action): `check_duplicates` (byte-identical bodies),
+`check_page_type_mismatch` (dir vs frontmatter) — both single-incident, not
+recurring.
 
-## Ranked failure modes
+## Wiring — one Makefile target
 
-### 1. `-new` / `-v2` / `-copy` suffix-dup pages
-- **Detect**: `scripts/validate_wiki.py::check_duplicate_suffix_variants` already
-  flags; regex `^(.+?)-(new|v\d+|copy|latest|updated)$` against sibling stems.
-- **Seen**: 4 of 6 dipsticks — `nikhil-rathore` / `nikhil-rathore-new` persistent
-  across 4 consecutive overnight runs (22:06, 22:52, 23:28, 01:17).
-- **Root cause**: agent prompt drift — compiler writes new page when it fails to
-  discover the canonical slug because stems directory wasn't passed to it.
-- **Auto fix**: (M+H) wire existing `scripts/merge_suffix_dupes.py` into
-  `compile_all.py`/`compile_parallel.py` post-step (runs before validator). Also
-  (P) inject `ls wiki/entities wiki/systems` into compiler system prompt so the
-  agent sees canonical stems pre-write.
-- **Effort**: ~30 LOC to invoke merge_suffix_dupes from compile pipeline; 10 LOC
-  for prompt injection. ~1h.
+`Makefile::pipeline` post-compile order: `validate_wiki` (hard) →
+`merge_suffix_dupes` (#1) → `lint_wiki --fix` (#2, #7) →
+`backfill_stubs --recompile` (#3, #8) → `repair_frontmatter` (#4) →
+`snapshot_wiki prune` (#10) → `validate_wiki` (re-assert). Wrap compile calls
+in `timeout 900` + `asyncio.wait_for(600)` (#5, #9). Inject existing-slug list
+into prompt (#1).
 
-### 2. Broken wikilinks
-- **Detect**: `validate_wiki.py::check_broken_wikilinks` exists;
-  `lint_wiki.py::create_missing_stubs` + `normalize_wikilinks` auto-fix exist.
-- **Seen**: baseline 1–2 dead links (audit-1), grew to 17 across 9 files by
-  2026-04-13 plan-24h; `[[buylead]]`, `althi-naveen`, `Lens.IndiaMART`,
-  `ishu-garg` recur.
-- **Root cause**: title-case + stub-not-created; grows as wiki grows.
-- **Auto fix**: (L+H) run `make lint-wiki-fix` (normalize + create stubs) inside
-  `compile_all.py` AFTER every batch and BEFORE validator. Today it's documented
-  in plan but not wired as a compile-step.
-- **Effort**: 5 LOC in `compile_all.py` to subprocess the lint --fix. <30min.
-
-### 3. Stub pages never backfilled (`sources: []` / `last_compiled: "stub"`)
-- **Detect**: `backfill_stubs.py::_is_stub` already exists.
-- **Seen**: Every audit (3 of 3) flags same victims: `lucky-agarwal`,
-  `amarinder-s-dhaliwal`, `wazuh-mcp`, `pratik-ahuja`. Trend report: "same
-  recommendation every audit".
-- **Root cause**: compiler prompt tells agent to grep but doesn't; no retry loop.
-- **Auto fix**: (H) append `backfill_stubs.py --recompile` to Makefile
-  `pipeline` target and to `compile_all.py` end-of-run; (V) promote "entity with
-  empty sources" to hard-error in `validate_wiki.py` so regressions fail loudly.
-- **Effort**: script already shipped; wiring = ~10 LOC + 1 validator rule (~15
-  LOC). <1h.
-
-### 4. Frontmatter corruption (orphan / missing required fields)
-- **Detect**: `validate_wiki.py::validate_page` flags orphan + missing fields.
-- **Seen**: 3 dipsticks in a row — `nadeem-suhaib.md` missing
-  `page_type/status/title`, `photosearch.md` no parseable YAML,
-  `ashish-verma.md`, `julee-kumari.md`, plus `pns-number-display-m-site-pdp.md`,
-  `rucha-patil.md` missing `last_compiled`. CHANGELOG: 18 pages once corrupted
-  at once.
-- **Root cause**: Deep Agents `edit_file` mid-edit YAML clipping + auto-stamp
-  that used to preserve corruption (partially fixed — still recurs).
-- **Auto fix**: (H) repair-on-detect tool —
-  `scripts/repair_frontmatter.py <path>` that reconstructs `page_type` from
-  directory, `title` from slug, `status: current`, greps raw for sources, leaves
-  body intact. Invoked automatically when `validate_wiki.py --list-bad` yields
-  hits. (P) Tighten prompt — forbid `edit_file` on frontmatter; require
-  `stamp_page_compiled_at` or full-rewrite with yaml.safe_dump.
-- **Effort**: new 120-line script + 2-line validator integration + 5-line prompt
-  rule. ~2h.
-
-### 5. Hot-thread compile stalls (entity-page bloat → context overflow)
-- **Detect**: no TCP activity / no budget delta / no file writes for >15min.
-- **Seen**: CHANGELOG: iterations 5+6 hung on 10-email SonarQube thread; killed
-  manually after ~28min. BACKLOG "Compile stall detection" open.
-- **Root cause**: Himanshu-Jain-style entity pages ballooned to 20–26KB with
-  100+ sources; LiteLLM silently times out at >80k context.
-- **Auto fix**: (T) `timeout 900 uv run python scripts/compile_all.py ...`
-  wrapper in `compile_overnight.sh`; (T) `asyncio.wait_for(..., timeout=600)`
-  around each `agent.invoke` in `compile_parallel.py`; (L) new
-  `lint_wiki.py::check_entity_bloat` — fail if any entity >12KB or >50 sources.
-  Auto-fix pass that truncates `sources:` to most-recent N + "see git for full
-  history".
-- **Effort**: timeout wrappers <10 LOC; bloat check ~30 LOC; compactor
-  ~60 LOC. ~2h.
-
-### 6. Verbatim table (bug/ticket matrix) loss
-- **Detect**: grep `^\|.+\|\s*$` count in source raw; compare to wiki page.
-- **Seen**: Every audit (3 of 3) flags same regression — `ios-performance-fix`,
-  `dynamic-smart-rfq-form` (12 bugs), `auditmate` (4 + ticket 646247),
-  `trustpulse` (75% content loss).
-- **Root cause**: compiler summarises tables into prose; prompt says "preserve"
-  but has no enforcement.
-- **Auto fix**: (V) `validate_wiki.py::check_table_rows_preserved` — for each
-  source in `sources:`, count markdown table rows; fail if wiki has fewer; (P)
-  strong prompt rule "copy bug/ticket tables byte-for-byte"; (L) pre-step that
-  extracts tables to `raw/*.md` frontmatter as `tables: [{headers,rows}]` and
-  prompt references them explicitly.
-- **Effort**: validator rule ~40 LOC; ingest-side table tag ~50 LOC. ~3h.
-
-### 7. Duplicate bodies (byte-identical)
-- **Detect**: `validate_wiki.py::check_duplicates` already present.
-- **Seen**: Once (audit-1): `export-indiamart.md == tawk-to.md`. Fixed, not
-  recurred since `ae5f0e1`.
-- **Auto fix**: already blocking. No action needed; keep gate in place.
-- **Effort**: 0.
-
-### 8. Page-type mismatch (directory vs frontmatter)
-- **Detect**: `validate_wiki.py::validate_page` covers it;
-  `lint_wiki.py::check_page_type_mismatch` too.
-- **Seen**: 2 cases (audit-1) — fixed and not recurred.
-- **Auto fix**: (L) auto-move script — if page in `entities/` has
-  `page_type: system`, move file to `systems/` and rewrite incoming wikilinks.
-  Today is manual.
-- **Effort**: ~40 LOC addendum to `lint_wiki.py --fix`. ~1h.
-
-### 9. Trailing-block / duplicate H2 rendering artefact
-- **Detect**: regex for identical adjacent H2 blocks at EOF.
-- **Seen**: 2 audits — `neeraj-agrawal`, `crashagent`, `mohak-saxena`. Chunking
-  race — same class, new manifestation each audit.
-- **Root cause**: agent writes duplicate Team/Related block at EOF.
-- **Auto fix**: (L) `lint_wiki.py::dedupe_trailing_blocks` — hash adjacent H2
-  sections, keep last, drop earlier identical ones. Run in --fix mode.
-- **Effort**: ~40 LOC. ~1h.
-
-### 10. Doc/code drift (README lists vaporware modules; BACKLOG shipped items
-not struck)
-- **Detect**: static list — check `src/compile/relations.py`,
-  `src/wiki/search.py` etc. exist when README references them.
-- **Seen**: coherence review flagged 8 drift points; 5 BACKLOG items shipped but
-  not struck through.
-- **Auto fix**: (H) `scripts/check_docs_coherence.py` — parses README "Project
-  layout", asserts each path exists; fails CI / pre-commit if drift. Strike-
-  through enforcement is harder; (P) add "Strike BACKLOG items the same commit
-  as the fix" to CLAUDE.md self-improvement section.
-- **Effort**: 60-line linter. ~1.5h.
-
-### 11. Sources undercounting (entity in 54 raws, wiki cites 1)
-- **Detect**: for each entity slug, grep `raw/*.md` for email + "First Last"
-  in From/To/CC; diff from `sources:` count.
-- **Seen**: `sandeep-garg` 1 vs 54, `amit-agarwal` sparse, `pratik-ahuja` 0→3
-  (real = ~6).
-- **Auto fix**: (H) run `backfill_stubs.py --refresh-sources --category
-  entities` after every compile. Already works; just needs wiring — currently
-  only runs when user invokes manually.
-- **Effort**: 1 line in pipeline. <10min.
-
-### 12. Budget exhaustion mid-run (no mid-run check)
-- **Detect**: `src/budget.py` snapshot before/after; no interim check.
-- **Seen**: improvement-internal flagged; overnight-plan accepts as risk.
-- **Auto fix**: (H) `compile_all.py` checks `fetch_budget()` every N batches;
-  aborts if `spent/max > 0.85`. Prevents retry-storm blowouts.
-- **Effort**: ~15 LOC. ~30min.
-
-### 13. Snapshot growth (`.snapshots/` unbounded)
-- **Detect**: `ls .snapshots/ | wc -l` after each run.
-- **Seen**: flagged in improvement-internal; no retention policy.
-- **Auto fix**: (H) `snapshot_wiki.py prune --keep 10` in `compile_all.py`
-  end-of-run.
-- **Effort**: ~20 LOC. ~30min.
-
----
-
-## Wiring summary (one Makefile target)
-
-Add to `Makefile::pipeline` post-compile chain, in order:
-
-```
-validate_wiki   (hard-fail gates: frontmatter, dupes, suffix-twins, broken links)
-  → merge_suffix_dupes     (auto-merge #1 variants)
-  → lint_wiki --fix        (normalize wikilinks + create stubs, auto-move #8, dedupe #9)
-  → backfill_stubs --recompile  (fill #3, refresh #11)
-  → repair_frontmatter     (fix #4 remnants)
-  → snapshot_wiki prune    (#13)
-  → validate_wiki          (re-assert clean)
-```
-
-Wrap all compile calls in `timeout 900` and `asyncio.wait_for(600)` (#5, #12).
-
-**Total net-new effort**: ~5 small scripts + ~80 LOC pipeline wiring = 6–8h of
-work, removes ~80% of hand-fix cycles observed across 8 review documents and 6
-dipsticks.
+Net new: 4 scripts + ~80 LOC wiring = 6–8h. Removes ~80% of hand-fix cycles.
 
 Report path: `/Users/amtagrwl/git/email-knowledge-base/docs/reviews/auto-repair-plan-20260413T084042Z.md`
