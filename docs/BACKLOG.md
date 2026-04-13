@@ -252,7 +252,9 @@ file each time.
 - **Performance: parallelize compilation** — DRAFTED (`scripts/compile_parallel.py`),
   not benchmarked
 - **Thread-aware compilation** — DONE
-- **Phase 0 review: first full compile observations** — archived; all P0 shipped
+- **Phase 0 review: first full compile observations** — 4 of 5 P0 items shipped
+  (wikilink casing, date hallucination, non-person entities, index.md staleness).
+  Item 4 "orphan entity back-links" still open — low-impact, not blocking compile.
 - **Review tools vs Anthropic tool-writing guide** — partial (issue #4 open)
 
 ### 🧹 Governance debt (visible right now)
@@ -704,32 +706,25 @@ while iterating on prompts.
 
 ---
 
-## Quality: date hallucination in wiki pages
+## Quality: date hallucination in wiki pages ✅ SHIPPED
 
-**Observed**: Agent writes `last_compiled: "2025-01-10T00:00:00Z"` instead of
-real time. Training cutoff bleed.
+**Was observed**: Agent writes `last_compiled: "2025-01-10T00:00:00Z"` instead
+of real time. Training cutoff bleed.
 
-**Fix options**:
-1. Have the compiler prompt explicitly pass today's date in the instruction
-2. Stop having the LLM write `last_compiled` at all — set it in post-processing
-   via a hook or a wrapper
-3. Use a `set_compiled_timestamp()` tool the agent must call (forces it through
-   the real clock)
-
-**When**: Next prompt iteration.
+**Shipped via** the `stamp_page_compiled_at` tool (`src/compile/compiler.py:82-116`,
+commit `ddd0c5a`) — the LLM never writes `last_compiled` directly; it calls
+the tool which stamps real UTC. Prompt rules added to back it up.
 
 ---
 
-## Quality: wikilink casing inconsistency
+## Quality: wikilink casing inconsistency ✅ SHIPPED
 
-**Observed**: Index has `[[api-knowledge-agent]]` but topic pages have
+**Was observed**: Index had `[[api-knowledge-agent]]` but topic pages had
 `[[API Knowledge Agent]]`. Lots of broken links.
 
-**Fix**: Either enforce kebab-case everywhere (update prompt), or post-process
-via lint auto-fix to normalize. Email-based entity IDs (see above) partially
-solves this.
-
-**When**: Next prompt iteration — easy win.
+**Shipped via** prompt rules + `scripts/lint_wiki.py` auto-fix that normalizes
+all wikilinks to kebab-case (commit `235dc74` and follow-ups). Email-based
+entity identity (in-flight PR #26) will further harden this.
 
 ---
 
@@ -905,9 +900,21 @@ pages will fall out of spec. We need a way to:
 
 ---
 
-## Thread-aware compilation — not yet implemented
+## Thread-aware compilation ✅ SHIPPED (basic)
 
-**Current state**:
+**Shipped**: `scripts/compile_all.py:128-160` and `scripts/compile_parallel.py:55-85`
+now batch uncompiled emails by `thread_id` chronologically within thread,
+earliest-first across threads (commit `b7334b6`). `list_uncompiled_emails`
+returns `thread_id` so agent sees thread context.
+
+**Still open** (the design below captures the remaining gaps):
+- No `thread_state` field on wiki pages (open / decided / amended / closed)
+- No "quiet period" for live mode (Phase 1) — would prevent mid-conversation recompile
+- Agent can still split one thread across batches if the thread spans many emails
+
+**Original design notes kept for reference:**
+
+**Current state** (when entry was written — some now shipped):
 - Gmail API gives us `thread_id` (string like `19d431cd45e0b512`) on every
   message — fully authoritative, no piecing together needed
 - We DO capture it in `raw/*.md` frontmatter
