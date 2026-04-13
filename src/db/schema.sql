@@ -133,3 +133,22 @@ CREATE INDEX IF NOT EXISTS compile_runs_started_idx ON compile_runs (started_at 
 DROP TRIGGER IF EXISTS compile_runs_set_updated_at ON compile_runs;
 CREATE TRIGGER compile_runs_set_updated_at BEFORE UPDATE ON compile_runs
   FOR EACH ROW EXECUTE FUNCTION email_kb_set_updated_at();
+
+
+-- ---------------------------------------------------------------------------
+-- PR5a: ingest_cursors — durable replacement for .watch_state.json. One row
+-- per named ingest loop (gmail_history today; more sources later).
+-- history_id is whatever resume token the source API exposes (Gmail
+-- historyId, or an ISO timestamp for the current poll-by-date watcher).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS ingest_cursors (
+  cursor_name TEXT PRIMARY KEY,
+  history_id  TEXT NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS ingest_cursors_set_updated_at ON ingest_cursors;
+CREATE TRIGGER ingest_cursors_set_updated_at
+  BEFORE UPDATE ON ingest_cursors
+  FOR EACH ROW EXECUTE FUNCTION email_kb_set_updated_at();

@@ -10,7 +10,10 @@ Loop:
 3. Compile any uncompiled raw files (small batch)
 4. Sleep --interval seconds and repeat
 
-State: stores last-seen timestamp in `.watch_state.json` so restarts resume.
+State: stores the last-seen cursor in the `ingest_cursors` table
+(cursor_name='gmail_history') so restarts resume. A legacy
+`.watch_state.json` file is migrated once on first run and renamed to
+`.watch_state.json.migrated`.
 
 Usage:
     uv run python scripts/watch_and_compile.py                 # 5-min poll, 10-email compile batches
@@ -41,6 +44,8 @@ from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.db.cursors import read_cursor  # noqa: E402
+from src.db.cursors import write_cursor  # noqa: E402
 from src.ingest.attachments import save_attachments  # noqa: E402
 from src.ingest.gmail import GmailClient  # noqa: E402
 from src.ingest.parser import generate_filename  # noqa: E402
@@ -56,7 +61,8 @@ structlog.configure(
 )
 logger = structlog.get_logger(__name__)
 
-STATE_FILE = REPO_ROOT / ".watch_state.json"
+LEGACY_STATE_FILE = REPO_ROOT / ".watch_state.json"
+CURSOR_NAME = "gmail_history"
 
 _STOP = False
 
@@ -71,14 +77,34 @@ signal.signal(signal.SIGTERM, _handle_sigterm)
 signal.signal(signal.SIGINT, _handle_sigterm)
 
 
-def load_state() -> dict:
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    return {}
+def load_last_seen() -> str | None:
+    """Return the persisted cursor value (ISO timestamp), or None.
 
+    Preference order:
+    1. `ingest_cursors` row for CURSOR_NAME.
+    2. One-time migration from `.watch_state.json` — if the DB cursor is
+       empty and the legacy file exists, copy its `last_seen` into the DB
+       and rename the file to `.watch_state.json.migrated` so we don't
+       re-migrate on the next start.
+    """
+    row = read_cursor(CURSOR_NAME)
+    if row is not None:
+        return row["history_id"]
 
-def save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    if LEGACY_STATE_FILE.exists():
+        legacy = json.loads(LEGACY_STATE_FILE.read_text())
+        last_seen = legacy.get("last_seen")
+        if last_seen:
+            write_cursor(CURSOR_NAME, last_seen)
+            LEGACY_STATE_FILE.rename(LEGACY_STATE_FILE.with_suffix(".json.migrated"))
+            logger.info(
+                "migrated .watch_state.json to ingest_cursors",
+                cursor_name=CURSOR_NAME,
+                history_id=last_seen,
+            )
+            return last_seen
+
+    return None
 
 
 def fetch_new_emails(
@@ -176,8 +202,7 @@ def main(
         )
         client.authenticate()
 
-    state = load_state()
-    last_seen = state.get("last_seen")
+    last_seen = load_last_seen()
     since = (
         datetime.fromisoformat(last_seen)
         if last_seen
@@ -205,10 +230,7 @@ def main(
 
             # Advance since cursor so next tick doesn't re-scan same window
             since = loop_start
-            state["last_seen"] = since.isoformat()
-            state["last_fetched"] = fetched
-            state["last_processed"] = processed
-            save_state(state)
+            write_cursor(CURSOR_NAME, since.isoformat())
 
         except Exception as e:  # noqa: BLE001
             logger.error("tick failed", error=str(e))
