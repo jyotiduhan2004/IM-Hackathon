@@ -68,6 +68,7 @@ def _load_messages_ddl() -> str:
       compiled_at       TIMESTAMPTZ,
       compile_attempts  INT NOT NULL DEFAULT 0,
       last_error        TEXT,
+      compile_model     TEXT,
       is_compiled       BOOLEAN GENERATED ALWAYS AS
                         (compile_state = 'compiled') STORED,
       created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

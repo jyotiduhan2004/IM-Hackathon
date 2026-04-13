@@ -211,3 +211,14 @@ CREATE TABLE IF NOT EXISTS message_touched_pages (
 -- "Which messages recently touched page X?" — the timeline-on-page lookup.
 CREATE INDEX IF NOT EXISTS message_touched_pages_page_idx
   ON message_touched_pages (page_id, compiled_at DESC);
+
+
+-- ---------------------------------------------------------------------------
+-- Per-message model A/B tracking (2026-04-13)
+--
+-- compile_all.py picks one model per batch from settings.model_pool;
+-- finish_message_compile stamps it here so we can join model → outcome.
+-- Existing rows pre-A/B get NULL — fine; only future compiles populate.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS compile_model TEXT;

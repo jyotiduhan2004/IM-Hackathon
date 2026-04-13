@@ -122,32 +122,45 @@ def claim_next_message(
         ).fetchone()
 
 
-def finish_message_compile(message_id: str) -> None:
-    """Mark a message as successfully compiled. Idempotent."""
+def finish_message_compile(message_id: str, compile_model: str | None = None) -> None:
+    """Mark a message as successfully compiled. Idempotent.
+
+    `compile_model` records which model in the A/B pool produced this
+    compile. Pass None for the legacy single-model flow (column stays
+    NULL — won't break any existing reports).
+    """
     with connect() as conn, conn.transaction():
         conn.execute(
             """
             UPDATE messages
                SET compile_state = 'compiled',
                    compiled_at = now(),
-                   last_error = NULL
+                   last_error = NULL,
+                   compile_model = COALESCE(%s, compile_model)
              WHERE message_id = %s
             """,
-            (message_id,),
+            (compile_model, message_id),
         )
 
 
-def fail_message_compile(message_id: str, error: str) -> None:
-    """Mark a message as failed. The next claim cycle will retry it."""
+def fail_message_compile(
+    message_id: str, error: str, compile_model: str | None = None
+) -> None:
+    """Mark a message as failed. The next claim cycle will retry it.
+
+    Records the model that failed so the A/B rollup can score
+    failure rates per model.
+    """
     with connect() as conn, conn.transaction():
         conn.execute(
             """
             UPDATE messages
                SET compile_state = 'failed',
-                   last_error = %s
+                   last_error = %s,
+                   compile_model = COALESCE(%s, compile_model)
              WHERE message_id = %s
             """,
-            (error, message_id),
+            (error, compile_model, message_id),
         )
 
 

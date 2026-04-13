@@ -18,16 +18,35 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM — reverted to z-ai/glm-4.6. glm-5.1 does NOT cache prompts
+    # LLM — single-model default (legacy single-model path). For A/B
+    # routing, set LLM_MODEL_POOL (comma-separated) and the per-batch
+    # selector in compile_all.py picks uniformly per batch.
+    #
+    # We default to z-ai/glm-4.6 because glm-5.1 does NOT cache prompts
     # through OpenRouter (verified 2026-04-13, see
-    # docs/reviews/prompt-caching-20260413.md); glm-4.6 caches ~20% of our
-    # 3000-token system prompt, which compounds over a full compile to a
-    # ~3-4x cost delta. Revisit when OpenRouter enables caching for
-    # z-ai/glm-5.x. Override via LLM_MODEL env var.
+    # docs/reviews/prompt-caching-20260413.md); glm-4.6 caches ~20% of
+    # our 3000-token system prompt, which compounds over a full compile
+    # to a ~3-4x cost delta.
     llm_model: str = "z-ai/glm-4.6"
+
+    # Per-batch model A/B pool — comma-separated. Empty → single-model
+    # (uses `llm_model` above). Each batch picks one uniformly at random
+    # and stamps the choice in `messages.compile_model` so we can join
+    # model → outcome later.
+    llm_model_pool: str = (
+        "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-4.6,z-ai/glm-5.1"
+    )
+
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+
+    @property
+    def model_pool(self) -> list[str]:
+        """Parsed `llm_model_pool` as a list. Empty → [llm_model]."""
+        if not self.llm_model_pool.strip():
+            return [self.llm_model]
+        return [m.strip() for m in self.llm_model_pool.split(",") if m.strip()]
 
     # Gmail
     gmail_credentials_path: str = "credentials.json"

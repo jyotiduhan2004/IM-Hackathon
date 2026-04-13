@@ -201,7 +201,9 @@ def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
     return cited
 
 
-def _mark_batch_compiled(batch: list, wiki_dir: Path) -> tuple[int, int, int]:
+def _mark_batch_compiled(
+    batch: list, wiki_dir: Path, compile_model: str | None = None
+) -> tuple[int, int, int]:
     """Mark only batch emails whose raw_path is actually cited in the wiki.
 
     Returns (marked, not_cited, missing).
@@ -211,10 +213,11 @@ def _mark_batch_compiled(batch: list, wiki_dir: Path) -> tuple[int, int, int]:
       - missing:  emails whose raw_path has no `messages` row at all —
         indicates backfill drift; logged as a warning.
 
+    `compile_model` records which A/B-pool model produced this batch so
+    we can later join model → outcome.
+
     The wiki-citation check is the safety net against the "agent said done
-    but actually stopped early" failure mode. A naïve "flip every batch
-    email on return" would corrupt state for emails the agent never
-    touched.
+    but actually stopped early" failure mode.
     """
     cited = _collect_cited_raw_paths(wiki_dir)
     marked, not_cited, missing = 0, 0, 0
@@ -232,20 +235,26 @@ def _mark_batch_compiled(batch: list, wiki_dir: Path) -> tuple[int, int, int]:
             )
             not_cited += 1
             continue
-        finish_message_compile(row["message_id"])
+        finish_message_compile(row["message_id"], compile_model=compile_model)
         marked += 1
     return marked, not_cited, missing
 
 
-def _mark_batch_failed(batch: list, error: str) -> int:
-    """Mark every email in a crashed batch as failed. Returns marked count."""
+def _mark_batch_failed(
+    batch: list, error: str, compile_model: str | None = None
+) -> int:
+    """Mark every email in a crashed batch as failed. Returns marked count.
+
+    Records the model that failed so per-model failure rates are
+    recoverable from the catalog later.
+    """
     trimmed = error[:500]
     marked = 0
     for path in _batch_paths(batch):
         row = find_by_raw_path(path)
         if row is None:
             continue
-        fail_message_compile(row["message_id"], trimmed)
+        fail_message_compile(row["message_id"], trimmed, compile_model=compile_model)
         marked += 1
     return marked
 
@@ -346,11 +355,14 @@ def main(
     wiki_dir = str(settings.wiki_dir)
     resolved_model = model or settings.llm_model
 
-    # Parse --model-pool. Empty list = no pool, use resolved_model for every
-    # batch. Non-empty list = sample one at random per batch.
-    pool: list[str] = (
-        [m.strip() for m in model_pool.split(",") if m.strip()] if model_pool else []
-    )
+    # Parse --model-pool. CLI flag overrides settings.model_pool. Empty
+    # final list = no pool (use `resolved_model` for every batch); a list
+    # = sample one at random per batch (sticky for the batch).
+    pool: list[str]
+    if model_pool is not None:
+        pool = [m.strip() for m in model_pool.split(",") if m.strip()]
+    else:
+        pool = settings.model_pool if len(settings.model_pool) > 1 else []
     if pool:
         click.echo(f"Model pool: {pool} (random pick per batch)")
 
@@ -472,7 +484,9 @@ def main(
                     recursion_limit=recursion_limit,
                     cache_stats=cache_cb,
                 )
-                marked, not_cited, missing = _mark_batch_compiled(batch, Path(wiki_dir))
+                marked, not_cited, missing = _mark_batch_compiled(
+                    batch, Path(wiki_dir), compile_model=batch_model
+                )
                 processed += marked
                 suffix_parts = []
                 if not_cited:
@@ -499,7 +513,7 @@ def main(
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
             except Exception as e:  # noqa: BLE001
                 logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
-                failed_marked = _mark_batch_failed(batch, str(e))
+                failed_marked = _mark_batch_failed(batch, str(e), compile_model=batch_model)
                 failed += failed_marked
                 click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
                 click.echo("Continuing with next batch...")
