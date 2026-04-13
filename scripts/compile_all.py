@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.budget import fetch_budget  # noqa: E402
+from src.compile.cache_stats import CacheStatsCallback  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
@@ -439,6 +440,7 @@ def main(
                 f"\n=== Batch {batch_idx}/{len(groups)} "
                 f"({len(batch)} emails, thread={thread_id[:12]}, earliest={earliest}) ==="
             )
+            cache_cb = CacheStatsCallback()
             try:
                 run_compilation(
                     instruction=instruction,
@@ -446,6 +448,7 @@ def main(
                     raw_dir=raw_dir,
                     wiki_dir=wiki_dir,
                     recursion_limit=recursion_limit,
+                    cache_stats=cache_cb,
                 )
                 marked, not_cited, missing = _mark_batch_compiled(batch, Path(wiki_dir))
                 processed += marked
@@ -456,10 +459,16 @@ def main(
                     )
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
+                cache = cache_cb.snapshot()
+                suffix_parts.append(
+                    f"cache: {cache['cached_tokens']}/{cache['prompt_tokens']} "
+                    f"({cache['cache_pct']}%) across {cache['turns']} turns"
+                )
                 suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
                 click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
                 log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
-                log_notes = "; ".join(suffix_parts) if suffix_parts else ""
+                log_notes_parts = list(suffix_parts)
+                log_notes = "; ".join(log_notes_parts) if log_notes_parts else ""
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
             except Exception as e:  # noqa: BLE001
                 logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))

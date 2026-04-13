@@ -18,9 +18,13 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM — default to z-ai/glm-5.1 (callable on the Intermesh LiteLLM proxy,
-    # newer than glm-4.6). Override via LLM_MODEL env var.
-    llm_model: str = "z-ai/glm-5.1"
+    # LLM — reverted to z-ai/glm-4.6. glm-5.1 does NOT cache prompts
+    # through OpenRouter (verified 2026-04-13, see
+    # docs/reviews/prompt-caching-20260413.md); glm-4.6 caches ~20% of our
+    # 3000-token system prompt, which compounds over a full compile to a
+    # ~3-4x cost delta. Revisit when OpenRouter enables caching for
+    # z-ai/glm-5.x. Override via LLM_MODEL env var.
+    llm_model: str = "z-ai/glm-4.6"
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

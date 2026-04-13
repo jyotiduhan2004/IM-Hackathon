@@ -25,6 +25,13 @@ Detailed incident postmortems live under `docs/incidents/`.
   brand reused; the IAP OAuth Admin API was permanently shut down
   2026-03-19 so new projects fall back to a Google-managed OAuth
   client by default.
+- Per-batch prompt-caching stats: `CacheStatsCallback`
+  (`src/compile/cache_stats.py`) hooks every LLM turn and accumulates
+  `input_tokens`, `cache_read`, `output_tokens`. `compile_all.py` prints
+  the per-batch cache-hit rate after each batch and writes it into
+  `wiki/log.md`. Surfaces when a model silently stops caching, which is
+  exactly what happened today with the glm-5.1 experiment — see
+  `docs/reviews/prompt-caching-20260413.md`.
 - Per-source role annotation on rendered entity pages (From ✍️ / To 📬 /
   CC 📋 / body 💬) in `mkdocs_hooks.py::_render_raw_source`.
 - 15-minute per-batch timeout wrapper in `scripts/compile_overnight.sh`.
@@ -39,6 +46,13 @@ Detailed incident postmortems live under `docs/incidents/`.
 - `docs/incidents/` directory holding postmortems (carved out of CHANGELOG).
 
 ### Changed
+- Default `LLM_MODEL` reverted `z-ai/glm-5.1` → `z-ai/glm-4.6`. glm-5.1
+  does NOT cache prompts through OpenRouter on this proxy (zero cached
+  tokens across 5 sequential identical-prompt calls), while glm-4.6 caches
+  ~20% of our 3000-token system prompt, compounding to a ~3.66× cost
+  delta on a batch. Switch back to glm-5.1 once OpenRouter / Intermesh
+  enables caching for `z-ai/glm-5.x` routes. See
+  `docs/reviews/prompt-caching-20260413.md`.
 - CHANGELOG restructured to Keep-a-Changelog format. Historical
   postmortems moved to `docs/incidents/2026-04-13-phase0-bootstrap.md`.
 

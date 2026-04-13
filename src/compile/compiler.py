@@ -558,6 +558,7 @@ def run_compilation(
     raw_dir: str = "raw",
     wiki_dir: str = "wiki",
     recursion_limit: int = 150,
+    cache_stats: Any | None = None,
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 
@@ -565,6 +566,10 @@ def run_compilation(
     typically takes 10-20 agent steps (read, classify, read existing pages,
     write/edit pages, stamp timestamps, mark compiled). Bump higher if batches
     hit the limit.
+
+    Pass a `CacheStatsCallback` as `cache_stats` to capture per-batch prompt-
+    caching metrics (hit rate, cached tokens, total tokens). See
+    `src/compile/cache_stats.py`.
     """
     agent = create_compiler(model_name=model_name, raw_dir=raw_dir, wiki_dir=wiki_dir)
 
@@ -572,6 +577,8 @@ def run_compilation(
     lf = get_langfuse_handler()
     if lf:
         callbacks.append(lf)
+    if cache_stats is not None:
+        callbacks.append(cache_stats)
 
     config: dict[str, Any] = {}
     if callbacks:
