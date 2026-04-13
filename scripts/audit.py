@@ -125,7 +125,7 @@ def _section_validator(buf: StringIO) -> None:
     """Reuse validate_wiki's checks; report counts + first 10 errors."""
     from scripts import validate_wiki  # noqa: PLC0415
 
-    errors = validate_wiki.run(settings.wiki_dir)
+    errors, _warnings = validate_wiki.run(settings.wiki_dir)
     buf.write(f"## Validator: **{len(errors)}** error(s)\n\n")
     if not errors:
         buf.write("Wiki is clean.\n\n")

@@ -4,7 +4,7 @@ Complements lint_wiki.py (which is advisory). validate_wiki.py fails the run
 if there's corruption that MUST be fixed before moving on. Intended to be
 invoked after every compile_all batch so we notice damage immediately.
 
-Checks (all ERROR severity):
+Checks (ERROR severity — exit code 1):
 - Page has parseable YAML frontmatter
 - Required fields present: title, page_type, status
 - page_type matches the directory the file lives in
@@ -12,10 +12,16 @@ Checks (all ERROR severity):
 - No "orphan body" where frontmatter was destroyed (only last_compiled present)
 - status is one of the allowed values
 
+Checks (WARN severity — stderr only, no exit-code effect):
+- Entity page has `email:` in frontmatter (entity-missing-email)
+- Entity `email:` is a valid RFC-ish address (entity-invalid-email)
+- Entity slug matches email_to_slug(email) (entity-slug-mismatch —
+  legacy display-name slugs are flagged but not blocked)
+
 Usage:
-    uv run python scripts/validate_wiki.py            # report + exit 1 if bad
-    uv run python scripts/validate_wiki.py --quiet    # only errors to stderr
-    uv run python scripts/validate_wiki.py --list-bad # print bad file paths, one per line
+    uv run python scripts/validate_wiki.py            # report + exit 1 on errors
+    uv run python scripts/validate_wiki.py --quiet    # suppress warnings, only errors
+    uv run python scripts/validate_wiki.py --list-bad # print bad file paths (errors only)
 """
 
 from __future__ import annotations
@@ -55,7 +61,35 @@ class Error:
     reason: str
 
 
+@dataclass
+class ValidationWarning:
+    page: Path
+    reason: str
+    check: str
+
+
 from src.utils import split_frontmatter  # noqa: E402
+
+# Entity identity helpers — prefer the canonical implementation in
+# src.compile.entities (shipped by W0). Fallback to inline regex when that
+# module isn't on the current branch, so this validator stays runnable even
+# on main before W0 merges.
+try:
+    from src.compile.entities import email_to_slug as _email_to_slug
+    from src.compile.entities import is_valid_email as _is_valid_email
+
+    _HAS_ENTITY_HELPERS = True
+except ImportError:
+    _HAS_ENTITY_HELPERS = False
+    _FALLBACK_EMAIL_RE = re.compile(r"^[a-z0-9._+\-]+@[a-z0-9.\-]+\.[a-z]+$")
+
+    def _is_valid_email(email: str) -> bool:
+        return bool(_FALLBACK_EMAIL_RE.match(email.strip().lower()))
+
+    def _email_to_slug(email: str) -> str:  # pragma: no cover - fallback only
+        raise NotImplementedError(
+            "email_to_slug unavailable without src.compile.entities"
+        )
 
 
 class _DuplicateKeyLoader(yaml.SafeLoader):
@@ -403,7 +437,66 @@ def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
     return errors
 
 
-def run(wiki_dir: Path) -> list[Error]:
+def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
+    """Entity pages should carry `email:` and use a deterministic slug.
+
+    Three WARN-level signals:
+    - `entity-missing-email`: no `email:` in frontmatter
+    - `entity-invalid-email`: `email:` is set but doesn't match an RFC-ish shape
+    - `entity-slug-mismatch`: filename stem doesn't match email_to_slug(email);
+      most existing pages were named after display names, so this is legacy
+      drift rather than corruption. Skipped if src.compile.entities isn't
+      importable (keeps this validator runnable on branches without W0).
+    """
+    warnings: list[ValidationWarning] = []
+    ent = wiki_dir / "entities"
+    if not ent.exists():
+        return warnings
+    for path in sorted(ent.glob("*.md")):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        fm, _ = _extract_frontmatter(content)
+        if not fm:
+            # Frontmatter corruption is already an ERROR in validate_page.
+            continue
+        email = fm.get("email")
+        if not isinstance(email, str) or not email.strip():
+            warnings.append(
+                ValidationWarning(
+                    path, "missing `email:` in frontmatter", "entity-missing-email"
+                )
+            )
+            continue
+        email_lc = email.strip().lower()
+        if not _is_valid_email(email_lc):
+            warnings.append(
+                ValidationWarning(
+                    path,
+                    f"`email:` is not a valid address: {email!r}",
+                    "entity-invalid-email",
+                )
+            )
+            continue
+        if _HAS_ENTITY_HELPERS:
+            try:
+                canonical = _email_to_slug(email_lc)
+            except (TypeError, ValueError):
+                continue
+            if path.stem != canonical:
+                warnings.append(
+                    ValidationWarning(
+                        path,
+                        f"slug {path.stem!r} != email_to_slug({email_lc!r})={canonical!r} "
+                        "(legacy display-name slug)",
+                        "entity-slug-mismatch",
+                    )
+                )
+    return warnings
+
+
+def run(wiki_dir: Path) -> tuple[list[Error], list[ValidationWarning]]:
     errors: list[Error] = []
     for category in CATEGORY_TO_TYPE:
         cat_dir = wiki_dir / category
@@ -419,34 +512,44 @@ def run(wiki_dir: Path) -> list[Error]:
     errors.extend(check_yaml_integrity(wiki_dir))
     errors.extend(check_duplicate_headings(wiki_dir))
     errors.extend(check_broken_wikilinks(wiki_dir))
-    return errors
+    warnings = check_entity_identity(wiki_dir)
+    return errors, warnings
 
 
 @click.command()
-@click.option("--quiet", is_flag=True, help="Only print errors (to stderr)")
-@click.option("--list-bad", is_flag=True, help="Print bad page paths, one per line")
+@click.option("--quiet", is_flag=True, help="Suppress warnings; still print errors")
+@click.option("--list-bad", is_flag=True, help="Print bad page paths (errors only), one per line")
 def main(quiet: bool, list_bad: bool) -> None:
-    """Validate wiki/; exit non-zero if any page is broken."""
+    """Validate wiki/; exit non-zero on ERRORs only (warnings are informational)."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
         click.echo(f"ERROR: {wiki_dir} not found", err=True)
         sys.exit(2)
 
-    errors = run(wiki_dir)
+    errors, warnings = run(wiki_dir)
 
     if list_bad:
         for e in sorted({str(e.page) for e in errors}):
             click.echo(e)
         sys.exit(1 if errors else 0)
 
+    if errors:
+        click.echo(f"✗ {len(errors)} validation error(s):", err=quiet)
+        for e in errors:
+            click.echo(f"  {e.page}: {e.reason}", err=quiet)
+    if warnings and not quiet:
+        click.echo(f"⚠ {len(warnings)} warning(s):", err=True)
+        for w in warnings:
+            click.echo(f"  [{w.check}] {w.page}: {w.reason}", err=True)
+
     if not errors:
         if not quiet:
-            click.echo("✓ Wiki is valid.")
+            if warnings:
+                click.echo(f"✓ no errors, {len(warnings)} warnings")
+            else:
+                click.echo("✓ Wiki is valid.")
         sys.exit(0)
 
-    click.echo(f"✗ {len(errors)} validation error(s):", err=quiet)
-    for e in errors:
-        click.echo(f"  {e.page}: {e.reason}", err=quiet)
     sys.exit(1)
 
 
