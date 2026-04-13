@@ -26,7 +26,20 @@ from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
 
-SUFFIX_RE = re.compile(r"^(.+?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*)$")
+SUFFIX_RE = re.compile(r"^(.+?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*|clean)$")
+# Bare-numeric suffix: "alok-kumar2", "deepak-jain1", "sahil-sharma2".
+# Matched only when the non-digit base also exists as a page.
+NUMERIC_SUFFIX_RE = re.compile(r"^(.+?)(\d+)$")
+# US/UK spelling pairs (common ones the compiler has tripped over).
+SPELLING_PAIRS = (
+    ("labelling", "labeling"),
+    ("optimise", "optimize"),
+    ("behaviour", "behavior"),
+    ("favourite", "favorite"),
+    ("colour", "color"),
+    ("centre", "center"),
+    ("organisation", "organization"),
+)
 CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
@@ -83,6 +96,37 @@ def _rewrite_wikilinks(wiki_dir: Path, old: str, new: str, dry_run: bool) -> int
     return count
 
 
+def _find_variant_base(stem: str, stems: set[str]) -> str | None:
+    """Given a page stem, return the base-canonical stem if this is a variant.
+
+    Tries three patterns in order:
+    1. Named suffix (`-clean`, `-new`, `-v2`, etc.) — base is stripped prefix.
+    2. Bare numeric suffix (`alok-kumar2`) — base is the non-digit prefix IF
+       it exists. Avoids false-positive on legit slugs like `himanshu-jain01`
+       when `himanshu-jain` doesn't exist.
+    3. US/UK spelling variant — swap and see if the sibling exists.
+
+    Returns the base stem if a variant is detected AND the base exists,
+    else None.
+    """
+    match = SUFFIX_RE.match(stem)
+    if match and match.group(1) in stems:
+        return match.group(1)
+
+    match = NUMERIC_SUFFIX_RE.match(stem)
+    if match and match.group(1) in stems:
+        return match.group(1)
+
+    for uk, us in SPELLING_PAIRS:
+        for a, b in ((uk, us), (us, uk)):
+            if a in stem:
+                candidate = stem.replace(a, b, 1)
+                if candidate != stem and candidate in stems:
+                    # canonical = alphabetically-first so merges are stable
+                    return min(stem, candidate)
+    return None
+
+
 @click.command()
 @click.option("--dry-run", is_flag=True, help="Report without merging")
 def main(dry_run: bool) -> None:
@@ -96,10 +140,9 @@ def main(dry_run: bool) -> None:
             continue
         stems = {p.stem for p in cat_dir.glob("*.md")}
         for variant_path in sorted(cat_dir.glob("*.md")):
-            match = SUFFIX_RE.match(variant_path.stem)
-            if not match:
+            base_stem = _find_variant_base(variant_path.stem, stems)
+            if base_stem is None or base_stem == variant_path.stem:
                 continue
-            base_stem = match.group(1)
             base_path = cat_dir / f"{base_stem}.md"
             if not base_path.exists() or base_stem not in stems:
                 skipped += 1

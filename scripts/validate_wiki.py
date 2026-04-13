@@ -58,6 +58,31 @@ class Error:
 from src.utils import split_frontmatter  # noqa: E402
 
 
+class _DuplicateKeyLoader(yaml.SafeLoader):
+    """PyYAML loader that raises on duplicate mapping keys.
+
+    Default SafeLoader silently keeps the last value, hiding corruption like
+    `last_compiled:` appearing twice. We need to flag those for humans.
+    """
+
+
+def _construct_mapping_strict(loader: yaml.Loader, node: yaml.nodes.MappingNode) -> dict:
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=False)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"duplicate key: {key!r}", key_node.start_mark
+            )
+        mapping[key] = loader.construct_object(value_node, deep=False)
+    return mapping
+
+
+_DuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_strict
+)
+
+
 def _extract_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Line-aware frontmatter extraction. See src.utils.split_frontmatter."""
     fm_text, body = split_frontmatter(content)
@@ -143,26 +168,36 @@ def check_duplicates(wiki_dir: Path) -> list[Error]:
     return errors
 
 
+SUFFIX_PATTERN = re.compile(
+    r"^(.*?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*|clean)$"
+)
+NUMERIC_SUFFIX_PATTERN = re.compile(r"^(.+?)(\d+)$")
+SPELLING_PAIRS = (
+    ("labelling", "labeling"),
+    ("optimise", "optimize"),
+    ("behaviour", "behavior"),
+    ("favourite", "favorite"),
+    ("colour", "color"),
+    ("centre", "center"),
+    ("organisation", "organization"),
+)
+
+
 def check_duplicate_suffix_variants(wiki_dir: Path) -> list[Error]:
-    """Flag pages with -new, -v2, -copy, -latest, -updated suffix-twin pattern.
+    """Flag pages with suffix-twin pattern: `-new`, `-v2`, `-clean`, etc.
 
-    The compiler occasionally creates sibling pages with these suffixes when
-    it can't tell a page already exists (e.g., varnika-singh.md plus
-    varnika-singh-new.md plus varnika-singh-v2.md). All three end up with
-    near-identical bodies. This detects the pattern so we can merge them.
+    The compiler creates sibling pages with these suffixes when it can't
+    tell a page already exists (e.g. `varnika-singh.md` plus
+    `varnika-singh-new.md`). Detects the pattern so the merger can collapse them.
     """
-    import re as _re
-
     errors: list[Error] = []
-    suffix_re = _re.compile(r"^(.*?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*)$")
-
     for category in CATEGORY_TO_TYPE:
         cat = wiki_dir / category
         if not cat.exists():
             continue
         stems = {p.stem for p in cat.glob("*.md")}
         for p in cat.glob("*.md"):
-            match = suffix_re.match(p.stem)
+            match = SUFFIX_PATTERN.match(p.stem)
             if not match:
                 continue
             base = match.group(1)
@@ -171,9 +206,161 @@ def check_duplicate_suffix_variants(wiki_dir: Path) -> list[Error]:
                     Error(
                         p,
                         f"suspected duplicate of {base} "
-                        f"(suffix '{match.group(2)}' — likely agent variant, should be merged)",
+                        f"(suffix '{match.group(2)}' — agent variant, should be merged)",
                     )
                 )
+    return errors
+
+
+def check_numeric_variants(wiki_dir: Path) -> list[Error]:
+    """Flag `alok-kumar2` when `alok-kumar` exists in the same category.
+
+    Only fires when the non-digit base exists — avoids flagging legit slugs
+    with embedded digits like `himanshu-jain01` when `himanshu-jain` does
+    not exist.
+    """
+    errors: list[Error] = []
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        stems = {p.stem for p in cat.glob("*.md")}
+        for p in cat.glob("*.md"):
+            match = NUMERIC_SUFFIX_PATTERN.match(p.stem)
+            if not match:
+                continue
+            base = match.group(1)
+            if base in stems and base != p.stem:
+                errors.append(
+                    Error(
+                        p,
+                        f"numeric-suffix duplicate of {base} "
+                        f"(trailing '{match.group(2)}' — should be merged)",
+                    )
+                )
+    return errors
+
+
+def check_spelling_variants(wiki_dir: Path) -> list[Error]:
+    """Flag US/UK spelling pairs sitting in the same category.
+
+    Example: `dspy-gepa-...-labeling` and `dspy-gepa-...-labelling-pipeline`
+    co-exist — same topic, different spelling. Merger picks a canonical.
+    """
+    errors: list[Error] = []
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        stems = {p.stem for p in cat.glob("*.md")}
+        seen: set[tuple[str, str]] = set()
+        for stem in stems:
+            for uk, us in SPELLING_PAIRS:
+                for a, b in ((uk, us), (us, uk)):
+                    if a in stem:
+                        sibling = stem.replace(a, b, 1)
+                        if sibling != stem and sibling in stems:
+                            pair = tuple(sorted((stem, sibling)))
+                            if pair in seen:
+                                continue
+                            seen.add(pair)
+                            errors.append(
+                                Error(
+                                    cat / f"{pair[1]}.md",
+                                    f"US/UK spelling twin of {pair[0]} "
+                                    f"({a} ↔ {b}); pick a canonical",
+                                )
+                            )
+    return errors
+
+
+def check_same_email_duplicates(wiki_dir: Path) -> list[Error]:
+    """Two entity pages declaring the same `email:` → same person, two slugs."""
+    errors: list[Error] = []
+    by_email: dict[str, list[Path]] = {}
+    ent = wiki_dir / "entities"
+    if not ent.exists():
+        return errors
+    for p in ent.glob("*.md"):
+        try:
+            content = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        fm, body = _extract_frontmatter(content)
+        email = fm.get("email")
+        if not isinstance(email, str):
+            # Fall back to scanning the body for "Email: x@y"
+            m = re.search(
+                r"(?mi)^\s*(?:\*\*)?email(?:\*\*)?[:\s]+"
+                r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+)",
+                body,
+            )
+            if m:
+                email = m.group(1).lower()
+        if email:
+            by_email.setdefault(email.lower(), []).append(p)
+    for email, paths in by_email.items():
+        if len(paths) > 1:
+            peers = ", ".join(sorted(p.stem for p in paths))
+            for p in paths:
+                errors.append(
+                    Error(p, f"shares email '{email}' with: {peers} — same person, pick canonical")
+                )
+    return errors
+
+
+def check_yaml_integrity(wiki_dir: Path) -> list[Error]:
+    """Parse each page's frontmatter with a strict loader that rejects dup keys.
+
+    Default `yaml.safe_load` silently keeps the last duplicate — hiding bugs
+    like a page ending up with two `last_compiled:` keys after a messy
+    edit_file pass.
+    """
+    errors: list[Error] = []
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        for path in cat.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm_text, _ = split_frontmatter(content)
+            if not fm_text:
+                continue
+            try:
+                yaml.load(fm_text, Loader=_DuplicateKeyLoader)
+            except yaml.YAMLError as e:
+                errors.append(Error(path, f"YAML integrity: {e}"))
+    return errors
+
+
+def check_duplicate_headings(wiki_dir: Path) -> list[Error]:
+    """Fail when a body has two H2 with the same text.
+
+    Most common cause: the updater appends a new `## Related` section
+    instead of merging into the existing one.
+    """
+    heading_re = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+    errors: list[Error] = []
+    for category in CATEGORY_TO_TYPE:
+        cat = wiki_dir / category
+        if not cat.exists():
+            continue
+        for path in cat.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            _, body = split_frontmatter(content)
+            headings = [h.strip() for h in heading_re.findall(body)]
+            seen: dict[str, int] = {}
+            for h in headings:
+                seen[h] = seen.get(h, 0) + 1
+            dups = sorted(h for h, n in seen.items() if n > 1)
+            if dups:
+                errors.append(Error(path, f"duplicate H2 heading(s): {dups}"))
     return errors
 
 
@@ -226,6 +413,11 @@ def run(wiki_dir: Path) -> list[Error]:
             errors.extend(validate_page(path))
     errors.extend(check_duplicates(wiki_dir))
     errors.extend(check_duplicate_suffix_variants(wiki_dir))
+    errors.extend(check_numeric_variants(wiki_dir))
+    errors.extend(check_spelling_variants(wiki_dir))
+    errors.extend(check_same_email_duplicates(wiki_dir))
+    errors.extend(check_yaml_integrity(wiki_dir))
+    errors.extend(check_duplicate_headings(wiki_dir))
     errors.extend(check_broken_wikilinks(wiki_dir))
     return errors
 
