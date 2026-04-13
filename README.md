@@ -22,6 +22,12 @@ The repo is **not** yet a polished team wiki. Live ingestion, strong search,
 and chatbot-style querying are still future phases, and entity pages remain
 noisy compared to topic pages.
 
+Relevant design docs:
+
+- [Internal wiki structure](docs/issues/09-internal-wiki-structure.md)
+- [Phase 1 implementation plan](docs/issues/10-phase1-implementation-plan.md)
+- [User personas and knowledge flows](docs/issues/11-user-personas-and-knowledge-flows.md)
+
 ## What this project is optimizing for
 
 Near-term, this project should optimize for four things:
