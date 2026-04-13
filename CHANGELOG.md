@@ -11,6 +11,20 @@ Detailed incident postmortems live under `docs/incidents/`.
 ## [Unreleased] — 2026-04-13
 
 ### Added
+- GCP Phase A viewer deploy scaffolding (PR #36): `Dockerfile` +
+  `nginx.conf` (python:3.12-slim builder → nginx:alpine runtime);
+  `.dockerignore` + `.gcloudignore` scoped so `mkdocs_hooks.py` can still
+  inline the Sources block from `raw/*.md` at build time; idempotent
+  `scripts/gcp/bootstrap.sh` (GCS bucket with versioning + 180-day
+  noncurrent lifecycle + required APIs); `scripts/gcp/deploy-viewer.sh`
+  (single-call `gcloud run deploy --iap` + domain-scoped
+  `iap.httpsResourceAccessor` grant); `make bootstrap` / `make publish`;
+  phased plan in `docs/gcp-migration.md`. Defaults target
+  `voice-eval-stack-im` / `asia-south1` / bucket `indiamart-email-kb`,
+  IAP gated to `domain:indiamart.com`. Existing `Indiamart AI` OAuth
+  brand reused; the IAP OAuth Admin API was permanently shut down
+  2026-03-19 so new projects fall back to a Google-managed OAuth
+  client by default.
 - Per-source role annotation on rendered entity pages (From ✍️ / To 📬 /
   CC 📋 / body 💬) in `mkdocs_hooks.py::_render_raw_source`.
 - 15-minute per-batch timeout wrapper in `scripts/compile_overnight.sh`.

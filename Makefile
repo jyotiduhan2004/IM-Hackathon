@@ -1,4 +1,4 @@
-.PHONY: setup sync ingest compile lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean help
+.PHONY: setup sync ingest compile lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -80,3 +80,13 @@ wiki-build: ## Build static wiki site into ./site/ for deployment
 	uv run mkdocs build
 
 serve: wiki ## Alias for `make wiki`
+
+# === GCP Deployment (see docs/gcp-migration.md) ===
+
+bootstrap: ## One-time GCP bootstrap: create bucket + enable APIs (idempotent)
+	bash scripts/gcp/bootstrap.sh
+
+publish: ## Sync raw/wiki to GCS + redeploy Cloud Run viewer (Cloud Build rebuilds the site)
+	gsutil -m rsync -r raw/  gs://indiamart-email-kb/raw/
+	gsutil -m rsync -r wiki/ gs://indiamart-email-kb/wiki/
+	bash scripts/gcp/deploy-viewer.sh

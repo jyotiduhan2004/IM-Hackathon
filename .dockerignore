@@ -1,0 +1,56 @@
+# Keep only what the viewer image needs: Dockerfile, nginx.conf, mkdocs.yml,
+# mkdocs_hooks.py, and wiki/. Everything else is excluded.
+
+.git
+.gitignore
+.github
+.venv
+.claude
+.python-version
+
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+.env
+.env.local
+.env.*
+!.env.example
+
+token.json
+credentials.json
+
+src
+scripts
+tests
+# Keep raw/*.md so mkdocs_hooks.py can inline the "Sources" section on each
+# page. Only exclude the big binary attachments.
+raw/attachments
+
+docs
+README.md
+CHANGELOG.md
+CLAUDE.md
+AGENTS.md
+
+site
+logs
+large_tool_results
+.snapshots
+.pytest_cache
+htmlcov
+.coverage
+coverage.xml
+node_modules
+
+Makefile
+pyproject.toml
+uv.lock
+
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo

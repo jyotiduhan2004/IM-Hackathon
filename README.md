@@ -275,6 +275,29 @@ email-knowledge-base/
 - Every answer cites sources, declares recency status
 - Query answers compiled back into wiki
 
+## Deploying to GCP
+
+The wiki is served read-only on Cloud Run behind Identity-Aware Proxy, accessible
+to the Workspace org. See `docs/gcp-migration.md` for the full phased plan.
+
+One-time setup (Owner/Editor on the target GCP project required, OAuth consent
+screen must already be configured Internal):
+
+```bash
+make bootstrap        # creates GCS bucket w/ versioning, enables APIs
+```
+
+Publish the current local `wiki/` to the deployed viewer:
+
+```bash
+make publish          # mkdocs build → rsync to GCS → redeploy Cloud Run
+```
+
+Defaults target project `voice-eval-stack-im`, region `asia-south1`, bucket
+`indiamart-email-kb`, service `email-kb-viewer`, and IAP domain `indiamart.com`.
+Override via env vars (`GCP_PROJECT`, `GCP_REGION`, `GCP_BUCKET`, `GCP_SERVICE`,
+`GCP_IAP_DOMAIN`) passed to the scripts in `scripts/gcp/`.
+
 ## References
 
 - [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — Core pattern
