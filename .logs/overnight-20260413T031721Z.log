@@ -1,0 +1,13 @@
+Found 6579 uncompiled emails total.
+Processing oldest 20 this run (chronological).
+Pre-compile snapshot: .snapshots/pre-compile-20260413T031725Z/wiki
+Compiling in batches of 8...
+Model: z-ai/glm-4.6
+Wiki dir: wiki
+Budget (pre-run): $17.7387 spent of $20.00 ($2.26 left) [88.69%] — key=poc-aa@indiamart.com
+
+Thread-grouped into 17 batches (avg 1.2 emails/batch)
+
+=== Batch 1/17 (1 emails, thread=19b7f245e2ce, earliest=2026-01-03) ===
+[2m2026-04-13T03:17:25.878909Z[0m [[32m[1minfo     [0m] [1mcreating wiki compiler        [0m [36mmodel[0m=[35mz-ai/glm-4.6[0m [36mvia_proxy[0m=[35mTrue[0m
+[2m2026-04-13T03:17:26.145042Z[0m [[32m[1minfo     [0m] [1mrunning compilation           [0m [36minstruction[0m=[35m'Compile the following 1 uncompiled raw emails from one thread (thread_id=19b7f245e2ceba7a, earliest='[0m [36mrecursion_limit[0m=[35m150[0m

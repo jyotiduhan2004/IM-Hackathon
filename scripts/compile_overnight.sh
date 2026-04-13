@@ -68,8 +68,16 @@ while true; do
   log "launching compile_all --batch-size ${BATCH_SIZE} --limit ${LIMIT}"
   budget_before="$remaining"
 
-  if ! uv run python scripts/compile_all.py --batch-size "$BATCH_SIZE" --limit "$LIMIT" > "$run_log" 2>&1; then
-    log "WARN: compile_all exited non-zero (see $run_log); continuing after 30s"
+  # 15-min per-batch timeout so stuck LLM calls don't hang the whole night
+  # (gtimeout is GNU coreutils on macOS; falls back to plain run if absent)
+  TIMEOUT_BIN="$(command -v gtimeout || command -v timeout || true)"
+  if [ -n "$TIMEOUT_BIN" ]; then
+    CMD="$TIMEOUT_BIN --kill-after=30 900 uv run python scripts/compile_all.py --batch-size $BATCH_SIZE --limit $LIMIT"
+  else
+    CMD="uv run python scripts/compile_all.py --batch-size $BATCH_SIZE --limit $LIMIT"
+  fi
+  if ! $CMD > "$run_log" 2>&1; then
+    log "WARN: compile_all exited non-zero or timed out (see $run_log); continuing after 30s"
     sleep 30
     continue
   fi
