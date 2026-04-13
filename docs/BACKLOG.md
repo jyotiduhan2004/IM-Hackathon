@@ -34,6 +34,42 @@ improvement.
 
 ---
 
+## Verify prompt caching is actually working (2026-04-13)
+
+https://openrouter.ai/docs/guides/best-practices/prompt-caching#provider-sticky-routing
+
+**Why it matters**: every compile batch sends the same ~6 KB system prompt
++ accumulating tool-call history. If prompt caching isn't hitting, we're
+paying for hot tokens on every turn. Overnight we burned $15.69 on 187
+messages — plausibly ~half of that is uncached repeat context.
+
+**Our stack**: LiteLLM proxy → OpenRouter → `z-ai/glm-4.6`. Two open
+questions:
+
+1. Does `z-ai/glm-4.6` even support prompt caching on any of its OpenRouter
+   providers? (Not all do; Anthropic/OpenAI models do by default, Chinese
+   models often don't.)
+2. Does LiteLLM pass through the OpenRouter provider-sticky-routing hint
+   needed for cache hits? The hint usually goes via
+   `extra_body={"provider": {"order": [...], "allow_fallbacks": false}}` or
+   a request header like `X-Title`.
+
+**How to test cheaply** (~$2–5):
+- Run a compile batch with `litellm --detailed_debug`; capture the raw
+  OpenRouter response for each turn. Look for
+  `usage.prompt_tokens_details.cached_tokens > 0`.
+- Compare the same batch with and without provider-sticky-routing
+  configured via `extra_body`.
+- If cached_tokens is 0 either way, the model doesn't support caching
+  through this route.
+
+**If caching doesn't work**: move to a Claude model (Haiku 4.5 or Sonnet
+4.6) — both cache natively via LiteLLM, 90% discount on hot context. Cost
+comparison on our workload: a 4× token savings on cached reads should pay
+for Claude's higher per-token price at our mix.
+
+---
+
 ## Reading list — Anthropic engineering posts (2026-04-13)
 
 User flagged these to digest "eventually, not right away." Once read, pull out
