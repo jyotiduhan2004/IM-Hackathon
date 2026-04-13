@@ -675,6 +675,236 @@ The referenced Anthropic material points in the same direction:
 That matches what this repo needs: fewer generic file operations in the main
 loop, more wiki-shaped primitives.
 
+### Database-backed tools
+
+The database should become the primary structured context layer for the agent.
+
+The current schema already supports this:
+
+- `messages` for queue state and source-document metadata
+- `users` for canonical participant identity
+- `threads` for thread-level grouping
+- `message_participants` for from/to/cc structure
+- `wiki_pages` for canonical page metadata
+- `message_touched_pages` for provenance joins
+- `compile_runs` for run-level observability
+- `ingest_cursors` for source sync state
+
+Relevant code:
+
+- [src/db/schema.sql](/Users/amtagrwl/git/email-knowledge-base/src/db/schema.sql)
+- [src/db/messages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/messages.py)
+- [src/db/users.py](/Users/amtagrwl/git/email-knowledge-base/src/db/users.py)
+- [src/db/threads.py](/Users/amtagrwl/git/email-knowledge-base/src/db/threads.py)
+- [src/db/participants.py](/Users/amtagrwl/git/email-knowledge-base/src/db/participants.py)
+- [src/db/wiki_pages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/wiki_pages.py)
+- [src/db/touched_pages.py](/Users/amtagrwl/git/email-knowledge-base/src/db/touched_pages.py)
+
+Recommended rule:
+
+- the agent should almost never query raw files first when a structured DB lookup can answer the question
+
+#### Recommended DB-backed tool set
+
+##### `db_get_message`
+
+```python
+def db_get_message(message_id: str | None = None, raw_path: str | None = None) -> dict:
+    """
+    Returns one message row with subject, sender, date, thread_id, compile state,
+    and basic provenance metadata.
+    """
+```
+
+Use for:
+
+- locating a message deterministically
+- bridging from raw path to message id
+- checking compile state before or after processing
+
+##### `db_get_thread`
+
+```python
+def db_get_thread(thread_id: str, include_messages: bool = True) -> dict:
+    """
+    Returns thread metadata plus chronologically ordered message summaries.
+    """
+```
+
+Use for:
+
+- compiling thread-aware topic updates
+- understanding how a discussion evolved
+- deciding whether a topic page or timeline page is warranted
+
+##### `db_get_user`
+
+```python
+def db_get_user(email: str) -> dict:
+    """
+    Returns canonical user metadata, display names, first_seen_at, last_seen_at.
+    """
+```
+
+Use for:
+
+- resolving people deterministically
+- avoiding name-collision logic in the prompt
+- showing better entity-page context
+
+##### `db_list_participants`
+
+```python
+def db_list_participants(
+    message_id: str | None = None,
+    thread_id: str | None = None,
+    role: str | None = None,
+) -> dict:
+    """
+    Returns structured from/to/cc participants for a message or thread.
+    """
+```
+
+Use for:
+
+- deciding whether someone is materially involved or just copied
+- building high-confidence entity provenance
+- separating strong and weak evidence for person pages
+
+##### `db_resolve_page`
+
+```python
+def db_resolve_page(
+    slug: str | None = None,
+    title: str | None = None,
+    canonical_user_email: str | None = None,
+) -> dict:
+    """
+    Returns canonical page metadata from wiki_pages.
+    """
+```
+
+Use for:
+
+- page existence checks
+- entity-page resolution by email
+- avoiding duplicate page creation
+
+##### `db_pages_for_message`
+
+```python
+def db_pages_for_message(message_id: str) -> dict:
+    """
+    Returns wiki pages touched by a given message.
+    """
+```
+
+Use for:
+
+- provenance
+- understanding where a source already landed
+- avoiding redundant page updates
+
+##### `db_messages_for_page`
+
+```python
+def db_messages_for_page(page_id: int | None = None, slug: str | None = None) -> dict:
+    """
+    Returns messages that contributed to a page, newest first.
+    """
+```
+
+Use for:
+
+- compact references
+- change summaries
+- timeline generation
+
+##### `db_related_pages`
+
+```python
+def db_related_pages(
+    slug: str,
+    via: str = "shared_messages",
+    limit: int = 20,
+) -> dict:
+    """
+    Returns candidate related pages based on shared touched messages,
+    shared thread_ids, shared users, or shared systems.
+    """
+```
+
+Use for:
+
+- generating `Related` sections deterministically
+- building rollups and cluster landing pages
+- reducing ad hoc related-link drift
+
+##### `db_queue_stats`
+
+```python
+def db_queue_stats() -> dict:
+    """
+    Returns compile queue counts, failure counts, stale claims, recent throughput.
+    """
+```
+
+Use for:
+
+- operator dashboards
+- compile health gates
+- deciding whether automation is safe
+
+##### `db_recent_runs`
+
+```python
+def db_recent_runs(limit: int = 20) -> dict:
+    """
+    Returns recent compile runs with status, counts, cost, and notes.
+    """
+```
+
+Use for:
+
+- recent-change awareness
+- operational debugging
+- feeding `log.md` and release reports
+
+#### What not to expose
+
+Do not give the agent a generic `run_sql(query)` tool as a primary interface.
+
+Why:
+
+- it bloats prompt surface area
+- it increases failure modes
+- it makes tool usage inconsistent
+- it turns stable workflows into ad hoc querying
+
+Instead:
+
+- expose a small set of task-shaped query tools backed by SQL
+- keep raw SQL in implementation code or operator-only tooling
+
+#### Best use of the DB in this architecture
+
+The DB should answer:
+
+- what is this message
+- who is involved
+- what thread is this part of
+- what page already exists
+- what pages did this message affect
+- what messages support this page
+- what changed recently
+- what is failing operationally
+
+The file layer should answer:
+
+- what is the actual rendered wiki prose
+- what are the raw source documents
+- what will the reader see
+
 ### Agent responsibilities after refactor
 
 - choose which durable pages need updating
