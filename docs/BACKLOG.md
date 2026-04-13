@@ -5,6 +5,34 @@ them up.
 
 ---
 
+## Reading list — Anthropic engineering posts (2026-04-13)
+
+User flagged these to digest "eventually, not right away." Once read, pull out
+concrete improvements to our agent loop and drop them in this file as their
+own items:
+
+- https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+- https://www.anthropic.com/engineering/advanced-tool-use
+- https://www.anthropic.com/engineering/code-execution-with-mcp
+- https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+- https://www.anthropic.com/engineering/writing-tools-for-agents
+
+Likely relevance to us:
+- **Evals for agents** → our compile quality is eyeballed, not measured. A real
+  eval suite (recall of facts from source, wikilink correctness, supersession
+  accuracy) would let us A/B model changes.
+- **Advanced tool use** + **Writing tools for agents** → our current tools (read_file,
+  write_file, edit_file, grep, list_wiki_pages, stamp_page_compiled_at) are thin.
+  Probably missing `execute_shell` / subagents / better filter primitives.
+- **Code execution with MCP** → whether our compiler should be an MCP server
+  exposing tools (wiki query, raw grep, catalog lookup once it exists) so any
+  Claude/Codex/Cursor session can drive it.
+- **Context engineering** → entity page bloat, thread grouping, what goes into
+  the LLM's prompt window at each compile step. Directly tied to the
+  knowledge-vs-index work already planned.
+
+---
+
 ## Phase 0 review — first full compile observations (2026-04-13)
 
 **Test input**: 22 emails, 1 day of `marketplacelaunch@indiamart.com`
