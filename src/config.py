@@ -18,8 +18,9 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM
-    llm_model: str = "gpt-4o"
+    # LLM — default to z-ai/glm-5.1 (callable on the Intermesh LiteLLM proxy,
+    # newer than glm-4.6). Override via LLM_MODEL env var.
+    llm_model: str = "z-ai/glm-5.1"
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
