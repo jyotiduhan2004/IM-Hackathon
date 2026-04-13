@@ -177,3 +177,34 @@ def remaining_uncompiled_count() -> int:
             "SELECT count(*)::int AS n FROM messages WHERE compile_state IN ('pending', 'failed')"
         ).fetchone()
     return int(row["n"]) if row else 0
+
+
+def reset_to_pending() -> int:
+    """Flip ALL compiled messages back to pending. Returns rowcount.
+
+    Used by snapshot_wiki.py --reset-raw-compiled to force a full recompile
+    (previously done by rewriting raw/*.md frontmatter — now DB is truth).
+    """
+    with connect() as conn, conn.transaction():
+        cur = conn.execute(
+            "UPDATE messages SET compile_state='pending', compiled_at=NULL, "
+            "last_error=NULL WHERE compile_state='compiled'"
+        )
+        return cur.rowcount
+
+
+def reset_to_pending_by_path(raw_paths: list[str]) -> int:
+    """Targeted reset for a list of raw markdown paths. Returns rowcount.
+
+    Used by backfill_stubs.py --recompile after it rewrites provenance on
+    wiki pages that cite those raws.
+    """
+    if not raw_paths:
+        return 0
+    with connect() as conn, conn.transaction():
+        cur = conn.execute(
+            "UPDATE messages SET compile_state='pending', compiled_at=NULL, "
+            "last_error=NULL WHERE raw_path = ANY(%s)",
+            (list(raw_paths),),
+        )
+        return cur.rowcount

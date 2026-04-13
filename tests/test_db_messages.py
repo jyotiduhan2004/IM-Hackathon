@@ -271,3 +271,86 @@ def test_find_by_raw_path(db_conn: psycopg.Connection) -> None:
     assert row["compile_state"] == "pending"
 
     assert repo.find_by_raw_path("raw/does-not-exist.md") is None
+
+
+# ---------------------------------------------------------------------------
+# reset_to_pending (bulk)
+# ---------------------------------------------------------------------------
+
+
+def test_reset_to_pending_bulk(db_conn: psycopg.Connection) -> None:
+    """Flip every compiled row back to pending; leave already-pending rows alone."""
+    # 3 compiled with non-null compiled_at, 2 already pending.
+    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    for i in range(1, 4):
+        _insert(db_conn, message_id=f"c{i}", compile_state="compiled")
+        db_conn.execute(
+            "UPDATE messages SET compiled_at = %s, last_error = %s WHERE message_id = %s",
+            (compiled_ts, "stale-error", f"c{i}"),
+        )
+    _insert(db_conn, message_id="p1")
+    _insert(db_conn, message_id="p2")
+    db_conn.commit()
+
+    # Sanity: starting state.
+    assert repo.count_by_state() == {"compiled": 3, "pending": 2}
+
+    rowcount = repo.reset_to_pending()
+    assert rowcount == 3
+
+    # All 5 are now pending.
+    assert repo.count_by_state() == {"pending": 5}
+
+    # The flipped rows have compiled_at and last_error cleared.
+    for i in range(1, 4):
+        row = _fetch_one(db_conn, f"c{i}")
+        assert row["compile_state"] == "pending"
+        assert row["compiled_at"] is None
+        assert row["last_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# reset_to_pending_by_path (targeted)
+# ---------------------------------------------------------------------------
+
+
+def test_reset_to_pending_by_path(db_conn: psycopg.Connection) -> None:
+    """Only flip rows whose raw_path is in the supplied list."""
+    raw_paths = [
+        "raw/2026-04-01-aaa.md",
+        "raw/2026-04-02-bbb.md",
+        "raw/2026-04-03-ccc.md",
+    ]
+    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    for idx, path in enumerate(raw_paths, start=1):
+        _insert(
+            db_conn,
+            message_id=f"c{idx}",
+            raw_path=path,
+            compile_state="compiled",
+        )
+        db_conn.execute(
+            "UPDATE messages SET compiled_at = %s WHERE message_id = %s",
+            (compiled_ts, f"c{idx}"),
+        )
+    db_conn.commit()
+
+    # Reset only the first and third paths.
+    rowcount = repo.reset_to_pending_by_path([raw_paths[0], raw_paths[2]])
+    assert rowcount == 2
+
+    row1 = _fetch_one(db_conn, "c1")
+    row2 = _fetch_one(db_conn, "c2")
+    row3 = _fetch_one(db_conn, "c3")
+
+    assert row1["compile_state"] == "pending"
+    assert row1["compiled_at"] is None
+    assert row3["compile_state"] == "pending"
+    assert row3["compiled_at"] is None
+
+    # Untouched.
+    assert row2["compile_state"] == "compiled"
+    assert row2["compiled_at"] == compiled_ts
+
+    # Empty list short-circuits to 0 with no DB call needed.
+    assert repo.reset_to_pending_by_path([]) == 0

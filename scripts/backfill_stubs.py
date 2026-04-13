@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
+from src.db.messages import reset_to_pending_by_path  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
@@ -160,8 +161,9 @@ def _is_stub(fm: dict) -> bool:
 @click.option(
     "--recompile",
     is_flag=True,
-    help="After rewriting sources, mark those raw files as compiled=false so "
-    "the next compile run regenerates the page body with full context",
+    help="After rewriting sources, reset those raw files to pending in the "
+    "messages catalog so the next compile run regenerates the page body "
+    "with full context",
 )
 @click.option(
     "--category",
@@ -179,7 +181,7 @@ def main(dry_run: bool, recompile: bool, category: str) -> None:
     found = 0
     backfilled = 0
     no_matches = 0
-    raw_to_reset: set[Path] = set()
+    raw_to_reset: set[str] = set()
 
     for cat in cats:
         cat_dir = wiki_dir / cat
@@ -227,27 +229,22 @@ def main(dry_run: bool, recompile: bool, category: str) -> None:
             backfilled += 1
 
             if recompile:
-                # Mark raw files as uncompiled so the next compile run picks them up
-                # and can rewrite this page's body with full thread context
-                for hit in hits:
-                    raw_path = REPO_ROOT / hit
-                    if not raw_path.exists():
-                        continue
-                    rc = raw_path.read_text(encoding="utf-8")
-                    rfm = extract_frontmatter(rc)
-                    if rfm.get("compiled") is True:
-                        rfm["compiled"] = False
-                        rfm.pop("compiled_at", None)
-                        new = render_with_frontmatter(rfm, extract_body(rc))
-                        raw_path.write_text(new, encoding="utf-8")
-                        raw_to_reset.add(raw_path)
+                # Collect repo-relative raw paths so we can flip their
+                # compile_state back to pending in the messages catalog
+                # below — the next compile run will then rewrite this page's
+                # body with full thread context.
+                raw_to_reset.update(hits)
 
     click.echo()
     click.echo(f"Stubs found: {found}")
     click.echo(f"Backfilled: {backfilled}")
     click.echo(f"No matches (kept empty): {no_matches}")
     if recompile:
-        click.echo(f"Raw files reset for recompile: {len(raw_to_reset)}")
+        if dry_run:
+            click.echo(f"Would reset {len(raw_to_reset)} messages to pending state")
+        else:
+            reset_count = reset_to_pending_by_path(sorted(raw_to_reset))
+            click.echo(f"reset {reset_count} messages to pending state")
 
 
 if __name__ == "__main__":

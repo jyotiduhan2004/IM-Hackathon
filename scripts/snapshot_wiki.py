@@ -23,9 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
-from src.utils import extract_body  # noqa: E402
-from src.utils import extract_frontmatter  # noqa: E402
-from src.utils import render_with_frontmatter  # noqa: E402
+from src.db.messages import reset_to_pending  # noqa: E402
 
 SNAPSHOT_ROOT = REPO_ROOT / ".snapshots"
 
@@ -117,24 +115,19 @@ def clean(confirm: bool) -> None:
 @cli.command()
 @click.option("--confirm", is_flag=True, help="Actually reset; otherwise dry-run")
 def reset_raw_compiled(confirm: bool) -> None:
-    """Reset compiled: true → false on all raw emails. Useful after clearing wiki."""
-    count = 0
-    for p in settings.raw_dir.glob("*.md"):
-        content = p.read_text(encoding="utf-8")
-        fm = extract_frontmatter(content)
-        if not fm:
-            continue
-        if fm.get("compiled") is True:
-            count += 1
-            if confirm:
-                fm["compiled"] = False
-                fm.pop("compiled_at", None)
-                body = extract_body(content)
-                p.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
-    if confirm:
-        click.echo(f"Reset compiled flag on {count} raw emails.")
-    else:
-        click.echo(f"Would reset {count} raw emails. Pass --confirm to proceed.")
+    """Flip all compiled messages back to pending in the messages catalog.
+
+    Previously rewrote `compiled: true` → `false` in raw/*.md frontmatter.
+    The DB is now the source of truth for compile state, so this just
+    updates the messages table.
+    """
+    if not confirm:
+        click.echo(
+            "Dry-run: would reset all compiled messages to pending. Pass --confirm to proceed."
+        )
+        return
+    count = reset_to_pending()
+    click.echo(f"reset {count} messages to pending state")
 
 
 if __name__ == "__main__":
