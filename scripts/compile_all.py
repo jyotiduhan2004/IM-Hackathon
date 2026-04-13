@@ -110,7 +110,7 @@ def _stamp_recently_modified_pages(
 def _run_with_timeout[T](fn: Callable[[], T], timeout_s: float | None) -> T:
     """Run ``fn()`` in a worker thread, raising
     ``concurrent.futures.TimeoutError`` after ``timeout_s`` seconds.
-    A falsy ``timeout_s`` (0 or None) runs ``fn`` inline.
+    ``timeout_s`` of ``0`` or ``None`` runs ``fn`` inline.
 
     Caveat — Python threads are cooperative. On timeout the worker is
     orphaned (``shutdown(wait=False)``) and may linger until process
@@ -119,14 +119,18 @@ def _run_with_timeout[T](fn: Callable[[], T], timeout_s: float | None) -> T:
     whole run. For the same reason we avoid ``with ThreadPoolExecutor``
     — its ``__exit__`` would block on ``shutdown(wait=True)``.
     """
-    if not timeout_s:
+    if timeout_s is None or timeout_s == 0:
         return fn()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(fn)
     try:
         return future.result(timeout=timeout_s)
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        # ``wait=False`` only; no ``cancel_futures=True``. The orphaned
+        # worker keeps running regardless — Python can't forcibly stop
+        # a thread, so a hung HTTP socket continues until the process
+        # exits. This just avoids blocking ``shutdown()`` on it.
+        pool.shutdown(wait=False)
 
 
 _LOG_HEADER = (
@@ -352,7 +356,7 @@ def _group_by_thread(
 )
 @click.option(
     "--batch-timeout",
-    type=int,
+    type=click.IntRange(min=0),
     default=900,
     help=(
         "Per-batch wall-clock timeout in seconds (default 900 = 15 min, "
@@ -550,7 +554,10 @@ def main(
                 # timeout budget — otherwise wiki/log.md gets a blank
                 # notes column and the run looks silently broken.
                 if isinstance(e, concurrent.futures.TimeoutError):
-                    err_msg = f"TimeoutError: batch exceeded {batch_timeout}s"
+                    err_msg = (
+                        f"TimeoutError: batch exceeded {batch_timeout}s "
+                        f"(thread={thread_id[:12]})"
+                    )
                 else:
                     err_msg = str(e)
                 logger.error("batch compilation failed", batch_index=batch_idx, error=err_msg)

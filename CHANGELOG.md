@@ -43,15 +43,18 @@ Detailed incident postmortems live under `docs/incidents/`.
   with a populated `email:` field, wired as an error in `validate_page`.
 - Per-batch stall detection in `scripts/compile_all.py`: new
   `--batch-timeout` flag (default 900s, matches the overnight wrapper;
-  pass `0` to disable) wraps each `run_compilation` call in a
+  pass `0` to disable, `click.IntRange(min=0)` rejects negatives) wraps
+  each `run_compilation` call in a
   `concurrent.futures.ThreadPoolExecutor`, so a single hung batch
   (slow OTel export, stuck LLM provider, rare deadlock) no longer
   freezes an interactive compile loop. On timeout the existing
   batch-failure path kicks in — `_mark_batch_failed` + a `failed` row
-  in `wiki/log.md` with a `TimeoutError: batch exceeded Ns` note — and
-  the loop proceeds to the next batch. Stuck worker threads are
-  orphaned at process exit (Python threads are cooperative); documented
-  in the helper's docstring as acceptable.
+  in `wiki/log.md` with a `TimeoutError: batch exceeded Ns
+  (thread=...)` note — and the loop proceeds to the next batch. Stuck
+  worker threads are orphaned at process exit (Python threads are
+  cooperative; `shutdown(wait=False)` only, no `cancel_futures=True`
+  because the orphaned socket runs to completion regardless);
+  documented in the helper's docstring as acceptable.
 - GCP Phase A viewer deploy scaffolding (PR #36): `Dockerfile` +
   `nginx.conf` (python:3.12-slim builder → nginx:alpine runtime);
   `.dockerignore` + `.gcloudignore` scoped so `mkdocs_hooks.py` can still
