@@ -58,32 +58,78 @@ def test_batch_paths_handles_dicts_and_strings(compile_all_module):
     assert mod._batch_paths(["a", {"path": "b"}]) == ["a", "b"]
 
 
-def test_mark_batch_compiled_flips_every_row(compile_all_module, db_conn):
+def _make_wiki_page(wiki_dir: Path, category: str, slug: str, sources: list[str]) -> None:
+    (wiki_dir / category).mkdir(parents=True, exist_ok=True)
+    src_yaml = "\n".join(f"  - {s}" for s in sources)
+    (wiki_dir / category / f"{slug}.md").write_text(
+        f"---\n"
+        f"title: {slug}\n"
+        f"page_type: {category[:-1]}\n"
+        f"status: current\n"
+        f"sources:\n{src_yaml}\n"
+        f"---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+
+def test_mark_batch_compiled_only_flips_cited_emails(compile_all_module, db_conn, tmp_path):
+    """If a wiki page cites the email's raw_path, the agent demonstrably did
+    the work — flip to compiled. If not, leave pending."""
     mod = compile_all_module
     _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
     _insert_message(db_conn, message_id="m2", raw_path="raw/b.md")
     _insert_message(db_conn, message_id="m3", raw_path="raw/c.md")
     db_conn.commit()
 
+    # m1 and m3 are cited by wiki pages; m2 is not (agent skipped it).
+    _make_wiki_page(tmp_path, "topics", "one", sources=["raw/a.md"])
+    _make_wiki_page(tmp_path, "entities", "two", sources=["raw/c.md", "raw/a.md"])
+
     batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}, {"path": "raw/c.md"}]
-    marked, missing = mod._mark_batch_compiled(batch)
-    assert marked == 3
+    marked, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
+    assert marked == 2
+    assert not_cited == 1
     assert missing == 0
     assert _state(db_conn, "m1") == "compiled"
-    assert _state(db_conn, "m2") == "compiled"
+    assert _state(db_conn, "m2") == "pending"
     assert _state(db_conn, "m3") == "compiled"
 
 
-def test_mark_batch_compiled_reports_missing(compile_all_module, db_conn):
+def test_mark_batch_compiled_reports_missing(compile_all_module, db_conn, tmp_path):
     mod = compile_all_module
     _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
     db_conn.commit()
 
+    _make_wiki_page(tmp_path, "topics", "one", sources=["raw/a.md", "raw/not-in-db.md"])
+
     batch = [{"path": "raw/a.md"}, {"path": "raw/not-in-db.md"}]
-    marked, missing = mod._mark_batch_compiled(batch)
+    marked, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
     assert marked == 1
+    assert not_cited == 0
     assert missing == 1
     assert _state(db_conn, "m1") == "compiled"
+
+
+def test_mark_batch_compiled_all_uncited_keeps_all_pending(
+    compile_all_module, db_conn, tmp_path
+):
+    """If the agent didn't touch the wiki at all (no pages cite any batch
+    email), NOTHING gets flipped — matches the 'agent gave up early'
+    failure mode the user flagged."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    _insert_message(db_conn, message_id="m2", raw_path="raw/b.md")
+    db_conn.commit()
+
+    # No wiki pages cite either email.
+    (tmp_path / "topics").mkdir()
+
+    batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}]
+    marked, not_cited, _missing = mod._mark_batch_compiled(batch, tmp_path)
+    assert marked == 0
+    assert not_cited == 2
+    assert _state(db_conn, "m1") == "pending"
+    assert _state(db_conn, "m2") == "pending"
 
 
 def test_mark_batch_failed_flips_to_failed(compile_all_module, db_conn):

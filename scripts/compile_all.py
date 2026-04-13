@@ -27,6 +27,9 @@ from src.config import settings  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
+from src.utils import extract_frontmatter  # noqa: E402
+
+_WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 structlog.configure(
     processors=[
@@ -46,29 +49,67 @@ def _batch_paths(batch: list) -> list[str]:
     ]
 
 
-def _mark_batch_compiled(batch: list) -> tuple[int, int]:
-    """Deterministically mark every email in the batch as compiled.
+def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
+    """Scan every wiki page's `sources:` list; return the set of cited raw paths.
 
-    Returns (marked_count, missing_count). `missing` is emails whose
-    raw_path has no corresponding messages row — shouldn't happen but
-    worth flagging so we notice backfill drift.
-
-    This is the authoritative signal for "done". The LLM agent has a
-    `mark_as_compiled` tool, but experience shows it forgets to call
-    it on some batch members. The coordinator treats "run_compilation
-    returned without raising" as proof the batch was processed and
-    flips state here.
+    This is the durable evidence that the agent actually processed an
+    email — the email's raw path will appear in at least one wiki page's
+    frontmatter `sources:` list.
     """
-    marked, missing = 0, 0
+    cited: set[str] = set()
+    for cat in _WIKI_CATEGORIES:
+        cat_dir = wiki_dir / cat
+        if not cat_dir.exists():
+            continue
+        for md in cat_dir.glob("*.md"):
+            try:
+                content = md.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm = extract_frontmatter(content)
+            sources = fm.get("sources")
+            if not isinstance(sources, list):
+                continue
+            for src in sources:
+                if isinstance(src, str) and src.strip():
+                    cited.add(src.strip())
+    return cited
+
+
+def _mark_batch_compiled(batch: list, wiki_dir: Path) -> tuple[int, int, int]:
+    """Mark only batch emails whose raw_path is actually cited in the wiki.
+
+    Returns (marked, not_cited, missing).
+      - marked:   emails cited in >=1 wiki page's sources — flipped to compiled.
+      - not_cited: emails not referenced anywhere in wiki — agent likely
+        didn't finish them before returning; left pending for next claim.
+      - missing:  emails whose raw_path has no `messages` row at all —
+        indicates backfill drift; logged as a warning.
+
+    The wiki-citation check is the safety net against the "agent said done
+    but actually stopped early" failure mode. A naïve "flip every batch
+    email on return" would corrupt state for emails the agent never
+    touched.
+    """
+    cited = _collect_cited_raw_paths(wiki_dir)
+    marked, not_cited, missing = 0, 0, 0
     for path in _batch_paths(batch):
         row = find_by_raw_path(path)
         if row is None:
             logger.warning("no messages row for batch path", path=path)
             missing += 1
             continue
+        if path not in cited:
+            logger.warning(
+                "batch email not cited in wiki; leaving pending",
+                path=path,
+                message_id=row["message_id"],
+            )
+            not_cited += 1
+            continue
         finish_message_compile(row["message_id"])
         marked += 1
-    return marked, missing
+    return marked, not_cited, missing
 
 
 def _mark_batch_failed(batch: list, error: str) -> int:
@@ -264,12 +305,17 @@ def main(
                 wiki_dir=wiki_dir,
                 recursion_limit=recursion_limit,
             )
-            marked, missing = _mark_batch_compiled(batch)
+            marked, not_cited, missing = _mark_batch_compiled(batch, Path(wiki_dir))
             processed += marked
-            click.echo(
-                f"Batch complete. Progress: {processed}/{total}"
-                + (f" ({missing} rows missing from catalog — check backfill)" if missing else "")
-            )
+            suffix_parts = []
+            if not_cited:
+                suffix_parts.append(
+                    f"{not_cited} not-yet-cited (kept pending)"
+                )
+            if missing:
+                suffix_parts.append(f"{missing} missing from catalog")
+            suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+            click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
         except Exception as e:  # noqa: BLE001
             logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
             failed_marked = _mark_batch_failed(batch, str(e))
