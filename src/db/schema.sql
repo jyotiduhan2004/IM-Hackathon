@@ -152,3 +152,62 @@ DROP TRIGGER IF EXISTS ingest_cursors_set_updated_at ON ingest_cursors;
 CREATE TRIGGER ingest_cursors_set_updated_at
   BEFORE UPDATE ON ingest_cursors
   FOR EACH ROW EXECUTE FUNCTION email_kb_set_updated_at();
+
+
+-- ---------------------------------------------------------------------------
+-- PR3: wiki_pages + message_touched_pages
+--
+-- One row per rendered wiki page (topic / entity / system / policy /
+-- timeline / conflict), plus a many-to-many join recording which messages
+-- "touched" (contributed to) each page during compile. Lets us answer
+-- "which pages did message X land on?" and "which messages does page Y
+-- cite?" without grepping frontmatter on every query.
+--
+-- `canonical_user_email` ties entity pages to a users row; the partial
+-- unique index enforces "one entity page per email" while leaving topic /
+-- system / policy pages free to share emails (e.g. a topic page about a
+-- person's project can coexist with their entity page).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  page_id               BIGSERIAL PRIMARY KEY,
+  slug                  TEXT NOT NULL UNIQUE,
+  path                  TEXT NOT NULL UNIQUE,
+  title                 TEXT NOT NULL,
+  page_type             TEXT NOT NULL
+                        CHECK (page_type IN
+                          ('topic', 'entity', 'system', 'policy',
+                           'timeline', 'conflict')),
+  status                TEXT NOT NULL DEFAULT 'current'
+                        CHECK (status IN ('current', 'superseded', 'contested')),
+  canonical_user_email  TEXT REFERENCES users(email),
+  last_compiled_at      TIMESTAMPTZ,
+  update_count          INT NOT NULL DEFAULT 0,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- "One entity page per email address" — topic / system pages can reuse
+-- the same email without conflict.
+CREATE UNIQUE INDEX IF NOT EXISTS wiki_pages_entity_email_uidx
+  ON wiki_pages (canonical_user_email)
+  WHERE page_type = 'entity' AND canonical_user_email IS NOT NULL;
+
+DROP TRIGGER IF EXISTS wiki_pages_set_updated_at ON wiki_pages;
+CREATE TRIGGER wiki_pages_set_updated_at
+  BEFORE UPDATE ON wiki_pages
+  FOR EACH ROW EXECUTE FUNCTION email_kb_set_updated_at();
+
+
+CREATE TABLE IF NOT EXISTS message_touched_pages (
+  message_id        TEXT NOT NULL
+                    REFERENCES messages(message_id) ON DELETE CASCADE,
+  page_id           BIGINT NOT NULL
+                    REFERENCES wiki_pages(page_id) ON DELETE CASCADE,
+  compiled_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, page_id)
+);
+
+-- "Which messages recently touched page X?" — the timeline-on-page lookup.
+CREATE INDEX IF NOT EXISTS message_touched_pages_page_idx
+  ON message_touched_pages (page_id, compiled_at DESC);

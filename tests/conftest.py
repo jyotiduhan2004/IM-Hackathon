@@ -44,8 +44,8 @@ TEST_SCHEMA = "email_kb_test_schema"
 
 def _load_messages_ddl() -> str:
     """Return DDL for the full catalog (messages + users + threads +
-    message_participants + compile_runs + ingest_cursors), schema-qualified
-    to TEST_SCHEMA.
+    message_participants + compile_runs + ingest_cursors + wiki_pages +
+    message_touched_pages), schema-qualified to TEST_SCHEMA.
 
     We don't just execute src/db/schema.sql as-is because it creates a
     global trigger function name (email_kb_set_updated_at) that would
@@ -163,6 +163,47 @@ def _load_messages_ddl() -> str:
     CREATE TRIGGER ingest_cursors_set_updated_at
       BEFORE UPDATE ON {TEST_SCHEMA}.ingest_cursors
       FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
+
+    CREATE TABLE {TEST_SCHEMA}.wiki_pages (
+      page_id               BIGSERIAL PRIMARY KEY,
+      slug                  TEXT NOT NULL UNIQUE,
+      path                  TEXT NOT NULL UNIQUE,
+      title                 TEXT NOT NULL,
+      page_type             TEXT NOT NULL
+                            CHECK (page_type IN
+                              ('topic', 'entity', 'system', 'policy',
+                               'timeline', 'conflict')),
+      status                TEXT NOT NULL DEFAULT 'current'
+                            CHECK (status IN
+                              ('current', 'superseded', 'contested')),
+      canonical_user_email  TEXT REFERENCES {TEST_SCHEMA}.users(email),
+      last_compiled_at      TIMESTAMPTZ,
+      update_count          INT NOT NULL DEFAULT 0,
+      created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE UNIQUE INDEX wiki_pages_entity_email_uidx
+      ON {TEST_SCHEMA}.wiki_pages (canonical_user_email)
+      WHERE page_type = 'entity' AND canonical_user_email IS NOT NULL;
+
+    CREATE TRIGGER wiki_pages_set_updated_at
+      BEFORE UPDATE ON {TEST_SCHEMA}.wiki_pages
+      FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
+
+    CREATE TABLE {TEST_SCHEMA}.message_touched_pages (
+      message_id        TEXT NOT NULL
+                        REFERENCES {TEST_SCHEMA}.messages(message_id)
+                        ON DELETE CASCADE,
+      page_id           BIGINT NOT NULL
+                        REFERENCES {TEST_SCHEMA}.wiki_pages(page_id)
+                        ON DELETE CASCADE,
+      compiled_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (message_id, page_id)
+    );
+
+    CREATE INDEX message_touched_pages_page_idx
+      ON {TEST_SCHEMA}.message_touched_pages (page_id, compiled_at DESC);
     """
 
 
@@ -214,7 +255,9 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     import src.db.messages as db_messages
     import src.db.participants as db_participants
     import src.db.threads as db_threads
+    import src.db.touched_pages as db_touched_pages
     import src.db.users as db_users
+    import src.db.wiki_pages as db_wiki_pages
 
     monkeypatch.setattr(db_pkg, "connect", _scoped_connect)
     monkeypatch.setattr(db_messages, "connect", _scoped_connect)
@@ -223,14 +266,18 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(db_participants, "connect", _scoped_connect)
     monkeypatch.setattr(db_compile_runs, "connect", _scoped_connect)
     monkeypatch.setattr(db_cursors, "connect", _scoped_connect)
+    monkeypatch.setattr(db_wiki_pages, "connect", _scoped_connect)
+    monkeypatch.setattr(db_touched_pages, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        # message_participants → messages/users via FK; truncate together
-        # so we don't have to think about delete order. compile_runs and
-        # ingest_cursors have no FK back to messages so they get their
-        # own truncates.
+        # message_participants + message_touched_pages → messages/users/
+        # wiki_pages via FK; truncate together so we don't have to think
+        # about delete order. compile_runs and ingest_cursors have no FK
+        # back to messages so they get their own truncates.
         conn.execute(
-            f"TRUNCATE TABLE {TEST_SCHEMA}.message_participants, "
+            f"TRUNCATE TABLE {TEST_SCHEMA}.message_touched_pages, "
+            f"{TEST_SCHEMA}.message_participants, "
+            f"{TEST_SCHEMA}.wiki_pages, "
             f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
             f"{TEST_SCHEMA}.threads CASCADE"
         )
