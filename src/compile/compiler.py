@@ -350,12 +350,17 @@ def create_compiler(
         + f"`ls {wiki_dir}/topics` or use `glob` with patterns.\n"
     )
 
+    # mark_as_compiled is NOT exposed to the agent. The coordinator
+    # (scripts/compile_all.py) calls finish_message_compile in Postgres
+    # deterministically after run_compilation returns — trusting the LLM
+    # to remember the call was leaking ~68% of "processed" emails into
+    # permanent-pending state. The function is still importable for
+    # one-off manual marking.
     return create_deep_agent(
         model=model,
         tools=[
             list_uncompiled_emails,
             list_wiki_pages,
-            mark_as_compiled,
             stamp_page_compiled_at,
             update_wiki_index,
             append_to_log,

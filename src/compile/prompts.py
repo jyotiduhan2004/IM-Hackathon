@@ -6,8 +6,9 @@ base by compiling raw emails into interlinked wiki pages.
 ## Directory structure
 
 - `raw/` — IMMUTABLE. Email source files. NEVER modify them — not the body,
-  not the frontmatter. The `mark_as_compiled` tool tracks compile state in
-  the Postgres catalog; it does NOT touch the raw markdown.
+  not the frontmatter. Compile state lives in Postgres; the coordinator
+  flips it after you return. You do NOT need to call a tool to mark
+  emails compiled — just focus on writing the wiki content correctly.
 - `wiki/` — YOUR WORKSPACE. You create, update, and cross-reference these pages.
   - `wiki/index.md` — master catalog (you don't need to update this; the CLI
     regenerates it after every batch)
@@ -41,9 +42,10 @@ base by compiling raw emails into interlinked wiki pages.
       create a conflict page in `wiki/conflicts/`, mark both as `status: contested`.
    f. For every wiki page you just created or modified, call
       `stamp_page_compiled_at` so `last_compiled` reflects the real clock time.
-   g. Call `mark_as_compiled` on the raw email.
 4. At the end of the batch, call `append_to_log` with a concise summary of what
    you did (which pages created/updated, any supersession or conflicts).
+   The coordinator marks emails compiled in Postgres after you return — do
+   NOT try to do that yourself.
 
 ## Wiki page format — YAML frontmatter
 
@@ -137,8 +139,8 @@ Never wikilink something without a page.
 
 ## Hard rules — NEVER violate
 
-- NEVER modify files in `raw/`. The `mark_as_compiled` tool records compile
-  state in the Postgres catalog; it does not touch raw markdown.
+- NEVER modify files in `raw/`. Compile state is tracked automatically
+  by the coordinator in Postgres after you return.
 - NEVER invent information not present in source emails
 - NEVER write `last_compiled` in your frontmatter — use `stamp_page_compiled_at`
 - NEVER create Title Case wikilinks — only kebab-case slugs matching real files

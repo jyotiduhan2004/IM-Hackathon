@@ -24,6 +24,9 @@ from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.db.messages import fail_message_compile  # noqa: E402
+from src.db.messages import find_by_raw_path  # noqa: E402
+from src.db.messages import finish_message_compile  # noqa: E402
 
 structlog.configure(
     processors=[
@@ -33,6 +36,52 @@ structlog.configure(
     ],
 )
 logger = structlog.get_logger(__name__)
+
+
+def _batch_paths(batch: list) -> list[str]:
+    """Extract raw_path strings from a batch list (dicts or bare strings)."""
+    return [
+        item["path"] if isinstance(item, dict) else str(item)
+        for item in batch
+    ]
+
+
+def _mark_batch_compiled(batch: list) -> tuple[int, int]:
+    """Deterministically mark every email in the batch as compiled.
+
+    Returns (marked_count, missing_count). `missing` is emails whose
+    raw_path has no corresponding messages row — shouldn't happen but
+    worth flagging so we notice backfill drift.
+
+    This is the authoritative signal for "done". The LLM agent has a
+    `mark_as_compiled` tool, but experience shows it forgets to call
+    it on some batch members. The coordinator treats "run_compilation
+    returned without raising" as proof the batch was processed and
+    flips state here.
+    """
+    marked, missing = 0, 0
+    for path in _batch_paths(batch):
+        row = find_by_raw_path(path)
+        if row is None:
+            logger.warning("no messages row for batch path", path=path)
+            missing += 1
+            continue
+        finish_message_compile(row["message_id"])
+        marked += 1
+    return marked, missing
+
+
+def _mark_batch_failed(batch: list, error: str) -> int:
+    """Mark every email in a crashed batch as failed. Returns marked count."""
+    trimmed = error[:500]
+    marked = 0
+    for path in _batch_paths(batch):
+        row = find_by_raw_path(path)
+        if row is None:
+            continue
+        fail_message_compile(row["message_id"], trimmed)
+        marked += 1
+    return marked
 
 
 def _group_by_thread(
@@ -197,7 +246,9 @@ def main(
             f"Process them chronologically as a conversation. When multiple replies "
             f"build on the same decision/policy/feature, merge them into a single "
             f"coherent wiki page rather than one page per message. "
-            f"Mark each email as compiled with `mark_as_compiled` when done.\n\n"
+            f"Do NOT call any tool to mark these emails compiled — the coordinator "
+            f"handles that deterministically after you return. Focus on writing the "
+            f"right wiki content.\n\n"
             f"Files to compile:\n{batch_files}"
         )
 
@@ -213,11 +264,16 @@ def main(
                 wiki_dir=wiki_dir,
                 recursion_limit=recursion_limit,
             )
-            processed += len(batch)
-            click.echo(f"Batch complete. Progress: {processed}/{total}")
+            marked, missing = _mark_batch_compiled(batch)
+            processed += marked
+            click.echo(
+                f"Batch complete. Progress: {processed}/{total}"
+                + (f" ({missing} rows missing from catalog — check backfill)" if missing else "")
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
-            click.echo(f"ERROR in batch: {e}")
+            failed_marked = _mark_batch_failed(batch, str(e))
+            click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
             click.echo("Continuing with next batch...")
 
     # Regenerate index once after all batches complete — authoritative, not stale
