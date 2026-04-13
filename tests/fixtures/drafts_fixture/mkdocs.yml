@@ -1,0 +1,9 @@
+site_name: Drafts Fixture
+docs_dir: wiki
+use_directory_urls: true
+
+exclude_docs: |
+  _drafts/**
+
+theme:
+  name: material

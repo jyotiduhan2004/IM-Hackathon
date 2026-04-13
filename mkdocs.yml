@@ -28,6 +28,11 @@ nav:
 exclude_docs: |
   _drafts/**
 
+# Hide the drafts queue entirely from the published site. Draft pages live in
+# wiki/_drafts/ for operator review and must never appear in nav or build output.
+exclude_docs: |
+  _drafts/**
+
 theme:
   name: material
   palette:

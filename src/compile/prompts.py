@@ -147,6 +147,23 @@ Rules:
 Weak evidence is still fine for topic / system / policy pages; the rule
 above applies specifically to the entity category.
 
+## When to write a draft
+
+If you're not sure a concept deserves its own topic or system page, DO NOT create
+a visible stub. Instead, call `write_draft_page(slug, reason, content)`.
+
+Drafts live in `wiki/_drafts/` — hidden from readers, indexed for operator review.
+This replaces the old habit of creating 1-line stubs "just to make the wikilink resolve."
+
+Good draft cases:
+- You want to reference `[[whatsapp-hub]]` but aren't sure if it's a topic, system, or rollup.
+- An email hints at a policy but you can't confirm it's current.
+- ~5 emails feel related but the cluster doesn't have a name yet.
+
+Bad draft cases (make a real page instead):
+- The email clearly names a single new topic with sections to fill in.
+- The person is a new entity — use `create_entity`, not drafts.
+
 ## Wikilink rules — CRITICAL
 
 Every `[[wikilink]]` target MUST be:

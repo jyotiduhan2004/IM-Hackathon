@@ -41,6 +41,18 @@ Detailed incident postmortems live under `docs/incidents/`.
   includes `status` so the agent can distinguish `current` from
   `superseded`/`contested` pages. Registered alongside the existing
   `list_wiki_pages` / `create_entity` tools in `create_compiler`.
+- Hidden drafts folder workflow (Phase 1 Wiki IA, Workstream 4). New
+  `write_draft_page(slug, reason, content)` tool in
+  `src/compile/compiler.py` writes drafts to `wiki/_drafts/{slug}.md` with
+  `page_type: draft` / `status: pending_review` frontmatter, keeping
+  unresolved concepts out of reader-facing nav. `mkdocs.yml` gains
+  `exclude_docs: _drafts/**` so the whole tree is omitted from the built
+  site. Compiler system prompt picks up a new "When to write a draft"
+  section that explicitly replaces the old habit of creating 1-line stubs
+  "just to make the wikilink resolve." Covered by `tests/test_drafts_folder.py`
+  (unit tests for slug validation + idempotent overwrite, plus an end-to-end
+  `mkdocs build` on `tests/fixtures/drafts_fixture/` that asserts drafts
+  stay out of the built site while normal pages are still published).
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to
