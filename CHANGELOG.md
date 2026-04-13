@@ -39,3 +39,9 @@ Detailed incident postmortems live under `docs/incidents/`.
   file whose subject or body contained a literal `---` (e.g.
   `Informational---Transforming SonarQube`). Codex flagged this in
   `docs/reviews/codex-priority-review-20260413T090000Z.md`.
+- Langfuse SDK pinned to `>=3,<4` to match the self-hosted server at
+  `langfuse.intermesh.net` (v3.140.0). The v4 SDK renamed the legacy
+  `langfuse.callback` module and expects response fields the server
+  doesn't emit, so the LangChain callback wouldn't instantiate.
+  Smoke-tested end-to-end: a real LiteLLM call via the callback
+  handler lands a trace in the `email-kb-wiki` project.

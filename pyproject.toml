@@ -18,7 +18,10 @@ dependencies = [
     # LLM access
     "litellm>=1.50.0",
     # Observability
-    "langfuse>=2.50.0",
+    # Pinned to v3 to match self-hosted server at langfuse.intermesh.net (v3.140.0).
+    # v4 SDK expects fields the older server doesn't emit (pydantic validation errors)
+    # and renamed APIs (`start_as_current_span` is not on 4.x).
+    "langfuse>=3,<4",
     # API
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
