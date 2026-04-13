@@ -43,7 +43,8 @@ TEST_SCHEMA = "email_kb_test_schema"
 
 
 def _load_messages_ddl() -> str:
-    """Return DDL for the messages table, schema-qualified to TEST_SCHEMA.
+    """Return DDL for messages + users + threads + message_participants,
+    schema-qualified to TEST_SCHEMA.
 
     We don't just execute src/db/schema.sql as-is because it creates a
     global trigger function name (email_kb_set_updated_at) that would
@@ -90,6 +91,46 @@ def _load_messages_ddl() -> str:
     CREATE TRIGGER messages_set_updated_at
       BEFORE UPDATE ON {TEST_SCHEMA}.messages
       FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
+
+    CREATE TABLE {TEST_SCHEMA}.users (
+      email             TEXT PRIMARY KEY,
+      display_name      TEXT,
+      first_seen_at     TIMESTAMPTZ,
+      last_seen_at      TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TRIGGER users_set_updated_at
+      BEFORE UPDATE ON {TEST_SCHEMA}.users
+      FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
+
+    CREATE TABLE {TEST_SCHEMA}.threads (
+      thread_id         TEXT PRIMARY KEY,
+      first_message_at  TIMESTAMPTZ,
+      last_message_at   TIMESTAMPTZ,
+      message_count     INT NOT NULL DEFAULT 0,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TRIGGER threads_set_updated_at
+      BEFORE UPDATE ON {TEST_SCHEMA}.threads
+      FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
+
+    CREATE TABLE {TEST_SCHEMA}.message_participants (
+      message_id        TEXT NOT NULL
+                        REFERENCES {TEST_SCHEMA}.messages(message_id)
+                        ON DELETE CASCADE,
+      user_email        TEXT NOT NULL
+                        REFERENCES {TEST_SCHEMA}.users(email),
+      role              TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc')),
+      display_name      TEXT,
+      PRIMARY KEY (message_id, user_email, role)
+    );
+
+    CREATE INDEX message_participants_user_role_idx
+      ON {TEST_SCHEMA}.message_participants (user_email, role);
     """
 
 
@@ -134,15 +175,27 @@ def _scoped_connect() -> Iterator[psycopg.Connection]:
 
 @pytest.fixture(autouse=True)
 def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Repoint src.db.connect and clear the messages table before each test."""
+    """Repoint src.db.connect and clear all catalog tables before each test."""
     import src.db as db_pkg
     import src.db.messages as db_messages
+    import src.db.participants as db_participants
+    import src.db.threads as db_threads
+    import src.db.users as db_users
 
     monkeypatch.setattr(db_pkg, "connect", _scoped_connect)
     monkeypatch.setattr(db_messages, "connect", _scoped_connect)
+    monkeypatch.setattr(db_users, "connect", _scoped_connect)
+    monkeypatch.setattr(db_threads, "connect", _scoped_connect)
+    monkeypatch.setattr(db_participants, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.messages")
+        # message_participants → messages/users via FK; truncate together
+        # so we don't have to think about delete order.
+        conn.execute(
+            f"TRUNCATE TABLE {TEST_SCHEMA}.message_participants, "
+            f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
+            f"{TEST_SCHEMA}.threads CASCADE"
+        )
 
     yield
 
