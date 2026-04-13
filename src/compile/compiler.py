@@ -350,22 +350,24 @@ def create_compiler(
         + f"`ls {wiki_dir}/topics` or use `glob` with patterns.\n"
     )
 
-    # mark_as_compiled, update_wiki_index, and append_to_log are NOT exposed
-    # to the agent — all three are coordinator concerns. scripts/compile_all.py
+    # mark_as_compiled, update_wiki_index, append_to_log, and
+    # stamp_page_compiled_at are all NOT exposed to the agent — every
+    # bookkeeping call is a coordinator concern now. scripts/compile_all.py
     # (a) flips messages.compile_state in Postgres deterministically after
     # run_compilation returns (trusting the LLM leaked ~68% of "processed"
     # emails into permanent-pending state), (b) regenerates wiki/index.md
-    # after every run, and (c) writes one structured per-batch row to
-    # wiki/log.md. Letting the LLM call these was redundant for the index
-    # (just duplicate work) and unreliable for marking/logging (the agent
-    # forgot roughly half the time). All three remain importable for
-    # one-off manual use.
+    # after every run, (c) writes one structured per-batch row to
+    # wiki/log.md, and (d) stamps `last_compiled` on every wiki page whose
+    # mtime advanced during the run. Letting the LLM make these calls was
+    # redundant at best and unreliable at worst (the agent forgot stamp
+    # and log calls roughly half the time, leaving pages with stale
+    # timestamps and gaps in the audit trail). All four functions remain
+    # importable for one-off manual use.
     return create_deep_agent(
         model=model,
         tools=[
             list_uncompiled_emails,
             list_wiki_pages,
-            stamp_page_compiled_at,
         ],
         system_prompt=system_prompt,
         backend=backend,

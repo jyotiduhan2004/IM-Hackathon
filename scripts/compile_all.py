@@ -31,7 +31,9 @@ from src.config import settings  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
+from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.utils import render_with_frontmatter  # noqa: E402
 
 _WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
@@ -43,6 +45,64 @@ structlog.configure(
     ],
 )
 logger = structlog.get_logger(__name__)
+
+
+def _stamp_recently_modified_pages(
+    wiki_dir: str, since_timestamp: float, model_name: str
+) -> tuple[int, int]:
+    """Stamp `last_compiled`/`updated_by`/`update_count` on pages touched
+    after `since_timestamp` (POSIX seconds).
+
+    The LLM agent has a `stamp_page_compiled_at` tool but routinely forgets
+    to call it on every page it touched. This coordinator-side pass walks
+    the wiki after the batch loop and stamps every page whose mtime is
+    newer than the run start time. `update_wiki_index` has a similar
+    fallback for missing-stamp pages, but it only fires when `last_compiled`
+    is absent — pages updated by the agent in this run already have a
+    stale stamp from a previous compile, so the index pass skips them.
+
+    Returns (stamped_count, skipped_count). `skipped` covers pages whose
+    frontmatter looks corrupt (missing `title`/`page_type` after extraction)
+    — same guard `update_wiki_index` uses to avoid clobbering mangled pages.
+    """
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return 0, 0
+
+    now_iso = datetime.now(UTC).isoformat()
+    stamped, skipped = 0, 0
+
+    for category in _WIKI_CATEGORIES:
+        cat_dir = wiki_path / category
+        if not cat_dir.exists():
+            continue
+        for md_file in sorted(cat_dir.glob("*.md")):
+            try:
+                if md_file.stat().st_mtime <= since_timestamp:
+                    continue
+                content = md_file.read_text(encoding="utf-8")
+                fm = extract_frontmatter(content)
+                # Mirror update_wiki_index's "looks like a real page" guard
+                # — a page with neither title nor page_type is either an
+                # orphan or got mangled by the agent's edit_file. Don't
+                # overwrite it from the coordinator either.
+                if not ("title" in fm or "page_type" in fm):
+                    skipped += 1
+                    continue
+                fm["last_compiled"] = now_iso
+                fm["updated_by"] = model_name
+                fm["update_count"] = int(fm.get("update_count") or 0) + 1
+                body = extract_body(content)
+                md_file.write_text(
+                    render_with_frontmatter(fm, body), encoding="utf-8"
+                )
+                stamped += 1
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning(
+                    "stamp skip", path=str(md_file), error=str(exc)
+                )
+                skipped += 1
+    return stamped, skipped
 
 
 _LOG_HEADER = (
@@ -261,8 +321,15 @@ def main(
     recursion_limit: int,
 ) -> None:
     """Compile uncompiled raw emails into wiki pages using Deep Agents."""
+    import time
+
+    # Capture the run start before any wiki work so we can stamp every page
+    # whose mtime advances during the batch loop. See
+    # `_stamp_recently_modified_pages` for the why.
+    run_start = time.time()
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
+    resolved_model = model or settings.llm_model
 
     # Use the tool directly for listing, not through the agent
     all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
@@ -317,7 +384,7 @@ def main(
         return
 
     click.echo(f"Compiling in batches of {batch_size}...")
-    click.echo(f"Model: {model or settings.llm_model}")
+    click.echo(f"Model: {resolved_model}")
     click.echo(f"Wiki dir: {wiki_dir}")
     budget_before = fetch_budget()
     if budget_before:
@@ -384,6 +451,20 @@ def main(
             click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
             click.echo("Continuing with next batch...")
             _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=str(e)[:200])
+
+    # Stamp every wiki page touched during this run before regenerating the
+    # index. The agent has a `stamp_page_compiled_at` tool but routinely
+    # forgets pages; `update_wiki_index`'s fallback only stamps pages whose
+    # `last_compiled` is missing entirely, so re-edits of older pages slip
+    # through with stale timestamps. Coordinator owns this now.
+    click.echo("\nStamping recently modified wiki pages...")
+    stamped, skipped = _stamp_recently_modified_pages(
+        wiki_dir, run_start, resolved_model
+    )
+    click.echo(
+        f"Stamped {stamped} pages with last_compiled"
+        + (f" ({skipped} skipped — corrupt frontmatter)" if skipped else "")
+    )
 
     # Regenerate index once after all batches complete — authoritative, not stale
     click.echo("\nRegenerating wiki index (post-compile)...")

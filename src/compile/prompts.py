@@ -41,13 +41,13 @@ base by compiling raw emails into interlinked wiki pages.
       update/create NEW current page.
    e. Check for contradictions: emails disagreeing with no clear supersession →
       create a conflict page in `wiki/conflicts/`, mark both as `status: contested`.
-   f. For every wiki page you just created or modified, call
-      `stamp_page_compiled_at` so `last_compiled` reflects the real clock time.
 
-The coordinator handles three things after you return — do NOT try to do
+The coordinator handles four things after you return — do NOT try to do
 them yourself:
 - Flips `messages.compile_state` to `compiled` in Postgres for every raw
   email cited by a wiki page's `sources:` list.
+- Stamps `last_compiled`/`updated_by`/`update_count` on every wiki page
+  whose mtime advanced during this run.
 - Writes one structured row per batch to `wiki/log.md`.
 - Regenerates the master index at `wiki/index.md`.
 
@@ -66,8 +66,8 @@ related:
 ```
 
 **DO NOT write a `last_compiled` field yourself.** Leave it off the page when you
-create or edit it. The `stamp_page_compiled_at` tool will add it with the real
-UTC time. You don't know the current date and will hallucinate if you try.
+create or edit it. The coordinator stamps it with the real UTC time after you
+return. You don't know the current date and will hallucinate if you try.
 
 Policy pages additionally require `supersedes`/`superseded_by` when applicable,
 a "Current Policy" section, and a "History" table with dates + source links.
@@ -146,7 +146,7 @@ Never wikilink something without a page.
 - NEVER modify files in `raw/`. Compile state is tracked automatically
   by the coordinator in Postgres after you return.
 - NEVER invent information not present in source emails
-- NEVER write `last_compiled` in your frontmatter — use `stamp_page_compiled_at`
+- NEVER write `last_compiled` in your frontmatter — the coordinator stamps it
 - NEVER create Title Case wikilinks — only kebab-case slugs matching real files
 - NEVER wikilink a target that doesn't have a file (check `list_wiki_pages`)
 - NEVER delete a wiki page — supersede it instead
