@@ -26,7 +26,6 @@ import sys
 from pathlib import Path
 
 import click
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
