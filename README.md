@@ -1,11 +1,39 @@
 # Email Knowledge Base
 
-A living knowledge base that ingests emails from a Gmail/Google Workspace mailing list
-and compiles them into an interlinked markdown wiki using LLM-powered compilation.
+A topic-first knowledge base that ingests email from a Gmail/Google Workspace
+mailing list and compiles it into an interlinked markdown wiki.
 
-Based on [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
-(April 2026), extended for email: thread awareness, supersession detection, and
-incremental compilation triggered by new mail events.
+Raw emails are immutable evidence. Wiki pages are compiled knowledge.
+
+Based on [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f),
+extended for email: thread awareness, supersession detection, and incremental
+compilation.
+
+## Current status
+
+The repo already works for:
+
+- backlog ingest from Gmail into `raw/`
+- manual compile into `wiki/`
+- local/read-only browsing via MkDocs
+- coordinator-owned compile state in Postgres
+
+The repo is **not** yet a polished team wiki. Live ingestion, strong search,
+and chatbot-style querying are still future phases, and entity pages remain
+noisy compared to topic pages.
+
+## What this project is optimizing for
+
+Near-term, this project should optimize for four things:
+
+1. **Trustworthy topic pages**: project and system pages should preserve the
+   concrete decisions, metrics, tables, and changes that matter.
+2. **Provenance without clutter**: readers should be able to trust a page
+   without scrolling through hundreds of lines of frontmatter.
+3. **Topic-first navigation**: the wiki should feel browsable via hubs,
+   rollups, glossary pages, and timelines, not just by scanning filenames.
+4. **People pages as support structure**: entity pages should help navigation
+   and attribution, not dominate the wiki or become the primary product.
 
 ## What it does
 
@@ -13,7 +41,8 @@ incremental compilation triggered by new mail events.
 Gmail mailing list → ingest → raw/ (immutable emails) → compile → wiki/ (knowledge base)
 ```
 
-1. **Ingests** emails from a Gmail mailing list (OAuth, supports backlog + live)
+1. **Ingests** emails from a Gmail mailing list (OAuth; backlog flow shipped,
+   live flow designed but not yet shipped)
 2. **Parses** each email into structured markdown with YAML frontmatter
 3. **Compiles** raw emails into interlinked wiki pages using an LLM agent (Deep Agents + LiteLLM)
 4. **Maintains** the wiki incrementally — new emails update only affected pages
@@ -88,84 +117,32 @@ uv run python scripts/lint_wiki.py
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    Gmail Mailing List                         │
-└──────────┬───────────────────────────────────────────────────┘
-           │  Gmail API (OAuth)
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   INGEST PIPELINE                             │
-│                                                               │
-│  gmail.py ─────► parser.py ─────► attachments.py              │
-│  Fetch emails    Convert to       Extract & store             │
-│  from Gmail      raw markdown     attachments + images        │
-│  (backlog or     with YAML                                    │
-│   live watch)    frontmatter                                  │
-└──────────┬───────────────────────────────────────────────────┘
-           │  Writes to raw/
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   RAW STORAGE (raw/)                          │
-│                                                               │
-│  Immutable. One .md file per email.                           │
-│  YAML frontmatter: from, to, date, thread_id, subject,       │
-│    message_id, in_reply_to, labels, has_attachments           │
-│  Attachments in raw/attachments/{message_id}/                 │
-│  Images captioned at ingest time via vision model             │
-│                                                               │
-│  Naming: YYYY-MM-DD_{subject-slug}_{msg-id-short}.md         │
-└──────────┬───────────────────────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│              COMPILE (Deep Agents + LiteLLM)                  │
-│                                                               │
-│  compiler.py ──► prompts.py ──► relations.py                  │
-│  Deep Agents     Compilation     Supersession &               │
-│  workflow:       prompts for     conflict detection            │
-│                  each page type                                │
-│  1. Read new raw emails                                       │
-│  2. Classify: what topics/entities/policies are mentioned?    │
-│  3. For each affected wiki page:                              │
-│     a. Read existing page (if any)                            │
-│     b. Merge new information                                  │
-│     c. Detect supersession (new overrides old)                │
-│     d. Write updated page                                     │
-│  4. Update index.md and log.md                                │
-│  5. Flag contradictions → wiki/conflicts/                     │
-│                                                               │
-│  All LLM calls traced via Langfuse                            │
-└──────────┬───────────────────────────────────────────────────┘
-           │  Writes to wiki/
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   WIKI (wiki/)                                │
-│                                                               │
-│  wiki/index.md        Master catalog of all pages             │
-│  wiki/log.md          Chronological ingest/compile log        │
-│  wiki/topics/         One page per project/product/initiative │
-│  wiki/entities/       People, teams, products, systems        │
-│  wiki/policies/       Current policies with history           │
-│  wiki/timelines/      Chronological event tracking            │
-│  wiki/conflicts/      Unresolved contradictions               │
-│                                                               │
-│  Every page has YAML frontmatter:                             │
-│    title, sources (raw file refs), last_compiled,             │
-│    status (current | superseded | contested)                  │
-│  Pages interlink via [[wikilinks]]                            │
-│  Git tracks all changes (free version history)                │
-└──────────┬───────────────────────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                  QUERY + LINT                                 │
-│                                                               │
-│  QUERY: Search wiki pages, synthesize answers                 │
-│         Good answers become new wiki pages                    │
-│  LINT:  Health check for stale claims, orphan pages,          │
-│         missing cross-refs, contradictions                    │
-└──────────────────────────────────────────────────────────────┘
+Gmail mailing list
+  -> ingest (`scripts/ingest_backlog.py`, `src/ingest/*`)
+  -> immutable raw emails in `raw/`
+  -> Postgres queue/catalog (`src/db/*`)
+  -> compiler agent (`src/compile/compiler.py` + `prompts.py`)
+  -> wiki pages in `wiki/`
+  -> MkDocs viewer (`mkdocs.yml`, `mkdocs_hooks.py`)
 ```
+
+### Runtime responsibilities
+
+- `raw/` is immutable source material. The agent never edits it.
+- Postgres owns compile state and run bookkeeping.
+- The compiler agent writes wiki content only.
+- The coordinator script verifies outcomes, stamps modified pages,
+  appends to `wiki/log.md`, and rebuilds `wiki/index.md`.
+
+### Current information architecture
+
+- `wiki/topics/` is the most important surface. This is where project and
+  decision knowledge should concentrate.
+- `wiki/systems/` is for products, services, tools, URLs, and mailing lists.
+- `wiki/entities/` is for humans only.
+- `wiki/policies/`, `wiki/timelines/`, and `wiki/conflicts/` exist, but are
+  still underused compared to topics and systems.
+- Query APIs and chatbot-style retrieval are not shipped yet.
 
 ## Tech stack
 
@@ -176,8 +153,8 @@ uv run python scripts/lint_wiki.py
 | Agent framework | [Deep Agents](https://github.com/langchain-ai/deepagents) | Batteries-included agent on LangGraph — built-in file ops, sub-agents, planning, model-agnostic |
 | LLM access | [LiteLLM](https://github.com/BerriAI/litellm) | Model-agnostic — OpenAI, Anthropic, Gemini, open models |
 | Email access | Gmail API (google-api-python-client) | Google Workspace, supports watch + history for live mode |
-| Email parsing | mail-parser | Robust .eml parsing with charset detection |
-| Observability | [Langfuse](https://github.com/langfuse/langfuse) | LLM tracing from day one |
+| Email parsing | Gmail API payload parsing + MarkItDown fallback | Matches current code path in `src/ingest/parser.py` |
+| Observability | [Langfuse](https://github.com/langfuse/langfuse) (optional) | Wired in, but disabled unless env keys are set |
 | Config | pydantic-settings + .env | Type-safe config |
 | Logging | structlog | Structured logging |
 
@@ -185,95 +162,105 @@ uv run python scripts/lint_wiki.py
 
 ```
 email-knowledge-base/
-├── README.md                      # This file
-├── CLAUDE.md                      # Agent schema — rules for the LLM compiler
-├── pyproject.toml                 # Dependencies (uv)
-├── Makefile                       # Common commands
-├── .env.example                   # Environment template
-├── .gitignore
-│
+├── README.md
+├── CLAUDE.md                      # Agent rules / operating contract
+├── Makefile
+├── pyproject.toml
+├── .env.example
 ├── src/
-│   ├── __init__.py
-│   ├── config.py                  # Settings via pydantic-settings
-│   ├── budget.py                  # LiteLLM proxy budget check
-│   │
-│   ├── ingest/                    # Email → raw/ pipeline
-│   │   ├── __init__.py
-│   │   ├── gmail.py               # Gmail API client (OAuth, fetch, list)
-│   │   ├── parser.py              # Email → raw markdown with YAML frontmatter
-│   │   └── attachments.py         # Attachments + image captioning (LiteLLM vision)
-│   │
-│   ├── compile/                   # raw/ → wiki/ compilation
-│   │   ├── __init__.py
-│   │   ├── compiler.py            # Deep Agents workflow + custom tools
-│   │   └── prompts.py             # Karpathy-pattern compilation prompts
-│   │
-│   ├── wiki/__init__.py           # reserved for Phase 2 search/index modules
-│   └── api/__init__.py            # reserved for Phase 1+ FastAPI endpoints
-│
-├── raw/                           # Immutable email storage (content gitignored)
-│   ├── .gitkeep
-│   └── attachments/               # Email attachments by message_id hash
-│
-├── wiki/                          # LLM-compiled knowledge base (content gitignored)
-│   ├── index.md                   # Master catalog (auto-generated)
-│   ├── log.md                     # Append-only compile log
-│   ├── topics/                    # Projects, initiatives, features
-│   ├── entities/                  # People (humans only)
-│   ├── systems/                   # Products, platforms, services, mailing lists
-│   ├── policies/                  # Current policies with version history
-│   ├── timelines/                 # Long-running chronologies
-│   └── conflicts/                 # Unresolved contradictions
-│
+│   ├── config.py
+│   ├── budget.py
+│   ├── ingest/                    # Gmail -> raw markdown
+│   ├── compile/                   # Compiler agent, prompts, cache stats, entity identity
+│   └── db/                        # Postgres-backed queue/catalog state
 ├── scripts/
-│   ├── ingest_backlog.py          # Pull last N days of mailing-list email
-│   ├── compile_all.py             # Sequential compile (chronological, oldest-first)
-│   ├── compile_parallel.py        # Thread-aware parallel compile
-│   ├── lint_wiki.py               # Advisory checks + auto-fix (wikilinks, stubs)
-│   ├── validate_wiki.py           # Hard integrity check (exits non-zero on corruption)
-│   ├── snapshot_wiki.py           # Save/restore wiki state for safe iteration
-│   └── watch_and_compile.py       # Live mode: poll Gmail + compile (candidate for Phase 1)
-│
-├── mkdocs.yml + mkdocs_hooks.py   # Material theme + roamlinks + Sources-section hook
-│
+│   ├── ingest_backlog.py
+│   ├── compile_all.py
+│   ├── compile_parallel.py
+│   ├── watch_and_compile.py
+│   ├── lint_wiki.py
+│   ├── validate_wiki.py
+│   ├── snapshot_wiki.py
+│   ├── backfill_*.py
+│   └── audit.py
+├── raw/                           # Immutable email storage
+├── wiki/                          # Compiled knowledge base
 ├── docs/
-│   ├── BACKLOG.md                 # "For later" items
-│   ├── issues/                    # Issue docs (optional GitHub promotion)
-│   └── reviews/                   # Audit reports (coherence, quality, plans)
-│
-├── CHANGELOG.md                   # Living record of issues + fixes + rationale
-├── CLAUDE.md                      # Agent schema (symlinked as AGENTS.md)
-└── .snapshots/                    # Pre-compile backups (gitignored, local-only)
+│   ├── BACKLOG.md
+│   ├── issues/
+│   ├── reviews/
+│   └── runs/
+├── mkdocs.yml
+├── mkdocs_hooks.py
+├── CHANGELOG.md
+└── .snapshots/                    # Pre-compile safety backups
 ```
 
-## Phased delivery
+## Delivery plan
 
-### Phase 0 — "It works" (Day 1)
-- Gmail OAuth + email fetcher (backlog pull)
-- Email parser → raw/ markdown with frontmatter
-- LLM compiler → wiki/ pages
-- CLI scripts: ingest, compile, lint
-- Langfuse tracing
+### Phase 0 — working pipeline ✅
 
-### Phase 1 — "It's live" (Week 1–2)
-- Gmail watch + Pub/Sub for real-time notifications
-- Incremental compilation (only new emails trigger updates)
-- Thread-aware ingestion (reply chains as units)
-- Image/attachment captioning via vision model
-- FastAPI webhook for Pub/Sub push
+Done today:
 
-### Phase 2 — "It's smart" (Week 3–4)
-- Typed supersession relations
-- Confidence scoring per wiki claim
-- Lint agent with auto-fix for high-confidence issues
-- Hybrid search: full-text + metadata filters
-- Wiki UI (BookStack or MkDocs Material)
+- backlog ingest from Gmail
+- raw email serialization
+- compile queue in Postgres
+- wiki compiler + coordinator guardrails
+- MkDocs viewer
+- validator, lint, snapshots, audits
 
-### Phase 3 — "It talks back" (Month 2)
-- Chatbot agent over wiki + raw layers
-- Agentic retrieval: metadata → full-text → semantic → rerank
-- Every answer cites sources, declares recency status
-- Query answers compiled back into wiki
+### Phase 1 — trustworthy and approachable wiki
+
+Current priority:
+
+- move provenance out of bloated markdown frontmatter and into the catalog/render layer
+- make the wiki topic-first and easier to browse
+- de-noise entity pages so they support the wiki instead of overwhelming it
+- add better hubs, glossary, rollups, and visible freshness/status metadata
+- keep docs, backlog, and milestones honest about what is actually shipped
+
+### Phase 2 — live ingestion
+
+After the wiki is trustworthy enough to deserve automation:
+
+- Gmail watch + Pub/Sub
+- webhook endpoint
+- `historyId` tracking
+- quiet-period thread compilation
+- default attachment/image handling
+
+### Phase 3 — queryable knowledge base
+
+- local search that works at wiki scale
+- better navigation across related topics and timelines
+- question-answering over compiled knowledge with citations
+
+### Phase 4 — team-scale system
+
+- multi-user/team workflow
+- stronger review/eval loops
+- production-grade deployment and multi-mailing-list support
+
+## What makes it better as a wiki
+
+If the output should feel like a real wiki rather than a file dump, the next
+improvements are mostly structural:
+
+- **Topic-first homepages and hubs**: readers should land on projects, systems,
+  and cross-cutting themes before they land on people pages.
+- **Rollups over filenames**: generate pages like "all WhatsApp work" or
+  "all buyer-chat work" so browsing does not require guessing slugs.
+- **Glossary and metadata**: define acronyms, show freshness/status/owner-like
+  context, and make page state legible at a glance.
+- **Less provenance noise**: preserve trust, but render sources in a way that
+  supports the prose instead of swallowing it.
+- **Cleaner category boundaries**: entities are humans, systems are products and
+  tools, timelines/policies/conflicts appear when they add navigational value.
+
+The detailed target structure is captured in
+[`docs/issues/09-internal-wiki-structure.md`](docs/issues/09-internal-wiki-structure.md).
+The execution plan for getting there lives in
+[`docs/issues/10-phase1-implementation-plan.md`](docs/issues/10-phase1-implementation-plan.md).
 
 ## Deploying to GCP
 

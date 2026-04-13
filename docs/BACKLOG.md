@@ -309,75 +309,80 @@ trusting it.
 
 ---
 
-## Priority index (as of 2026-04-13T11:30Z)
+## Priority index (as of 2026-04-13, synced after `origin/main` model-pool merge)
 
-Catalog migration has landed (`messages` table is source of truth; users/threads/wiki_pages
-in-flight via PRs #22–#35). Compile pipeline runs but still produces stub-heavy entity
-pages. This index orders the sections below by ship-value so we don't re-scan the whole
-file each time.
+Working assumptions for prioritization:
 
-### 🔥 NOW — small, high-leverage papercuts
-1. **Verify prompt caching** — cheap ($2–5 spike), directly affects per-batch cost.
-   Key has the budget. See § Verify prompt caching.
-2. **Trivial-message filter (skip `+1`, `thanks`, `lgtm`)** — deterministic regex at
-   ingest. Every batch re-processes these today. See § Trivial-message filter.
-3. **Compile stall detection** — overnight wrapper has `timeout 900`; inner
-   `compile_all.py` doesn't. See § Compile stall detection.
-4. **De-noise entity pages: drop CC-only sources** — entity bloat partly fixed via
-   `dedupe_sources`, CC-only still pulls entities into every announcement thread.
-   See § De-noise entity pages.
-5. **`log_insight` tool / agent meta-commentary** — captures "this structure is weird" /
-   "I'm uncertain about X" during compile so humans can act. See § Agent meta-commentary.
+- The goal is a **polished internal wiki with references**, not "every email becomes a page."
+- **Compile quality outranks live automation.** If the wiki is noisy, making it faster just makes noise arrive faster.
+- The product is a **topic-first wiki**. Topic/system pages are the primary surface; people pages are supporting context.
+- The company moves fast, so the system must preserve references while remaining browseable and current.
 
-### 🟡 SOON — medium effort, set up once, keeps paying
-6. **Agent scaffolding: step-count reminders, pre-model hooks, context pruning** —
-   directly attacks recursion-limit-hits and 8-min hangs at the agent level. See
-   § Agent scaffolding investigation.
-7. **Per-batch random model A/B with stats** — key allows `minimax-m2.7`, `-m2.5`,
-   `glm-5`, `glm-5.1` but proxy `/v1/models` doesn't surface them; separate ticket to
-   ask proxy admin to provision routes. See § Per-batch random model A/B.
-8. **Inline citations (replace long Sources)** — depends on catalog PR3 (#31) landing.
-   See § Inline citations.
-9. **Entity page content compaction** — dedupe_sources trimmed sources only; page
-   bodies still accumulate narrative across batches. See § Entity page bloat.
+### Working design direction
 
-### 🟢 LATER — bigger surfaces; wait for catalog cascade
-10. **Phase 1 live ingestion (Gmail watch + Pub/Sub)** — depends on ingest_cursors (#27).
-11. **Phase 2 wiki UI** — post-catalog, post-search.
-12. **QMD (Tobi Lütke) local semantic search** — needs real prose content first
-    (post source-strip per catalog PR3).
-13. **Multiple mailing lists** — architectural change after current list proves clean.
-14. **Agent skills + MCP server** — downstream consumers; wait until output is worth
-    consuming.
-15. **Storage tier local→GCS→Cloud SQL** — migration prep, not blocking today.
+1. **Move deterministic work out of the agent.**
+   Queue state, provenance joins, duplicate detection, page lookup, entity identity,
+   freshness stamping, and validation should live in tools or the coordinator.
+2. **Shrink the compiler agent's job.**
+   The agent should synthesize and update topic/system/policy/timeline/conflict pages,
+   not act as a bookkeeper or global grep engine.
+3. **Use skills for operator workflows.**
+   Cleanup, audits, publishing, live-ingest ops, and batch repair are reusable workflows,
+   not core compile reasoning.
+
+### 🔥 NOW — highest-value work
+1. **Finish the provenance split** — render references from the catalog / DB layer instead
+   of bloating markdown frontmatter. This is the single biggest step toward making the
+   output feel like a real wiki.
+2. **Make the wiki topic-first and navigable** — glossary, topic rollups, stronger
+   `index.md`, and fewer dead-end categories. Readers should browse by subject, not by slug hunting.
+3. **De-noise entity pages** — drop CC-only noise, cap/compact entity provenance, and stop
+   treating people pages as the center of the wiki.
+4. **Strengthen compile guardrails** — per-batch timeout, YAML/edit validation, corruption
+   detection, and self-healing repair path. Quality first.
+5. **Add a trivial-message filter at ingest** — `+1`, `thanks`, `lgtm`, and other low-signal
+   acknowledgements should not become compile work.
+6. **Keep docs and roadmap honest** — README, phased-delivery, and backlog should describe
+   the actual system and the actual north star.
+
+### 🟡 SOON — important, but after the quality floor
+7. **Agent scaffolding / middleware** — step-count reminders, pre/post hooks, context pruning,
+   and tool-call guardrails after a measurement pass.
+8. **Search over real wiki knowledge** — once the output is curated enough to deserve search.
+9. **Live ingestion (Gmail watch + Pub/Sub)** — after the wiki is good enough that automated
+   updates improve it instead of amplifying poor synthesis.
+10. **Viewer polish** — metadata headers, most-cited panels, and similar browse polish once
+    the information architecture is stable.
+11. **Parallel compile** — only after collision measurement and page-write coordination.
+
+### 🟢 LATER — team-scale or post-quality work
+12. **Local semantic search / QMD-style retrieval** — valuable once topic prose is strong.
+13. **Multiple mailing lists** — after one list produces a clean knowledge surface.
+14. **Agent skills + MCP server for downstream consumers** — after the wiki output itself is worth consuming programmatically.
+15. **Storage tier local→GCS→Cloud SQL** — deployment/ops scale-up, not today's bottleneck.
 
 ### ⚪️ Research / reading (not ship)
-16. Reading list — Anthropic engineering posts.
+16. Reading list — Anthropic engineering posts, LangChain guardrails, LLM Wiki references.
 
 ### ✅ Already shipped — historical record, don't re-promote
-- **Quality: date hallucination** — DONE via `stamp_page_compiled_at` tool
-- **Quality: wikilink casing** — DONE via prompt + lint normalizer
-- **Architecture: real datastore** — DONE via Postgres `messages` (commit ecbd4ad);
-  users/threads/wiki_pages in-flight
-- **Langfuse self-hosted integration** — DONE via #15 (pin + bounded timeouts);
-  server-side hang tracked in issue #17
-- **Langfuse callback stalls** — mitigation DONE via #15; root cause in issue #17
-- **Schema: entity identity name→email** — IN PROGRESS (#24, #26)
-- **Performance: parallelize compilation** — DRAFTED (`scripts/compile_parallel.py`),
-  not benchmarked
-- **Thread-aware compilation** — DONE
-- **Phase 0 review: first full compile observations** — 4 of 5 P0 items shipped
-  (wikilink casing, date hallucination, non-person entities, index.md staleness).
-  Item 4 "orphan entity back-links" still open — low-impact, not blocking compile.
-- **Review tools vs Anthropic tool-writing guide** — partial (issue #4 open)
+- **Quality: date hallucination** — DONE via coordinator-owned stamping
+- **Quality: wikilink casing** — DONE via prompt + lint normalization
+- **Architecture: Postgres queue/catalog base** — DONE via `messages`, `wiki_pages`,
+  `message_touched_pages`, `compile_runs`, and `ingest_cursors`
+- **Prompt-caching verification** — DONE; cache stats are instrumented
+- **Per-batch model A/B base** — DONE via model pool + `compile_model`
+- **Langfuse self-hosted integration** — DONE as optional, bounded-timeout tracing
+- **Thread-aware compilation** — DONE (basic)
+- **Entity identity by email** — DONE for canonical creation path; cleanup/migration remains
+
+### Open PRs worth noting
+- **#50 batch-timeout** matters to compile health.
+- **#48, #49, #52** are useful viewer/content polish, but they are not the main bottleneck.
 
 ### 🧹 Governance debt (visible right now)
-- **CHANGELOG discipline has slipped** — 12 open PRs (#22–#35) + 4 recently merged
-  (#16, #19, #20, #21) did not update `CHANGELOG.md`. Enforce going forward via a
-  PR guardrail workflow. Not retroactively fixing.
-- **No CI workflow for tests/lint** — `.github/workflows/` only has Claude action
-  files. A simple `ci.yml` running `uv run ruff check` + `uv run pytest` would catch
-  regressions quickly. Separate papercut.
+- **CHANGELOG discipline has slipped** — enforce going forward with PR guardrails, do not keep backfilling history forever.
+- **No CI workflow for tests/lint** — a minimal `ci.yml` running `uv run ruff check` + `uv run pytest`
+  would catch regressions and keep roadmap claims honest.
 
 ---
 
