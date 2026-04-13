@@ -5,6 +5,79 @@ them up.
 
 ---
 
+## Per-batch random model A/B with stats tracking (2026-04-13)
+
+**Why**: `z-ai/glm-4.6` is the current default, but the proxy exposes several
+cheaper / faster / smarter candidates. We want to learn which model actually
+performs best on OUR compile workload (not benchmarks), measured by wiki
+quality, not just cost per batch.
+
+### Proxy inventory — what's actually available
+
+Queried `https://imllm.intermesh.net/v1/models` (2026-04-13). User asked for
+`minimax/minimax-m2.7`, `z-ai/glm-5`, `z-ai/glm-5.1` — none of those exist on
+the proxy yet. Closest matches:
+
+**Minimax family** — cheapest tier:
+- `minimax/minimax-m2` — older
+- `minimax/minimax-m2.1` — newer (closest to requested m2.7)
+
+**Z-AI / GLM family** — current default:
+- `z-ai/glm-4.6` (default)
+- `z-ai/glm-4.5-air` — smaller/cheaper variant
+
+**Adjacent cheap Chinese-model families worth sampling:**
+- `deepseek/deepseek-chat-v3.1`, `deepseek/deepseek-r1-0528-qwen3-8b`
+- `qwen/qwen3-32b`, `qwen/qwen3-coder`, `qwen/qwen3.5-flash:nitro`
+
+### Design — random-per-batch with stats
+
+1. **Model pool config** — list of candidate model IDs + weights (maybe
+   uniform to start) in `src/config.py` or a YAML file. Operator flag:
+   `--model-pool random` vs current `--model <id>`.
+2. **Seed per batch** — `compile_all.py::run_batch()` picks a random model
+   from the pool at the start of each batch. Sticky for the whole batch
+   (all emails in a thread-group use the same model) so results are
+   comparable.
+3. **Stamp the model on every compiled row** — already partly there:
+   `scripts/compile_all.py` passes `model_name` to `create_compiler`;
+   `stamp_page_compiled_at` writes `updated_by` on the wiki page. Extend
+   `messages.compile_model` column (needs migration) so we can join model
+   → outcome in SQL.
+4. **Stats rollup** — new `scripts/model_stats.py` (or extend
+   `scripts/stats.py`):
+   - cost per batch by model (from LiteLLM `usage.cost` or `key/info` delta)
+   - avg time per email
+   - recursion-limit hits / failures per model
+   - wiki-quality proxy metrics: avg `update_count`, avg page size, stub
+     rate on pages touched by each model
+   - source-dedup ratio, wikilink breakage rate (advisory validator output)
+5. **Backstop**: don't randomize in production until we've burned a small
+   exploration budget (~$10) in shadow mode on a subset of uncompiled
+   emails. First pass: 50-email batch each from the candidate set, same
+   thread grouping, then manual inspection + stats diff.
+
+### What this does NOT need to be
+- Not a full multi-armed-bandit scheduler. Uniform random is enough for v0.
+- Not model routing by content signal. Pick-per-batch is simpler and
+  comparable.
+- Not an eval harness — stats-driven, not rubric-scored (that's a separate
+  BACKLOG item: reading list → "demystifying evals for ai agents").
+
+### Prerequisites / cross-deps
+- Issue #17 (Langfuse server hang) — useful for per-model latency traces,
+  not blocking. Can start without tracing.
+- Catalog PR cascade (#21/#22/#23/#24) finishing — `messages.compile_model`
+  lives naturally next to `compile_state`, `compile_attempts`.
+
+### Smallest-shippable slice
+Add `--model <id>` to `compile_all.py` (probably already there), plus a
+`--model-pool a,b,c` that picks random per batch. Stamp model to a new
+`messages.compile_model` column in a tiny migration. Leave stats rollup
+for a second PR.
+
+---
+
 ## Agent scaffolding investigation — step-count reminders, hooks, context pruning (2026-04-13)
 
 **Problem observed today**: 1-email compile batches take 8-14 minutes at
