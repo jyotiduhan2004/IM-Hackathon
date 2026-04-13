@@ -24,7 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.budget import fetch_budget  # noqa: E402
-from src.compile.cache_stats import CacheStatsCallback  # noqa: E402
+from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
@@ -462,7 +462,7 @@ def main(
                 f"({len(batch)} emails, thread={thread_id[:12]}, "
                 f"earliest={earliest}, model={batch_model}) ==="
             )
-            cache_cb = CacheStatsCallback(model=batch_model)
+            cache_cb = BatchStatsCallback(model=batch_model)
             try:
                 run_compilation(
                     instruction=instruction,
@@ -482,9 +482,11 @@ def main(
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
                 cache = cache_cb.snapshot()
+                served = ",".join(cache["served_models"]) or cache["requested_model"]
                 suffix_parts.append(
-                    f"model={cache['model']} cache={cache['cached_tokens']}/"
+                    f"model={served} cache={cache['cached_tokens']}/"
                     f"{cache['prompt_tokens']} ({cache['cache_pct']}%) "
+                    f"writes={cache['cache_creation_tokens']} "
                     f"turns={cache['turns']} tools={cache['tool_calls']} "
                     f"tools/turn={cache['tools_per_turn']} "
                     f"total_tok={cache['total_tokens']}"

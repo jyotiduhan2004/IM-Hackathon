@@ -25,14 +25,17 @@ Detailed incident postmortems live under `docs/incidents/`.
   brand reused; the IAP OAuth Admin API was permanently shut down
   2026-03-19 so new projects fall back to a Google-managed OAuth
   client by default.
-- Per-batch prompt-caching + token-efficiency stats: `CacheStatsCallback`
-  (`src/compile/cache_stats.py`) hooks every LLM turn and tool call,
-  accumulating `input_tokens`, `cache_read`, `output_tokens`,
-  `tool_calls`. `compile_all.py` prints `model=… cache=N/M (X%)
-  turns=… tools=… tools/turn=… total_tok=…` after each batch and writes
-  it into `wiki/log.md`. Surfaces when a model silently stops caching
-  (exactly the glm-5.1 surprise today — see
-  `docs/reviews/prompt-caching-20260413.md`).
+- Per-batch prompt-caching + token-efficiency stats: `BatchStatsCallback`
+  (`src/compile/cache_stats.py`) extends LangChain's standard
+  `UsageMetadataCallbackHandler` (langchain-core ≥0.3.49) with a
+  tool-call counter. Standard handler aggregates `input_tokens` /
+  `output_tokens` / `cache_read` / `cache_creation` per model name;
+  our subclass adds `tool_calls` (which the standard handler doesn't
+  track) and a flat `snapshot()` for log lines. `compile_all.py` prints
+  `model=… cache=N/M (X%) writes=… turns=… tools=… tools/turn=…
+  total_tok=…` after each batch and writes it into `wiki/log.md`.
+  Surfaces when a model silently stops caching (the glm-5.1 surprise
+  today — see `docs/reviews/prompt-caching-20260413.md`).
 - `--model-pool a,b,c` flag on `compile_all.py` — random pick per batch,
   sticky for the whole batch, so the cache-stats line above lets us
   compare model behaviour A/B-style on the actual workload. Promoted
