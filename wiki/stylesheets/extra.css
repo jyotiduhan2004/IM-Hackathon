@@ -1,0 +1,10 @@
+.ext-badge {
+  display: inline-block;
+  padding: 0.1em 0.5em;
+  margin-left: 0.5em;
+  background: #f59e0b;
+  color: white;
+  border-radius: 0.25em;
+  font-size: 0.75em;
+  font-weight: 600;
+}

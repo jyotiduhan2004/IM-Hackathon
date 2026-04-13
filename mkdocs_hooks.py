@@ -130,6 +130,21 @@ def _fix_list_gaps(body: str) -> str:
     return "\n".join(out) + ("\n" if body.endswith("\n") else "")
 
 
+def _render_external_badge(fm: dict) -> str:
+    """Return the external-contact badge HTML, or empty string.
+
+    Entity pages carry `is_external: true` in frontmatter when the subject is
+    not an @indiamart.com address. Reviewers asked for a visible cue so
+    external contributors are obvious at a glance from the page title.
+    """
+    if not fm.get("is_external"):
+        return ""
+    return (
+        '<span class="ext-badge" '
+        'title="External contact (not @indiamart.com)">external</span>'
+    )
+
+
 def _page_metadata_banner(fm: dict) -> str:
     """Small metadata banner at the top of each page.
 
@@ -182,6 +197,26 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
 
     # Fix markdown rendering issues at the source
     body = _fix_list_gaps(body)
+
+    # Inject an external-contact badge near the title when flagged.
+    # Entity pages rely on MkDocs Material to auto-generate the h1 from
+    # frontmatter, so there's no h1 line in the body to splice into — we
+    # prepend the badge paragraph which renders right under the auto h1.
+    # Pages with an explicit h1 get the badge appended to that line so it
+    # sits next to the title visually.
+    badge_html = _render_external_badge(fm)
+    if badge_html:
+        body_lines = body.splitlines(keepends=False)
+        h1_idx = -1
+        for i, line in enumerate(body_lines):
+            if line.startswith("# "):
+                h1_idx = i
+                break
+        if h1_idx >= 0:
+            body_lines[h1_idx] = body_lines[h1_idx] + " " + badge_html
+            body = "\n".join(body_lines)
+        else:
+            body = badge_html + "\n\n" + body
 
     # Inject a metadata banner at the top (after the h1)
     banner = _page_metadata_banner(fm)

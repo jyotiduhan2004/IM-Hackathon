@@ -79,6 +79,9 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/indiamart-ai/email-knowledge-base
 
+extra_css:
+  - stylesheets/extra.css
+
 # Suppress warnings for pages referenced via [[wikilinks]] that MkDocs doesn't
 # natively understand — we render them as plain text (Phase 2 will add a plugin)
 strict: false
