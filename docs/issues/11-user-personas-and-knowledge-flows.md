@@ -178,6 +178,66 @@ The primary path should be:
 
 That is the difference between a wiki and a ledger.
 
+## Schema mapping
+
+This document stays within the existing page schema from `CLAUDE.md`. The
+recommended structures here should map to current page types like this:
+
+| Proposed structure | Current schema mapping | Notes |
+| --- | --- | --- |
+| Domain hub | `topic` page with `navigation_role: domain_hub` | Not a new page type in Phase 1 |
+| Major product / platform | `system` page | Use for durable products, platforms, services, tools, URLs, and mailing lists |
+| Major program / initiative | `topic` page | Use when the parent is a durable program rather than a system |
+| Capability page | `topic` page | Optional middle tier beneath a major product or domain hub |
+| Experiment / launch / decision | `topic` page | Default unit for changes, launches, migrations, A/B tests, and rollouts |
+| Policy / guardrail | `policy` page | Use when the durable object is a rule rather than a launch |
+| Ownership history | Section inside `topic` / `system` / `policy` pages | Not its own page type |
+| Opinion change | Section inside `topic` / `system` / `policy` pages | Not its own page type |
+| Conflict / contested state | `conflict` page plus `status: contested` on affected pages | Use when disagreement cannot be resolved safely |
+| Glossary / aliases | Curated navigation page or section inside a domain hub | Supporting navigation artifact, not a new canonical knowledge type |
+
+The important constraint is:
+
+- Phase 1 should not invent a new `hub` page type.
+- Domain hubs should be implemented as reader-facing `topic` pages with a clear
+  navigation role.
+- Glossary / aliases should support navigation, not compete with canonical
+  topic/system/entity pages.
+
+## Domain hubs
+
+Domain hubs are the top-level entry points a human should browse first.
+
+Proposed canonical hubs:
+
+- `Buyer`
+- `Seller`
+- `Marketplace`
+- `Search & Discovery`
+- `Trust & Safety`
+- `Growth`
+- `AI Agents & Automation`
+- `Infra & Developer Platforms`
+
+Each hub should summarize the area and route the reader into major products,
+systems, current bets, and supporting glossary terms.
+
+### Domain hub template
+
+```markdown
+# Buyer
+
+## Summary
+## Major Products & Platforms
+## Active Programs & Experiments
+## Important Policies & Guardrails
+## Key Teams & Owners
+## Glossary / Aliases
+## Recent Changes
+## Related Hubs
+## Sources
+```
+
 ## Major products vs minor experiments
 
 This needs a deliberate hierarchy.
@@ -219,6 +279,25 @@ Examples:
 - rollout experiments
 - prompt / agent / workflow POCs
 
+### Capability pages
+
+Capability pages are an optional middle tier. Use them only when a major product
+or platform has multiple coherent sub-areas that users actually need to browse
+separately.
+
+Examples:
+
+- `Search ranking`
+- `Seller onboarding blockers`
+- `Buyer messaging workflows`
+
+Rule:
+
+- If a major product has only a few directly related experiments, skip the
+  capability tier and attach those experiments directly to the parent page.
+- If a major product has multiple recurring sub-areas, use capability pages to
+  avoid a flat pile of launches under the top-level parent.
+
 ### Relationship between them
 
 Each experiment should roll up into a more durable parent area.
@@ -233,6 +312,32 @@ flowchart LR
     D --> F
     E --> F
 ```
+
+### Promotion criteria
+
+An experiment should be promoted into a major product / platform / program page
+only when at least two of the following are true:
+
+1. It appears across `3+` independent threads or over a `30+` day span.
+2. It has a named current owner or team and an ongoing roadmap.
+3. It has `2+` child experiments, launches, policies, or recurring decisions.
+4. It behaves like reusable company infrastructure, a durable product surface,
+   or a long-running program rather than a one-time rollout.
+
+If these signals are not present, keep it as an experiment / launch topic.
+
+### Parent selection and hierarchy enforcement
+
+The compile loop needs an explicit rule here:
+
+1. If a clear durable parent already exists, attach the experiment to it.
+2. If a parent does not exist but the parent clearly meets promotion criteria,
+   create the parent page and attach the child.
+3. If the parent is ambiguous or under-evidenced, do not create a visible stub
+   major-product page. Keep the child page, mark parent selection as pending,
+   and send the unresolved parent decision to the hidden draft / review queue.
+
+This avoids both over-creating visible stubs and losing the child insight.
 
 ## Ownership now vs earlier
 
@@ -271,6 +376,30 @@ Entity pages should support discovery:
 - what they previously owned
 
 But the canonical truth about ownership belongs on the product/system/topic page.
+
+### Why ownership changes
+
+Ownership change reasons should be normalized just like opinion-change reasons.
+
+- org restructuring
+- launch-to-operations handoff
+- platformization / shared-service move
+- scope split or scope merger
+- staffing or backfill change
+- executive direction
+- incident / risk reassignment
+- business priority change
+
+### Sync rule
+
+Ownership truth should flow in one direction:
+
+1. Canonical `topic` / `system` / `policy` page owns the current and historical
+   ownership record.
+2. Entity pages mirror that record for discovery and should be regenerated or
+   synced from the canonical pages.
+3. If an entity page and a canonical page disagree, the canonical page wins and
+   the entity page should be treated as stale.
 
 ## How opinion changes over time
 
@@ -321,9 +450,9 @@ Short statement of the present position.
 
 ## How the View Changed
 
-| Date | Previous view | Current view | Why it changed | Source |
-| --- | --- | --- | --- | --- |
-| 2026-04-10 | Scale this immediately | Keep single-repo for now | Multi-repo support not ready | raw/... |
+| Date | Previous view | Current view | Why it changed | Confidence | Source |
+| --- | --- | --- | --- | --- | --- |
+| 2026-04-10 | Scale this immediately | Keep single-repo for now | Multi-repo support not ready | Medium | raw/... |
 
 ## Decision Drivers
 
@@ -369,7 +498,31 @@ A major product page should surface:
 Entity pages should summarize current role in the knowledge graph, not act as a
 running email participation log.
 
+### 6. Freshness and disambiguation
+
+Readers need to know when:
+
+- a page is current vs superseded vs contested
+- a search result is ambiguous
+- a page is thin and should not be trusted as a complete answer
+
 ## Recommended page templates
+
+### Domain hub page
+
+```markdown
+# Buyer
+
+## Summary
+## Major Products & Platforms
+## Active Programs & Experiments
+## Important Policies & Guardrails
+## Key Teams & Owners
+## Glossary / Aliases
+## Recent Changes
+## Related Hubs
+## Sources
+```
 
 ### Major product / platform page
 
@@ -380,8 +533,16 @@ running email participation log.
 ## Why It Matters
 ## Current State
 ## Current Owner
+## Current Team
 ## Ownership History
+
+| Date | Previous owner | New owner | Why ownership changed | Source |
+| --- | --- | --- | --- | --- |
+
 ## Active Experiments
+## Capability Areas
+## Current View
+## How the View Changed
 ## Important Recent Changes
 ## Risks / Open Questions
 ## Related Topics
@@ -395,6 +556,7 @@ running email participation log.
 
 ## Summary
 ## Parent Area
+## Parent Type
 ## Goal
 ## What Changed
 ## Rollout / Status
@@ -412,8 +574,8 @@ running email participation log.
 
 ## Summary
 ## Current Areas of Involvement
-## Current Ownership
-## Previous Ownership
+## Current Ownership Mirror
+## Previous Ownership Mirror
 ## Key Strategic Decisions Influenced
 ## Related Products / Systems
 ## Sources
@@ -433,7 +595,18 @@ Pass condition:
 
 - This can be answered by browsing from Home -> Domain -> Product page without needing slug knowledge.
 
-### Scenario B: PM understands ownership
+### Scenario B: PM drills from a product into the right experiments
+
+Goal:
+
+- "I am on BuyerMY. Show me the active experiments, the superseded ones, and what assumptions changed after launch feedback."
+
+Pass condition:
+
+- One canonical product page exposes current state, active experiments, and
+  change-of-view summaries without requiring raw search.
+
+### Scenario C: PM or leader understands ownership
 
 Goal:
 
@@ -443,7 +616,7 @@ Pass condition:
 
 - One canonical page answers this directly, with dates and source-backed rationale.
 
-### Scenario C: Engineer understands why the team changed direction
+### Scenario D: Engineer understands why the team changed direction
 
 Goal:
 
@@ -453,7 +626,18 @@ Pass condition:
 
 - The page includes a structured change-of-view section and links to the source emails.
 
-### Scenario D: New joiner learns the landscape
+### Scenario E: Engineer or operator understands what changed after failures or feedback
+
+Goal:
+
+- "What changed after the launch feedback, incident, or operational problem?"
+
+Pass condition:
+
+- The page clearly separates decision history from operational change history and
+  links each change to the source evidence.
+
+### Scenario F: New joiner learns the landscape
 
 Goal:
 
@@ -463,16 +647,55 @@ Pass condition:
 
 - Domain hubs, glossary links, and curated rollups are sufficient without raw search.
 
+### Scenario G: Reader sees a contested claim
+
+Goal:
+
+- "Two pages or threads disagree. Show me the current disagreement and where to verify it."
+
+Pass condition:
+
+- A `conflict` page exists, affected pages show `status: contested`, and the
+  reader can see both positions with sources.
+
+### Scenario H: Reader understands freshness
+
+Goal:
+
+- "Is this page still current, or am I reading stale or superseded information?"
+
+Pass condition:
+
+- The viewer surfaces freshness and status clearly enough that the reader can
+  distinguish `current`, `superseded`, and `contested` without reading the raw email.
+
+### Scenario I: Reader hits an ambiguous or empty search
+
+Goal:
+
+- "I searched for a name or term and got multiple similar matches, or no exact match."
+
+Pass condition:
+
+- The viewer offers disambiguation, aliases, or adjacent suggestions instead of
+  dropping the reader into a dead end.
+
 ## Immediate implementation implications
 
-This analysis implies a few concrete changes:
+This analysis implies a few concrete changes, in order:
 
-1. The home page should become a domain map, not a full file index.
-2. Major product/system pages need stronger templates than current system stubs.
-3. Ownership must move into canonical topic/system pages.
-4. Entity pages should become supporting summaries, not activity ledgers.
-5. Timelines / conflicts / policy history need real population, not empty directories.
-6. Opinion change should be captured as a first-class section with explicit reasons.
+1. Define the schema mapping and ship domain hubs as `topic` pages with an
+   explicit navigation role rather than inventing a new page type.
+2. Change the home page into a domain map that routes readers into those hubs.
+3. Ship stronger major product / program / experiment templates, including
+   promotion criteria and parent-selection rules.
+4. Move ownership into canonical topic/system/policy pages and treat entity
+   ownership as a synced mirror, not a separate truth source.
+5. Add change-of-view sections, freshness signals, and contested/conflict
+   surfaces so the reader can understand not just facts but interpretation.
+6. Add glossary / alias and disambiguation support so new joiners can navigate
+   without already knowing internal slugs.
+7. Rework entity pages into concise supporting summaries rather than activity ledgers.
 
 ## Bottom line
 
