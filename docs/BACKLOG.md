@@ -5,6 +5,120 @@ them up.
 
 ---
 
+## Parallel compile — decide the concurrency model (2026-04-13)
+
+**Status: deferred.** User pulled back on shipping parallel compile
+this session — wants more time to think through the concurrency
+design before committing. Capturing the full problem statement here
+so the next session starts from current-state context, not from a
+blank page.
+
+### Why this matters
+
+Current serial compile on glm-5.1: ~4-10 min per email, ~45% of
+multi-message-thread batches hit the recursion limit. At that pace,
+reaching week-1 milestones (500+ emails compiled) takes another
+~2-4 hours of LLM wall time. Doubling throughput via parallelism
+would cut that in half. Tripling matters more as the backlog grows.
+
+But we have a half-finished `scripts/compile_parallel.py` sitting in
+the repo (commit `b6368d6`, marked experimental) AND a clean
+coordinator pattern shipped this session (PR #33, #34, #35). The
+question is: what's the right concurrency model now that the
+coordinator owns state, not the agent?
+
+### The race surface
+
+With coordinator-owned state transitions:
+- `mark_as_compiled` — coordinator only. Can't race.
+- `stamp_page_compiled_at` — coordinator only. Can't race.
+- `append_to_log` — coordinator only. Can't race.
+- `update_wiki_index` — coordinator only. Can't race.
+- `create_entity` — reads wiki, writes stub. Idempotent; two workers
+  writing the same stub overwrite each other's identical content.
+- `write_file` / `edit_file` on wiki pages — CAN race. This is the
+  one real risk.
+
+### Where `write_file` races
+
+Thread-grouping in `compile_parallel.py` guarantees both workers can't
+be processing the same thread simultaneously. So:
+
+| Page type | Race risk | Why |
+|---|---|---|
+| topic | Low | usually thread-scoped |
+| timeline, conflict | Low | scoped to a single concern |
+| system | Medium | shared across threads (e.g. every thread touching `buyermy`) |
+| entity | HIGH | every thread mentioning a person updates that entity's page |
+
+Entity pages are the real problem. In practice, a popular entity
+(`amit-agarwal-indiamart-com`) gets touched by maybe 100+ threads. Two
+workers both writing to that page at once = last-write-wins.
+
+### Options considered
+
+1. **Ship as-is, accept last-write-wins on shared entities.** Cheap.
+   Today's post-batch verification catches content mismatches (the
+   citation check knows if an email's content didn't make it into a
+   page). Entity pages become "most recent enrichment wins" — not
+   data loss, just not-maximally-rich.
+
+2. **Postgres advisory locks per wiki page.** `pg_advisory_xact_lock(
+   hashtext(page_path))` before write. Transaction-scoped, cheap.
+   Needs a hook — either patch the `FilesystemBackend` subclass OR
+   do it in `AgentMiddleware.wrap_tool_call` (requires the middleware
+   migration from the other backlog entry). Cleanest long-term;
+   zero data loss.
+
+3. **Partition work by entity.** Assign threads to workers such that
+   no two workers share any entity. Requires building the
+   `thread_id × entity` bipartite graph, coloring it. Real but
+   overkill for our scale.
+
+4. **Single-writer with a faster model.** Glm-5.1 is already the
+   default. If a further 2-3x speedup materializes (bigger model,
+   prompt caching, tighter prompt), parallel becomes less urgent.
+
+5. **Middleware-based concurrency (the self-healing loop).** Once
+   the `CompileCoordinatorMiddleware` lands (other backlog entry),
+   `interrupt_on` can be used to pause a worker when it's about to
+   touch a locked page, and the coordinator serializes.
+
+### Unknowns to resolve before shipping
+
+- How often do two concurrent batches actually hit the same entity
+  page? Measurable with a small test run (concurrency=2, 20 emails)
+  plus filesystem mtime inspection.
+- What's the LLM-request concurrency limit on the LiteLLM proxy?
+  Running 4 workers at once might saturate the key's RPM (50 RPM
+  today per .env; new key may differ).
+- Does deepagents' `FilesystemBackend` expose write hooks, or would
+  we have to subclass?
+- How do we observe per-worker state? `compile_runs` has one row per
+  invocation; with 3 workers we'd want a `worker_id` column or just
+  enough notes to disambiguate.
+
+### Recommended sequence if/when we pick this up
+
+1. **Measure**: small parallel test run (concurrency=2, limit=20,
+   disjoint thread groups). Log which wiki pages got written by
+   which worker and when. Count collisions.
+2. **If collisions are <5% of writes**: ship option 1 (as-is). Good
+   enough; verification catches content misses.
+3. **If collisions are high**: ship option 2 (advisory locks via
+   `FilesystemBackend` subclass). `src/compile/fs_backend.py` — 30
+   lines wrapping the write path with a Postgres transaction that
+   holds `pg_advisory_xact_lock(hashtext(path))` for the duration
+   of the write.
+4. **Long-term**: fold into the `AgentMiddleware` migration from the
+   other backlog entry. `wrap_tool_call` is the idiomatic hook.
+
+Don't ship before the week-1 milestone — serial is working. Don't
+ship without first measuring the actual collision rate; we've been
+theorizing.
+
+---
+
 ## Most-cited topics / entities panel on the index page (2026-04-13)
 
 User request during the index-progress work: surface the top-N most
