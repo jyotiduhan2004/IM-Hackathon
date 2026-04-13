@@ -106,3 +106,30 @@ CREATE TABLE IF NOT EXISTS message_participants (
 -- "What did this user send/receive?" is the dominant access pattern.
 CREATE INDEX IF NOT EXISTS message_participants_user_role_idx
   ON message_participants (user_email, role);
+
+
+-- ---------------------------------------------------------------------------
+-- PR5b: compile_runs — one row per `scripts/compile_all.py` invocation.
+--
+-- Gives run-level observability (cost, counts, status) without the
+-- `.watch_state.json`-style sidecar files that Codex flagged.
+-- See docs/reviews/codex-priority-review-20260413T090000Z.md §1 PR5.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS compile_runs (
+  run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  model TEXT,
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running','completed','failed','killed')),
+  emails_processed INT NOT NULL DEFAULT 0,
+  emails_failed INT NOT NULL DEFAULT 0,
+  cost_cents INT,
+  notes TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS compile_runs_started_idx ON compile_runs (started_at DESC);
+DROP TRIGGER IF EXISTS compile_runs_set_updated_at ON compile_runs;
+CREATE TRIGGER compile_runs_set_updated_at BEFORE UPDATE ON compile_runs
+  FOR EACH ROW EXECUTE FUNCTION email_kb_set_updated_at();

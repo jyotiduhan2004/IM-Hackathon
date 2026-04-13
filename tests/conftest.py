@@ -43,8 +43,8 @@ TEST_SCHEMA = "email_kb_test_schema"
 
 
 def _load_messages_ddl() -> str:
-    """Return DDL for messages + users + threads + message_participants,
-    schema-qualified to TEST_SCHEMA.
+    """Return DDL for the full catalog (messages + users + threads +
+    message_participants + compile_runs), schema-qualified to TEST_SCHEMA.
 
     We don't just execute src/db/schema.sql as-is because it creates a
     global trigger function name (email_kb_set_updated_at) that would
@@ -131,6 +131,27 @@ def _load_messages_ddl() -> str:
 
     CREATE INDEX message_participants_user_role_idx
       ON {TEST_SCHEMA}.message_participants (user_email, role);
+
+    CREATE TABLE {TEST_SCHEMA}.compile_runs (
+      run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running','completed','failed','killed')),
+      emails_processed INT NOT NULL DEFAULT 0,
+      emails_failed INT NOT NULL DEFAULT 0,
+      cost_cents INT,
+      notes TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX compile_runs_started_idx
+      ON {TEST_SCHEMA}.compile_runs (started_at DESC);
+
+    CREATE TRIGGER compile_runs_set_updated_at
+      BEFORE UPDATE ON {TEST_SCHEMA}.compile_runs
+      FOR EACH ROW EXECUTE FUNCTION {TEST_SCHEMA}.set_updated_at();
     """
 
 
@@ -177,6 +198,7 @@ def _scoped_connect() -> Iterator[psycopg.Connection]:
 def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Repoint src.db.connect and clear all catalog tables before each test."""
     import src.db as db_pkg
+    import src.db.compile_runs as db_compile_runs
     import src.db.messages as db_messages
     import src.db.participants as db_participants
     import src.db.threads as db_threads
@@ -187,15 +209,18 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(db_users, "connect", _scoped_connect)
     monkeypatch.setattr(db_threads, "connect", _scoped_connect)
     monkeypatch.setattr(db_participants, "connect", _scoped_connect)
+    monkeypatch.setattr(db_compile_runs, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
         # message_participants → messages/users via FK; truncate together
-        # so we don't have to think about delete order.
+        # so we don't have to think about delete order. compile_runs has
+        # no FK back to messages so it gets its own truncate.
         conn.execute(
             f"TRUNCATE TABLE {TEST_SCHEMA}.message_participants, "
             f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
             f"{TEST_SCHEMA}.threads CASCADE"
         )
+        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_runs")
 
     yield
 

@@ -28,6 +28,8 @@ from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.db.compile_runs import finish_run  # noqa: E402
+from src.db.compile_runs import start_run  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
@@ -400,57 +402,95 @@ def main(
         f"(avg {total / max(len(groups), 1):.1f} emails/batch)"
     )
 
+    # Start a compile_runs row so we get per-invocation observability even if
+    # the loop crashes. finish_run() below runs in `finally:` → always written.
+    run_id = start_run(
+        model=resolved_model,
+        notes=f"limit={limit} batch_size={batch_size} recursion_limit={recursion_limit}",
+    )
+    click.echo(f"Run id: {run_id}")
+
     processed = 0
-    for batch_idx, batch in enumerate(groups, start=1):
-        batch_paths = [b["path"] if isinstance(b, dict) else b for b in batch]
-        batch_files = "\n".join(f"- {p}" for p in batch_paths)
-        thread_id = batch[0].get("thread_id", "") if batch else ""
-        earliest = batch[0].get("date", "")[:10] if batch else ""
+    failed = 0
+    # Pessimistic default — overwritten to 'completed' on clean loop exit or
+    # 'killed' on KeyboardInterrupt. Any other exception leaves it 'failed'.
+    run_status = "failed"
+    budget_after = None
+    try:
+        for batch_idx, batch in enumerate(groups, start=1):
+            batch_paths = [b["path"] if isinstance(b, dict) else b for b in batch]
+            batch_files = "\n".join(f"- {p}" for p in batch_paths)
+            thread_id = batch[0].get("thread_id", "") if batch else ""
+            earliest = batch[0].get("date", "")[:10] if batch else ""
 
-        instruction = (
-            f"Compile the following {len(batch)} uncompiled raw emails from one "
-            f"thread (thread_id={thread_id}, earliest={earliest}) into wiki pages. "
-            f"Process them chronologically as a conversation. When multiple replies "
-            f"build on the same decision/policy/feature, merge them into a single "
-            f"coherent wiki page rather than one page per message. "
-            f"Do NOT call any tool to mark these emails compiled — the coordinator "
-            f"handles that deterministically after you return. Focus on writing the "
-            f"right wiki content.\n\n"
-            f"Files to compile:\n{batch_files}"
-        )
-
-        click.echo(
-            f"\n=== Batch {batch_idx}/{len(groups)} "
-            f"({len(batch)} emails, thread={thread_id[:12]}, earliest={earliest}) ==="
-        )
-        try:
-            run_compilation(
-                instruction=instruction,
-                model_name=model,
-                raw_dir=raw_dir,
-                wiki_dir=wiki_dir,
-                recursion_limit=recursion_limit,
+            instruction = (
+                f"Compile the following {len(batch)} uncompiled raw emails from one "
+                f"thread (thread_id={thread_id}, earliest={earliest}) into wiki pages. "
+                f"Process them chronologically as a conversation. When multiple replies "
+                f"build on the same decision/policy/feature, merge them into a single "
+                f"coherent wiki page rather than one page per message. "
+                f"Do NOT call any tool to mark these emails compiled — the coordinator "
+                f"handles that deterministically after you return. Focus on writing the "
+                f"right wiki content.\n\n"
+                f"Files to compile:\n{batch_files}"
             )
-            marked, not_cited, missing = _mark_batch_compiled(batch, Path(wiki_dir))
-            processed += marked
-            suffix_parts = []
-            if not_cited:
-                suffix_parts.append(
-                    f"{not_cited} not-yet-cited (kept pending)"
+
+            click.echo(
+                f"\n=== Batch {batch_idx}/{len(groups)} "
+                f"({len(batch)} emails, thread={thread_id[:12]}, earliest={earliest}) ==="
+            )
+            try:
+                run_compilation(
+                    instruction=instruction,
+                    model_name=model,
+                    raw_dir=raw_dir,
+                    wiki_dir=wiki_dir,
+                    recursion_limit=recursion_limit,
                 )
-            if missing:
-                suffix_parts.append(f"{missing} missing from catalog")
-            suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
-            click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
-            log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
-            log_notes = "; ".join(suffix_parts) if suffix_parts else ""
-            _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
-        except Exception as e:  # noqa: BLE001
-            logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
-            failed_marked = _mark_batch_failed(batch, str(e))
-            click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
-            click.echo("Continuing with next batch...")
-            _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=str(e)[:200])
+                marked, not_cited, missing = _mark_batch_compiled(batch, Path(wiki_dir))
+                processed += marked
+                suffix_parts = []
+                if not_cited:
+                    suffix_parts.append(
+                        f"{not_cited} not-yet-cited (kept pending)"
+                    )
+                if missing:
+                    suffix_parts.append(f"{missing} missing from catalog")
+                suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+                click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
+                log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
+                log_notes = "; ".join(suffix_parts) if suffix_parts else ""
+                _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
+            except Exception as e:  # noqa: BLE001
+                logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
+                failed_marked = _mark_batch_failed(batch, str(e))
+                failed += failed_marked
+                click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
+                click.echo("Continuing with next batch...")
+                _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=str(e)[:200])
+        run_status = "completed"
+    except KeyboardInterrupt:
+        run_status = "killed"
+        click.echo("\nInterrupted — marking run as killed.")
+        raise
+    finally:
+        # Cost delta in int cents. Skip if either budget fetch failed (e.g.
+        # LiteLLM proxy down) — cost_cents stays NULL in that case.
+        budget_after = fetch_budget()
+        cost_cents: int | None = None
+        if budget_before is not None and budget_after is not None:
+            cost_cents = round((budget_after.spend - budget_before.spend) * 100)
+        finish_run(
+            run_id,
+            status=run_status,
+            emails_processed=processed,
+            emails_failed=failed,
+            cost_cents=cost_cents,
+        )
+        click.echo(
+            f"Recorded compile run {run_id}: status={run_status} "
+            f"processed={processed} failed={failed} cost_cents={cost_cents}"
+        )
 
     # Stamp every wiki page touched during this run before regenerating the
     # index. The agent has a `stamp_page_compiled_at` tool but routinely
@@ -489,7 +529,7 @@ def main(
             "Restore with: uv run python scripts/snapshot_wiki.py restore <label>"
         )
 
-    budget_after = fetch_budget()
+    # Reuse the post-run budget snapshot captured in `finally:` above.
     if budget_after:
         click.echo(f"Budget (post-run): {budget_after}")
         if budget_before:
