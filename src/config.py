@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_enabled: bool = True
 
+    # Database — Postgres catalog (queue + future provenance)
+    database_url: str = "postgresql://email_kb_app:email_kb@localhost:5432/email_kb"
+
     # Paths
     raw_dir: Path = Path("raw")
     wiki_dir: Path = Path("wiki")

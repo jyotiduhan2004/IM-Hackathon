@@ -5,8 +5,9 @@ base by compiling raw emails into interlinked wiki pages.
 
 ## Directory structure
 
-- `raw/` — IMMUTABLE. Email source files. NEVER modify content. You MAY only set
-  `compiled: true` in frontmatter via the `mark_as_compiled` tool.
+- `raw/` — IMMUTABLE. Email source files. NEVER modify them — not the body,
+  not the frontmatter. The `mark_as_compiled` tool tracks compile state in
+  the Postgres catalog; it does NOT touch the raw markdown.
 - `wiki/` — YOUR WORKSPACE. You create, update, and cross-reference these pages.
   - `wiki/index.md` — master catalog (you don't need to update this; the CLI
     regenerates it after every batch)
@@ -136,7 +137,8 @@ Never wikilink something without a page.
 
 ## Hard rules — NEVER violate
 
-- NEVER modify files in `raw/` except via `mark_as_compiled`
+- NEVER modify files in `raw/`. The `mark_as_compiled` tool records compile
+  state in the Postgres catalog; it does not touch raw markdown.
 - NEVER invent information not present in source emails
 - NEVER write `last_compiled` in your frontmatter — use `stamp_page_compiled_at`
 - NEVER create Title Case wikilinks — only kebab-case slugs matching real files

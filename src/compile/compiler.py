@@ -24,39 +24,27 @@ logger = structlog.get_logger(__name__)
 def list_uncompiled_emails(raw_dir: str = "raw") -> list[dict[str, str]]:
     """List raw email files that haven't been compiled yet.
 
-    Returns one entry per uncompiled email with lightweight metadata the agent
-    can use to plan without reading each file. Sorted oldest-first by date.
-
-    Args:
-        raw_dir: Directory containing raw/*.md files (default "raw")
+    Reads from the Postgres `messages` table (the source of truth as of the
+    catalog migration). The `raw_dir` arg is preserved for backward
+    compatibility but ignored — paths come from `messages.raw_path`.
 
     Returns:
         List of dicts with keys: path, date, subject, from, thread_id.
         Empty list if no uncompiled emails.
     """
-    raw_path = Path(raw_dir)
-    if not raw_path.exists():
-        return []
+    from src.db.messages import list_uncompiled
 
-    uncompiled: list[dict[str, str]] = []
-    for md_file in sorted(raw_path.glob("*.md")):
-        try:
-            content = md_file.read_text(encoding="utf-8")
-            frontmatter = _extract_frontmatter(content)
-            if frontmatter.get("compiled") is False:
-                uncompiled.append(
-                    {
-                        "path": str(md_file),
-                        "date": str(frontmatter.get("date", "")),
-                        "subject": str(frontmatter.get("subject", "")),
-                        "from": str(frontmatter.get("from", "")),
-                        "thread_id": str(frontmatter.get("thread_id", "")),
-                    }
-                )
-        except (yaml.YAMLError, UnicodeDecodeError) as e:
-            logger.warning("skipping malformed raw file", path=str(md_file), error=str(e))
-
-    return uncompiled
+    rows = list_uncompiled()
+    return [
+        {
+            "path": str(row["raw_path"]),
+            "date": row["date"].isoformat() if row["date"] else "",
+            "subject": str(row["subject"] or ""),
+            "from": str(row["from_address"] or ""),
+            "thread_id": str(row["thread_id"] or ""),
+        }
+        for row in rows
+    ]
 
 
 @tool
@@ -133,38 +121,30 @@ def mark_as_compiled(file_path: str) -> dict[str, str | int]:
     """Mark a raw email as compiled. Call ONLY after the email's content has
     been merged into the correct wiki pages.
 
-    Sets compiled: true and compiled_at (real UTC time) in the raw file's
-    frontmatter. Does not modify email body.
+    Records the transition in the Postgres `messages` table. The raw file
+    itself is NOT modified — the legacy `compiled:` field in raw frontmatter
+    is dead state as of the catalog migration.
 
     Args:
-        file_path: Path to the raw email markdown file (e.g., "raw/2026-04-11_foo_abc12345.md")
+        file_path: Path to the raw email markdown file
+            (e.g., "raw/2026-04-11_foo_abc12345.md").
 
     Returns:
         Dict with "ok" (bool), "remaining_uncompiled" (int count), "path" (str).
     """
-    path = Path(file_path)
-    if not path.exists():
-        return {"ok": "false", "error": f"file not found: {file_path}"}
+    from src.db.messages import find_by_raw_path
+    from src.db.messages import finish_message_compile
+    from src.db.messages import remaining_uncompiled_count
 
-    content = path.read_text(encoding="utf-8")
-    frontmatter = _extract_frontmatter(content)
-    body = _extract_body(content)
+    row = find_by_raw_path(file_path)
+    if row is None:
+        return {"ok": "false", "error": f"no messages row for raw_path={file_path}"}
 
-    frontmatter["compiled"] = True
-    frontmatter["compiled_at"] = datetime.now(UTC).isoformat()
-
-    new_content = _render_with_frontmatter(frontmatter, body)
-    path.write_text(new_content, encoding="utf-8")
-
-    remaining = sum(
-        1
-        for md in path.parent.glob("*.md")
-        if _extract_frontmatter(md.read_text(encoding="utf-8")).get("compiled") is False
-    )
+    finish_message_compile(row["message_id"])
 
     return {
         "ok": "true",
-        "remaining_uncompiled": remaining,
+        "remaining_uncompiled": remaining_uncompiled_count(),
         "path": file_path,
     }
 
@@ -386,19 +366,26 @@ def create_compiler(
 
 
 def get_langfuse_handler() -> Any | None:
-    """Return a Langfuse callback handler if configured, else None."""
+    """Return a Langfuse callback handler if configured, else None.
+
+    Langfuse v3+ removed the legacy `langfuse.callback` module. The handler
+    now lives in `langfuse.langchain` and pulls credentials from the global
+    Langfuse client (initialized via env vars or `Langfuse(...)`).
+    """
     if not settings.langfuse_enabled:
         return None
     if not (settings.langfuse_public_key and settings.langfuse_secret_key):
         return None
     try:
-        from langfuse.callback import CallbackHandler
+        from langfuse import Langfuse
+        from langfuse.langchain import CallbackHandler
 
-        return CallbackHandler(
+        Langfuse(
             public_key=settings.langfuse_public_key,
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
         )
+        return CallbackHandler()
     except ImportError:
         logger.warning("langfuse not installed, tracing disabled")
         return None

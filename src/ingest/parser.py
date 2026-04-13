@@ -190,4 +190,38 @@ def write_raw_email(
     content = to_raw_markdown(parsed, attachment_paths=attachment_paths)
     path.write_text(content, encoding="utf-8")
     logger.info("wrote raw email", path=str(path), subject=parsed.subject[:60])
+    _register_in_catalog(parsed, path)
     return path
+
+
+def _register_in_catalog(parsed: ParsedEmail, raw_path: Path) -> None:
+    """Insert the message into the Postgres catalog so the compile queue sees it.
+
+    Best-effort: if the DB is unreachable, log and continue. The next
+    `scripts/backfill_messages.py` run will pick the row up.
+    """
+    try:
+        from src.db import connect
+        from src.db.messages import insert_message
+    except ImportError:
+        return
+
+    try:
+        rel_path = raw_path.relative_to(Path.cwd())
+    except ValueError:
+        rel_path = raw_path
+
+    try:
+        with connect() as conn:
+            insert_message(
+                conn,
+                message_id=parsed.message_id,
+                raw_path=str(rel_path),
+                thread_id=parsed.thread_id or None,
+                subject=parsed.subject or None,
+                from_address=parsed.from_ or None,
+                date=parsed.date,
+            )
+            conn.commit()
+    except Exception as e:  # noqa: BLE001 — DB sync is best-effort at ingest
+        logger.warning("catalog insert failed; backfill will recover", error=str(e))
