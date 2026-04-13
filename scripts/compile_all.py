@@ -92,7 +92,22 @@ def _group_by_thread(
     default=None,
     help="Override LLM model (default from .env LLM_MODEL)",
 )
-def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -> None:
+@click.option(
+    "--recursion-limit",
+    type=int,
+    default=150,
+    help=(
+        "Max agent steps per batch. Lower it (e.g. 60) to fail fast on "
+        "pathological threads instead of burning budget up to 150 steps."
+    ),
+)
+def main(
+    batch_size: int,
+    limit: int | None,
+    dry_run: bool,
+    model: str | None,
+    recursion_limit: int,
+) -> None:
     """Compile uncompiled raw emails into wiki pages using Deep Agents."""
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
@@ -196,6 +211,7 @@ def main(batch_size: int, limit: int | None, dry_run: bool, model: str | None) -
                 model_name=model,
                 raw_dir=raw_dir,
                 wiki_dir=wiki_dir,
+                recursion_limit=recursion_limit,
             )
             processed += len(batch)
             click.echo(f"Batch complete. Progress: {processed}/{total}")
