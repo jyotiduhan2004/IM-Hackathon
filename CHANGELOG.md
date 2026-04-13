@@ -74,6 +74,14 @@ Detailed incident postmortems live under `docs/incidents/`.
   don't block compile; `--strict-sections` CLI flag promotes misses to
   ERROR for CI enforcement. Entity/timeline/conflict pages are intentionally
   not checked (their templates are out of scope for this validator).
+- `find_new_sources` agent tool + `list_uncompiled_with_filters` repo fn
+  (`src/compile/compiler.py`, `src/db/messages.py`): filter-aware search over
+  uncompiled emails with ANDed optional filters (`date_from`, `date_to`,
+  `sender_contains`, `subject_contains`, `thread_id`) and `limit`/`offset`
+  pagination. Lets the compiler agent narrow a batch before processing
+  instead of pulling the full pending queue via `list_uncompiled_emails`
+  (now documented as DEPRECATED in its docstring). SQL is fully
+  parameterized — no user input is spliced into the query.
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to

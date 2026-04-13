@@ -26,8 +26,61 @@ logger = structlog.get_logger(__name__)
 
 
 @tool
+def find_new_sources(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sender_contains: str | None = None,
+    subject_contains: str | None = None,
+    thread_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, str]]:
+    """Filter-aware search for uncompiled email sources. Returns paginated results.
+
+    Use this INSTEAD of list_uncompiled_emails when you want to narrow down
+    which emails to process — by date range, sender, or thread.
+
+    Args:
+        date_from: ISO date 'YYYY-MM-DD' lower bound (inclusive).
+        date_to: ISO date 'YYYY-MM-DD' upper bound (inclusive).
+        sender_contains: case-insensitive substring match on from_address.
+        subject_contains: case-insensitive substring match on subject.
+        thread_id: exact thread_id match.
+        limit: max results (default 50, keep small — paginate).
+        offset: skip first N matches.
+
+    Returns:
+        List of dicts with keys: path, date, subject, from, thread_id.
+    """
+    from src.db.messages import list_uncompiled_with_filters
+
+    rows = list_uncompiled_with_filters(
+        date_from=date_from,
+        date_to=date_to,
+        sender_contains=sender_contains,
+        subject_contains=subject_contains,
+        thread_id=thread_id,
+        limit=limit,
+        offset=offset,
+    )
+    return [
+        {
+            "path": str(row["raw_path"]),
+            "date": row["date"].isoformat() if row["date"] else "",
+            "subject": str(row["subject"] or ""),
+            "from": str(row["from_address"] or ""),
+            "thread_id": str(row["thread_id"] or ""),
+        }
+        for row in rows
+    ]
+
+
+@tool
 def list_uncompiled_emails(raw_dir: str = "raw") -> list[dict[str, str]]:
     """List raw email files that haven't been compiled yet.
+
+    DEPRECATED: prefer `find_new_sources` for filter + pagination support. This
+    tool returns ALL uncompiled emails (up to 1000) with no filters.
 
     Reads from the Postgres `messages` table (the source of truth as of the
     catalog migration). The `raw_dir` arg is preserved for backward
@@ -610,6 +663,7 @@ def create_compiler(
     return create_deep_agent(
         model=model,
         tools=[
+            find_new_sources,
             list_uncompiled_emails,
             list_wiki_pages,
             resolve_page,

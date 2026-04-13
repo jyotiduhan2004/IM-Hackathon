@@ -84,6 +84,51 @@ def list_uncompiled(limit: int = 1000) -> list[dict[str, Any]]:
         ).fetchall()
 
 
+def list_uncompiled_with_filters(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sender_contains: str | None = None,
+    subject_contains: str | None = None,
+    thread_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return uncompiled messages matching optional filters.
+
+    Filters are ANDed; omitted filters are not applied. Uses ILIKE for
+    sender_contains/subject_contains. Still limited to 'pending' and 'failed'
+    states like list_uncompiled. Parameterized SQL — no string interpolation.
+    """
+    conditions: list[str] = ["compile_state IN ('pending', 'failed')"]
+    params: list[Any] = []
+    if date_from is not None:
+        conditions.append("date >= %s::date")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("date <= %s::date")
+        params.append(date_to)
+    if sender_contains is not None:
+        conditions.append("from_address ILIKE '%' || %s || '%'")
+        params.append(sender_contains)
+    if subject_contains is not None:
+        conditions.append("subject ILIKE '%' || %s || '%'")
+        params.append(subject_contains)
+    if thread_id is not None:
+        conditions.append("thread_id = %s")
+        params.append(thread_id)
+    sql = (
+        "SELECT message_id, raw_path, thread_id, subject, from_address, date\n"
+        "  FROM messages\n"
+        f" WHERE {' AND '.join(conditions)}\n"
+        " ORDER BY date ASC NULLS LAST, message_id ASC\n"
+        " LIMIT %s OFFSET %s"
+    )
+    params.extend([limit, offset])
+    with connect() as conn:
+        return conn.execute(sql, tuple(params)).fetchall()
+
+
 def claim_next_message(
     run_id: uuid.UUID,
     *,
@@ -143,9 +188,7 @@ def finish_message_compile(message_id: str, compile_model: str | None = None) ->
         )
 
 
-def fail_message_compile(
-    message_id: str, error: str, compile_model: str | None = None
-) -> None:
+def fail_message_compile(message_id: str, error: str, compile_model: str | None = None) -> None:
     """Mark a message as failed. The next claim cycle will retry it.
 
     Records the model that failed so the A/B rollup can score
