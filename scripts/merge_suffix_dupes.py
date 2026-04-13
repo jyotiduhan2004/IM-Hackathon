@@ -97,33 +97,27 @@ def _rewrite_wikilinks(wiki_dir: Path, old: str, new: str, dry_run: bool) -> int
 
 
 def _find_variant_base(stem: str, stems: set[str]) -> str | None:
-    """Given a page stem, return the base-canonical stem if this is a variant.
+    """Return the base-canonical stem if this is an *agent-generated* variant.
 
-    Tries three patterns in order:
-    1. Named suffix (`-clean`, `-new`, `-v2`, etc.) — base is stripped prefix.
-    2. Bare numeric suffix (`alok-kumar2`) — base is the non-digit prefix IF
-       it exists. Avoids false-positive on legit slugs like `himanshu-jain01`
-       when `himanshu-jain` doesn't exist.
-    3. US/UK spelling variant — swap and see if the sibling exists.
+    Only matches explicit agent-variant suffixes — `-new`, `-v2`, `-clean`,
+    `-temp`, `-draft`, `-copy`, `-latest`, `-updated`, `-rev\\d*`. These
+    patterns are a strong signal the compiler LLM couldn't find the
+    canonical page and made a copy.
 
-    Returns the base stem if a variant is detected AND the base exists,
-    else None.
+    Does NOT match:
+    - **Bare numeric suffix** (`alok-kumar2`): in a company of 100k+ people
+      over 30 years, same-first-last-name collisions are frequent. The `2`
+      is likely disambiguation, not duplication. These are flagged by
+      `validate_wiki.check_numeric_variants` for an LLM/human to decide.
+    - **US/UK spelling** (`labelling`/`labeling`): same reasoning — similarly
+      flagged by `check_spelling_variants`.
+
+    Identity for humans should key off email address, not slug. See GitHub
+    issue #8 (catalog plan) for the structural fix.
     """
     match = SUFFIX_RE.match(stem)
     if match and match.group(1) in stems:
         return match.group(1)
-
-    match = NUMERIC_SUFFIX_RE.match(stem)
-    if match and match.group(1) in stems:
-        return match.group(1)
-
-    for uk, us in SPELLING_PAIRS:
-        for a, b in ((uk, us), (us, uk)):
-            if a in stem:
-                candidate = stem.replace(a, b, 1)
-                if candidate != stem and candidate in stems:
-                    # canonical = alphabetically-first so merges are stable
-                    return min(stem, candidate)
     return None
 
 
