@@ -17,11 +17,15 @@ Checks (WARN severity — stderr only, no exit-code effect):
 - Entity `email:` is a valid RFC-ish address (entity-invalid-email)
 - Entity slug matches email_to_slug(email) (entity-slug-mismatch —
   legacy display-name slugs are flagged but not blocked)
+- Topic/system/policy page has the required H2 sections for its type
+  ({topic,system,policy}-sections). Promoted to ERROR with
+  `--strict-sections`.
 
 Usage:
-    uv run python scripts/validate_wiki.py            # report + exit 1 on errors
-    uv run python scripts/validate_wiki.py --quiet    # suppress warnings, only errors
-    uv run python scripts/validate_wiki.py --list-bad # print bad file paths (errors only)
+    uv run python scripts/validate_wiki.py                    # report + exit 1 on errors
+    uv run python scripts/validate_wiki.py --quiet            # suppress warnings, only errors
+    uv run python scripts/validate_wiki.py --list-bad         # print bad file paths (errors only)
+    uv run python scripts/validate_wiki.py --strict-sections  # promote missing-section warnings to errors
 """
 
 from __future__ import annotations
@@ -52,6 +56,40 @@ CATEGORY_TO_TYPE = {
     "policies": "policy",
     "timelines": "timeline",
     "conflicts": "conflict",
+}
+
+# Required H2 section headings per page type. Source: Phase 1 wiki IA plan in
+# `docs/issues/09-internal-wiki-structure.md` (Topic/System/Policy templates).
+# Match is substring + case-insensitive so minor renames like "Key decisions
+# made in 2026" still satisfy "Key decisions".
+REQUIRED_SECTIONS: dict[str, list[str]] = {
+    "topic": [
+        "Summary",
+        "Current state",
+        "Why it matters",
+        "Key decisions",
+        "Recent changes",
+        "Open questions",
+        "Related pages",
+        "References",
+    ],
+    "system": [
+        "Summary",
+        "Role",
+        "Active related topics",
+        "Dependencies",
+        "Known issues",
+        "Related pages",
+        "References",
+    ],
+    "policy": [
+        "Current policy",
+        "Who it affects",
+        "Effective date",
+        "Supersedes",
+        "History",
+        "References",
+    ],
 }
 
 
@@ -87,9 +125,7 @@ except ImportError:
         return bool(_FALLBACK_EMAIL_RE.match(email.strip().lower()))
 
     def _email_to_slug(email: str) -> str:  # pragma: no cover - fallback only
-        raise NotImplementedError(
-            "email_to_slug unavailable without src.compile.entities"
-        )
+        raise NotImplementedError("email_to_slug unavailable without src.compile.entities")
 
 
 class _DuplicateKeyLoader(yaml.SafeLoader):
@@ -213,9 +249,7 @@ def check_duplicates(wiki_dir: Path) -> list[Error]:
     return errors
 
 
-SUFFIX_PATTERN = re.compile(
-    r"^(.*?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*|clean)$"
-)
+SUFFIX_PATTERN = re.compile(r"^(.*?)-(new|v\d+|copy|latest|updated|temp|draft|rev\d*|clean)$")
 NUMERIC_SUFFIX_PATTERN = re.compile(r"^(.+?)(\d+)$")
 SPELLING_PAIRS = (
     ("labelling", "labeling"),
@@ -442,9 +476,7 @@ def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
                 # Report one line per page, listing first 3 broken targets
                 preview = ", ".join(broken[:3])
                 more = f" (+{len(broken) - 3} more)" if len(broken) > 3 else ""
-                errors.append(
-                    Error(path, f"{len(broken)} broken wikilink(s): {preview}{more}")
-                )
+                errors.append(Error(path, f"{len(broken)} broken wikilink(s): {preview}{more}"))
     return errors
 
 
@@ -475,9 +507,7 @@ def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
         email = fm.get("email")
         if not isinstance(email, str) or not email.strip():
             warnings.append(
-                ValidationWarning(
-                    path, "missing `email:` in frontmatter", "entity-missing-email"
-                )
+                ValidationWarning(path, "missing `email:` in frontmatter", "entity-missing-email")
             )
             continue
         email_lc = email.strip().lower()
@@ -507,7 +537,48 @@ def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
-def run(wiki_dir: Path) -> tuple[list[Error], list[ValidationWarning]]:
+def check_required_sections(
+    wiki_dir: Path, *, strict: bool = False
+) -> tuple[list[Error], list[ValidationWarning]]:
+    """For topic/system/policy pages, verify required H2 headings exist.
+
+    Loose match: each required section name must appear as substring of some
+    H2 (case-insensitive). `strict=True` promotes missing sections to errors
+    so CI can fail on drift; by default they're warnings so legacy pages
+    don't block the pipeline.
+    """
+    errors: list[Error] = []
+    warnings: list[ValidationWarning] = []
+    heading_re = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+    for category, page_type in (
+        ("topics", "topic"),
+        ("systems", "system"),
+        ("policies", "policy"),
+    ):
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        required = REQUIRED_SECTIONS[page_type]
+        for path in cat_dir.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            _, body = split_frontmatter(content)
+            headings_lower = [h.strip().lower() for h in heading_re.findall(body)]
+            missing = [sec for sec in required if not any(sec.lower() in h for h in headings_lower)]
+            if missing:
+                reason = f"missing required H2 sections for {page_type}: {missing}"
+                if strict:
+                    errors.append(Error(path, reason))
+                else:
+                    warnings.append(ValidationWarning(path, reason, f"{page_type}-sections"))
+    return errors, warnings
+
+
+def run(
+    wiki_dir: Path, *, strict_sections: bool = False
+) -> tuple[list[Error], list[ValidationWarning]]:
     errors: list[Error] = []
     for category in CATEGORY_TO_TYPE:
         cat_dir = wiki_dir / category
@@ -524,20 +595,28 @@ def run(wiki_dir: Path) -> tuple[list[Error], list[ValidationWarning]]:
     errors.extend(check_duplicate_headings(wiki_dir))
     errors.extend(check_broken_wikilinks(wiki_dir))
     warnings = check_entity_identity(wiki_dir)
+    section_errors, section_warnings = check_required_sections(wiki_dir, strict=strict_sections)
+    errors.extend(section_errors)
+    warnings.extend(section_warnings)
     return errors, warnings
 
 
 @click.command()
 @click.option("--quiet", is_flag=True, help="Suppress warnings; still print errors")
 @click.option("--list-bad", is_flag=True, help="Print bad page paths (errors only), one per line")
-def main(quiet: bool, list_bad: bool) -> None:
+@click.option(
+    "--strict-sections",
+    is_flag=True,
+    help="Promote missing-H2-section warnings to errors",
+)
+def main(quiet: bool, list_bad: bool, strict_sections: bool) -> None:
     """Validate wiki/; exit non-zero on ERRORs only (warnings are informational)."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
         click.echo(f"ERROR: {wiki_dir} not found", err=True)
         sys.exit(2)
 
-    errors, warnings = run(wiki_dir)
+    errors, warnings = run(wiki_dir, strict_sections=strict_sections)
 
     if list_bad:
         for e in sorted({str(e.page) for e in errors}):

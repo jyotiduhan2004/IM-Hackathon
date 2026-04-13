@@ -67,6 +67,13 @@ Detailed incident postmortems live under `docs/incidents/`.
   `BatchStatsCallback` only tracked aggregate tool-call *count* — this
   surfaces per-tool latency + error rate so we can see which tool is slow
   or flaky rather than guessing from the roll-up.
+- `scripts/validate_wiki.py`: section-template check for topic/system/policy
+  pages. New `check_required_sections` scans each page for the H2 headings
+  defined in the Phase 1 wiki IA plan (`docs/issues/09-internal-wiki-structure.md`)
+  using a case-insensitive substring match. WARN by default so legacy pages
+  don't block compile; `--strict-sections` CLI flag promotes misses to
+  ERROR for CI enforcement. Entity/timeline/conflict pages are intentionally
+  not checked (their templates are out of scope for this validator).
 - `scripts/audit_systems_entities.py`: CLI that flags + relocates human
   pages accidentally filed under `wiki/systems/` (closes #43). Dry-run
   by default; `--confirm` runs `git mv` (falls back to `shutil.move`) to
