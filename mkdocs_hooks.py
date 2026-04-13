@@ -35,8 +35,16 @@ def _extract_frontmatter(content: str) -> tuple[dict, str]:
     return fm, parts[2].lstrip("\n")
 
 
-def _render_raw_source(raw_path: Path) -> str | None:
-    """Render a raw/*.md file as a collapsible <details> block for embedding."""
+def _render_raw_source(raw_path: Path, page_email: str | None = None) -> str | None:
+    """Render a raw/*.md file as a collapsible <details> block.
+
+    If `page_email` is given (the email address of the wiki page's subject),
+    we annotate HOW that person appears in the raw email — From, To, CC, or
+    body mention — so it's clear why this email is listed as a source.
+    Addresses the "why is this email from someone else on Bharat's page?"
+    confusion: Bharat was CC'd, so the email is on his page; the From field
+    is someone else.
+    """
     if not raw_path.exists():
         return None
     try:
@@ -47,16 +55,32 @@ def _render_raw_source(raw_path: Path) -> str | None:
     fm, body = _extract_frontmatter(raw_content)
     subject = fm.get("subject", raw_path.stem)
     sender = fm.get("from", "")
+    to_list = fm.get("to") or []
+    cc_list = fm.get("cc") or []
     date = fm.get("date", "")
 
-    # Trim body to first ~2500 chars; email threads can be huge
+    # Where does the page's owner show up? (From / To / CC / body mention)
+    role_tag = ""
+    if page_email:
+        pe = page_email.lower()
+        if pe in sender.lower():
+            role_tag = "✍️ Sent by this person"
+        elif any(pe in (t or "").lower() for t in to_list):
+            role_tag = "📬 Sent to this person"
+        elif any(pe in (c or "").lower() for c in cc_list):
+            role_tag = "📋 CC'd"
+        elif pe in body.lower():
+            role_tag = "💬 Mentioned in body"
+
     body = body.strip()
     truncated = len(body) > 2500
     if truncated:
         body = body[:2500] + "\n\n*[truncated — see raw file]*"
 
     summary = f"📧 {subject}"
-    meta = []
+    meta: list[str] = []
+    if role_tag:
+        meta.append(role_tag)
     if sender:
         meta.append(f"**From:** {sender}")
     if date:
@@ -87,8 +111,7 @@ def _fix_list_gaps(body: str) -> str:
             and list_start.match(line)
             and lines[i - 1].strip() != ""
             and not list_start.match(lines[i - 1])
-            and not lines[i - 1].strip().endswith((":", ",", ";"))
-            is False  # odd condition kept for clarity; see below
+            and lines[i - 1].strip().endswith((":", ",", ";")) is not False  # odd condition kept for clarity; see below
         ):
             pass  # unreachable branch — see simpler version below
         out.append(line)
@@ -178,11 +201,25 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     if not sources or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
         return body
 
+    # For entity pages, try to recover the person's email so each source can
+    # show HOW they appear in it (From/To/CC/body). Frontmatter rarely carries
+    # `email:` explicitly; compiler convention is to write "Email: x@y" as
+    # the first body line.
+    page_email: str | None = fm.get("email") if isinstance(fm.get("email"), str) else None
+    if not page_email and fm.get("page_type") == "entity":
+        m = re.search(
+            r"(?mi)^\s*(?:\*\*)?email(?:\*\*)?[:\s]+"
+            r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+)",
+            body,
+        )
+        if m:
+            page_email = m.group(1)
+
     blocks = ["", "---", "", "## Sources", ""]
     for src in sources:
         if not isinstance(src, str):
             continue
-        rendered = _render_raw_source(REPO_ROOT / src)
+        rendered = _render_raw_source(REPO_ROOT / src, page_email)
         if rendered:
             blocks.append(rendered)
             blocks.append("")
