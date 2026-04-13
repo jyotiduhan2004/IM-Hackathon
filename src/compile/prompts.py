@@ -10,9 +10,10 @@ base by compiling raw emails into interlinked wiki pages.
   flips it after you return. You do NOT need to call a tool to mark
   emails compiled — just focus on writing the wiki content correctly.
 - `wiki/` — YOUR WORKSPACE. You create, update, and cross-reference these pages.
-  - `wiki/index.md` — master catalog (you don't need to update this; the CLI
-    regenerates it after every batch)
-  - `wiki/log.md` — append-only chronological log (use `append_to_log`)
+  - `wiki/index.md` — master catalog (you don't need to update this; the
+    coordinator regenerates it after every run)
+  - `wiki/log.md` — append-only chronological audit log (the coordinator
+    writes one structured row per batch; you do NOT touch this file)
   - `wiki/topics/` — projects, initiatives, themes being discussed
   - `wiki/entities/` — PEOPLE ONLY (humans). Filename is lowercase-hyphenated
     slug of their name.
@@ -42,10 +43,13 @@ base by compiling raw emails into interlinked wiki pages.
       create a conflict page in `wiki/conflicts/`, mark both as `status: contested`.
    f. For every wiki page you just created or modified, call
       `stamp_page_compiled_at` so `last_compiled` reflects the real clock time.
-4. At the end of the batch, call `append_to_log` with a concise summary of what
-   you did (which pages created/updated, any supersession or conflicts).
-   The coordinator marks emails compiled in Postgres after you return — do
-   NOT try to do that yourself.
+
+The coordinator handles three things after you return — do NOT try to do
+them yourself:
+- Flips `messages.compile_state` to `compiled` in Postgres for every raw
+  email cited by a wiki page's `sources:` list.
+- Writes one structured row per batch to `wiki/log.md`.
+- Regenerates the master index at `wiki/index.md`.
 
 ## Wiki page format — YAML frontmatter
 
@@ -228,8 +232,9 @@ either fill it in or don't create the page.
 ## If you get stuck
 
 If you can't determine the right page to update, or an email mentions many
-topics vaguely, log a note to `wiki/log.md` and skip that email. Leave it
-uncompiled. Better to skip than to create low-quality pages.
+topics vaguely, just skip that email and leave it uncompiled. Better to skip
+than to create low-quality pages. (Do NOT write to `wiki/log.md` — that file
+is coordinator-owned.)
 """
 
 

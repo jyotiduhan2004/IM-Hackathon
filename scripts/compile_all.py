@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import sys
 from collections import defaultdict
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+from typing import Literal
 
 import click
 import structlog
@@ -39,6 +43,64 @@ structlog.configure(
     ],
 )
 logger = structlog.get_logger(__name__)
+
+
+_LOG_HEADER = (
+    "# Compilation Log\n\n"
+    "| Timestamp | Batch | N Emails | Thread ID | Outcome | Notes |\n"
+    "|---|---|---|---|---|---|\n"
+)
+
+
+BatchOutcome = Literal["compiled", "failed", "partial"]
+
+
+def _append_batch_log(
+    batch_idx: int,
+    batch: list[Any],
+    outcome: BatchOutcome,
+    wiki_dir: str,
+    notes: str = "",
+) -> None:
+    """Append one structured row to wiki/log.md for an end-of-batch event.
+
+    The coordinator owns the audit trail. Previously the LLM agent was
+    instructed to call `append_to_log` at the end of each batch, but it
+    forgot often enough to leave gaps in the log. Writing here guarantees
+    every batch — success, failure, or partial — gets a row.
+
+    Args:
+        batch_idx: 1-based batch index in this run.
+        batch: List of batch members (dicts with `path`/`thread_id` keys, or
+            bare path strings).
+        outcome: One of `compiled`, `failed`, `partial`.
+        wiki_dir: Root wiki directory.
+        notes: Optional human-readable detail (e.g., error message tail).
+    """
+    wiki_path = Path(wiki_dir)
+    wiki_path.mkdir(parents=True, exist_ok=True)
+    log_path = wiki_path / "log.md"
+
+    timestamp = datetime.now(UTC).isoformat()
+    n_emails = len(batch)
+    thread_id = ""
+    if batch:
+        first = batch[0]
+        if isinstance(first, dict):
+            thread_id = str(first.get("thread_id", ""))
+
+    # Pipes in notes would break markdown table parsing — escape them.
+    safe_notes = notes.replace("|", r"\|").replace("\n", " ").strip()
+
+    if not log_path.exists():
+        log_path.write_text(_LOG_HEADER, encoding="utf-8")
+
+    row = (
+        f"| {timestamp} | {batch_idx} | {n_emails} | {thread_id} | "
+        f"{outcome} | {safe_notes} |\n"
+    )
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(row)
 
 
 def _batch_paths(batch: list) -> list[str]:
@@ -222,9 +284,6 @@ def main(
     # Auto-snapshot before compiling so we can roll back if the run corrupts
     # wiki pages. Snapshots are cheap (local copy) and have saved us pain.
     if not dry_run:
-        from datetime import UTC
-        from datetime import datetime
-
         label = f"pre-compile-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
         snapshot_path = REPO_ROOT / ".snapshots" / label
         if (REPO_ROOT / wiki_dir).exists():
@@ -316,11 +375,15 @@ def main(
                 suffix_parts.append(f"{missing} missing from catalog")
             suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
             click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
+            log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
+            log_notes = "; ".join(suffix_parts) if suffix_parts else ""
+            _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
         except Exception as e:  # noqa: BLE001
             logger.error("batch compilation failed", batch_index=batch_idx, error=str(e))
             failed_marked = _mark_batch_failed(batch, str(e))
             click.echo(f"ERROR in batch ({failed_marked} marked failed): {e}")
             click.echo("Continuing with next batch...")
+            _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=str(e)[:200])
 
     # Regenerate index once after all batches complete — authoritative, not stale
     click.echo("\nRegenerating wiki index (post-compile)...")
