@@ -74,7 +74,9 @@ def test_all_filters_set_builds_all_where_clauses(fake_conn: _FakeConn) -> None:
     assert "compile_state IN ('pending', 'failed')" in sql
     # All filter clauses wired up.
     assert "date >= %s::date" in sql
-    assert "date <= %s::date" in sql
+    # `date_to` uses an exclusive next-day upper bound so TIMESTAMPTZ rows
+    # later in the day still match (see list_uncompiled_with_filters).
+    assert "date < (%s::date + interval '1 day')" in sql
     assert "from_address ILIKE" in sql
     assert "subject ILIKE" in sql
     assert "thread_id = %s" in sql
@@ -99,7 +101,7 @@ def test_only_date_from_emits_date_lower_bound_no_ilike(fake_conn: _FakeConn) ->
     sql, params = fake_conn.calls[0]
 
     assert "date >= %s::date" in sql
-    assert "date <= %s::date" not in sql
+    assert "date < (%s::date + interval '1 day')" not in sql
     assert "ILIKE" not in sql
     assert "thread_id = %s" not in sql
     # Only date_from + default limit/offset.
@@ -113,7 +115,7 @@ def test_no_filters_only_emits_state_predicate(fake_conn: _FakeConn) -> None:
 
     assert "compile_state IN ('pending', 'failed')" in sql
     assert "date >= %s::date" not in sql
-    assert "date <= %s::date" not in sql
+    assert "date < (%s::date + interval '1 day')" not in sql
     assert "ILIKE" not in sql
     assert "thread_id = %s" not in sql
     # Only the default limit/offset params should be present.

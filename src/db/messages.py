@@ -106,7 +106,11 @@ def list_uncompiled_with_filters(
         conditions.append("date >= %s::date")
         params.append(date_from)
     if date_to is not None:
-        conditions.append("date <= %s::date")
+        # `messages.date` is TIMESTAMPTZ; casting YYYY-MM-DD to ::date yields
+        # midnight, so `<=` silently excludes emails later that same day
+        # (e.g. date_to=2026-04-01 would drop a 15:00 row). Use an exclusive
+        # next-day bound so the upper bound is genuinely inclusive.
+        conditions.append("date < (%s::date + interval '1 day')")
         params.append(date_to)
     if sender_contains is not None:
         conditions.append("from_address ILIKE '%' || %s || '%'")
