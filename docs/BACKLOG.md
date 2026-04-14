@@ -5,6 +5,66 @@ them up.
 
 ---
 
+## Status dashboard — what landed, what's in flight (2026-04-14 evening)
+
+Snapshot of delivery vs plan. Update this section whenever a PR merges or a
+new worker is dispatched.
+
+### ✅ Shipped in last 24h (retires / progresses backlog items)
+
+| PR / commit | What it delivered | Backlog items it closes or advances |
+|---|---|---|
+| `93802de` + `88069fc` | `resolve_page` tool backed by `wiki_pages` catalog | **Agent tooling audit** — closes the `find_related_pages` gap (#3) |
+| `82dc543` + `f57a3c1` + `c20cad4` | Per-batch stall detection via `--batch-timeout` | **Stuck-run recovery** — the batch-level watchdog half of the plan (I shipped the complementary 120s per-call timeout on `ChatOpenAI`) |
+| `340516f` + `4e2e120` + `aa6aaef` | Hidden `wiki/_drafts/` folder for unresolved page creation | **Auto-stub strategy** — the landed approach is "redirect unresolved `[[links]]` to drafts", a clever alternative to my original "strip brackets" plan. Supersedes that proposal. |
+| `04d9209` + `cca9285` + `e57a7ad` + `3737352` | Per-tool-call telemetry logging | **Agent tooling audit** — observability gap — closes "no tool-call trace" by emitting structured per-call events to Postgres |
+| `9f7c4ec` + `0056a73` | Validator section-template check with `--strict-sections` | **Format consistency** — lead/section enforcement half of the validator side |
+| `d4152e3` + `fdda84e` + `8d70094` | `find_new_sources` tool with filter-aware DB query; `list_uncompiled_emails` deprecated on agent | **Agent tooling audit** — closes the `get_thread_context` gap (#2) AND the `list_uncompiled_emails` 1.3M-token footgun |
+| `23e0a73` + `2eeee82` | `log_insight` tool + `compile_insights` table + batch digest | **Agent tooling audit** — gives the agent an escape hatch for "things the reader should know but don't fit any page"; per-batch digest helps audit drift |
+| `b297a30` + `b93f922` | Per-page metadata header (sources / last-compiled / status) in mkdocs viewer | **North-star** — reader-facing provenance signal |
+| `a88dbe5` | Visible marker for excluded attachments in viewer | Housekeeping |
+| `4dc9796` + `4b14575` + `25cd7b8` | Explicit mkdocs nav with 'Products & Platforms' label; index-page exemption in lint/validator | **North-star** — navigation shape per Phase 1 plan |
+
+### 🚧 Open PRs (human review or awaiting gate)
+
+| PR | Branch | State | Notes |
+|---|---|---|---|
+| #66 | `feat/prompt-taxonomy` (mine) | CLEAN | Bundles publish-gate + glm-5.1 drop + glm-4.6 drop + 120s timeout + all today's backlog entries. Ready to merge. |
+| #65 | `codex/fix-langfuse-setup` | UNKNOWN | Claims to fix Langfuse in worktrees — would retire the "observability gap" around Langfuse-disabled if the OTLP-hang issue (#17) is actually resolved |
+| #64 | `codex/user-personas-followup` | UNKNOWN | "Add personas and knowledge flow audit" — potential overlap with the North-star doc I landed earlier today. Needs review for duplication. |
+
+### 🌙 Overnight workers (just dispatched, in isolated worktrees)
+
+Three independent PRs being prepared right now:
+
+| Worker | Branch | Scope | Backlog items it ships |
+|---|---|---|---|
+| A — Light format | `feat/light-format` | (a) 5-rule light-format prompt section, (b) `scripts/format_wiki.py` idempotent normalizer, (c) validator additions: exactly-2-fences check + lead-paragraph check, (d) unit tests | **Format consistency** — full stack above the partial validator that landed in `9f7c4ec` |
+| B — Evidence gate | `feat/entity-evidence-gate` | Add evidence-strength check inside `src/compile/entities.py::create_entity_page` — refuse CC-only stubs unless `force=True`; tool signature + prompt update + tests | **`create_entity` evidence gate** (entire entry) |
+| C — Auto-stub cleanup | `feat/auto-stub-cleanup` | Gate `create_missing_stubs` behind `--create-stubs` flag (stops the bleed from `make lint-wiki-fix`); new `scripts/cleanup_auto_stubs.py` for the one-shot delete of ~26 existing stub pages; catalog resync | **Auto-stub strategy** — commits 1 and 3 of the 3-commit plan (codex advised against commit 2, silent stripping, so it's deferred/dropped) |
+
+Each worker opens a PR against `main` when done. Landing them separately keeps reviews focused.
+
+### 🔜 What's still NOT shipped (remaining in backlog)
+
+- **Hierarchy + progressive disclosure** (auto-hierarchy inference, auto-merge candidates, auto-split proposals, mkdocs admonition-based progressive reveal)
+- **Glossary seed** — 10-30 acronyms as a one-page reference, links from first-use
+- **Domain hubs** — `wiki/domains/<domain>.md` auto-generated from frontmatter
+- **Second-pass evergreen compilation** (the synthesis prompt that rewrites chronological pages as timeless references)
+- **Ownership / teams pages** — derived from `message_participants` clustering
+- **ADR / decisions category** — new `page_type: decision`
+- **Semantic tags** — `domains:`, `audience:`, `concern:`, `lifecycle:` frontmatter schema
+- **Progress tracker CLI** — `compile_status.py` single-command dashboard (separate backlog entry)
+- **`compile_attempts` instrumentation fix** — column stays at 0, small DB write-path bug
+
+### Where the backlog entries below fit
+
+Every numbered entry below should be readable with this dashboard in mind.
+If an entry has a "**Status:**" header, trust the dashboard — it's the
+authoritative view.
+
+---
+
 ## Wiki quality audit snapshot (2026-04-14)
 
 Live sample of 14 pages covering topics / entities / systems at varied sizes.
