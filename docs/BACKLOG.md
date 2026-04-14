@@ -5,6 +5,226 @@ them up.
 
 ---
 
+## North-star — what this wiki is FOR (2026-04-14)
+
+This entry is the editorial brief. It answers: *what counts as wiki-worthy
+content, what stays in raw emails, what should a reader actually learn?*
+The compiler prompt, validator, and formatter should all trace their
+specific rules back to this document.
+
+### Purpose
+
+The wiki is a **company knowledge base for IndiaMART, compiled from email
+traffic**. It exists so that:
+
+- A new joiner can understand what IndiaMART builds, the systems involved,
+  and how the pieces connect — without reading 10,000 emails.
+- A PM or engineer scoping new work can check whether something has been
+  tried before, what the results were, and who owns the adjacent areas.
+- A leader can see what's shipped, what's planned, what's stuck.
+- A cross-team collaborator can find the right person to ask.
+
+It is **not** a ticketing system, a project tracker, or a replacement for
+source code / architecture docs. It is the **durable editorial layer**
+over conversational artifacts.
+
+### Reader personas and what they want
+
+| Persona | Primary question | Needs from the wiki |
+|---|---|---|
+| **New joiner** (month 1-3) | "What is `<X>`? Why does it exist? Who owns it?" | Clear definitions, ecosystem map, ownership, current state |
+| **Engineer investigating a regression** | "What changed in `<system>` recently? Known issues?" | Timeline / changelog, decisions, known bugs with context |
+| **PM scoping a feature** | "Has anyone tried `<X>`? What were the results?" | Past experiments, metrics, rationale, superseded ideas |
+| **Leader / exec** | "What shipped this quarter? What's stuck?" | Status / lifecycle rollups, open questions |
+| **Cross-team collaborator** | "Which team owns `<system>`? Who's the point person?" | Ownership pages, `owners:` frontmatter, entity pages |
+| **Auditor / compliance** | "What's our policy on `<thing>`? When did it change?" | Policy pages with supersession chains, timeline of changes |
+
+Every page should primarily serve one persona and **secondarily** the
+others. A topic page on "BL Quality Agent" primarily serves a PM/engineer
+scoping similar work; secondarily helps a new joiner who needs to know
+what BL Quality Agent is.
+
+### Signal vs noise — what belongs in the wiki
+
+**Leave in raw emails, do NOT extract to wiki:**
+
+- Scheduling: "can we meet at 4pm?", "moving this to next week"
+- Acknowledgments: "thanks", "got it", "will review"
+- Routing: "looping in @X", "+CC @Y"
+- Tactical asks without outcome: "please share the dashboard"
+- Status pings with no substance: "any update?"
+- Off-topic banter, birthday wishes
+- Raw metric dumps that are dashboards elsewhere (link to dashboard instead)
+- Information already in code / existing docs (don't duplicate)
+- Repeated questions already answered in the wiki
+- Per-ticket bug chatter (unless the bug has wiki-worthy root cause)
+
+**Extract to wiki, promote to first-class content:**
+
+- **Launches** — new feature, new system, new integration
+- **Decisions with rationale** — "we chose Gemini 2.5 Flash Lite over 2.0
+  because…" (the WHY matters more than the WHAT)
+- **Policy changes** — "we now allow / no longer allow X"
+- **Metrics with interpretation** — "23K buyleads corrected = 3.5% error rate
+  = 7% uplift in fill-rate"
+- **Roadmap / phased plans** — "Phase 1 was 30% rollout, Phase 2 is 100%"
+- **Post-mortems / learnings** — bug root cause + fix + prevention
+- **System architecture / how things work** — durable reference
+- **Ownership** — who owns what, who approves what
+- **Cross-cutting constraints** — SLAs, rate limits, compliance requirements
+- **Known gotchas / workarounds** — "ABC fails on `<edge case>`, use DEF"
+- **Definitions / glossary** — BL = BuyLead, MCAT = Merchandise Category, etc.
+
+**The six-month-new-joiner test** (the acceptance bar):
+
+> *"Will someone starting at IndiaMART six months from now benefit from
+> reading this page?"*
+
+If yes, extract. If no, leave in raw.
+
+This test filters out 80% of email chatter. The remaining 20% is the wiki
+corpus.
+
+### What a reader should learn
+
+#### At the ecosystem level
+
+After spending an hour in the wiki, a new joiner should understand:
+
+- **What business IndiaMART runs** — B2B marketplace
+- **Primary personas** — buyers, sellers, support / ops teams
+- **Core system families** — BuyLead (BL), MCAT taxonomy, PDP (product
+  detail page), PNS (private number service), LEAP CRM, M-site, marketplace
+  launch, WhatsApp integration (9696 bot), visual moderation, recommendation
+  systems, notification / alert pipelines, etc.
+- **How the core systems connect** — e.g. BLs flow through quality agent →
+  routed to sellers → consumed via WhatsApp
+- **Who owns what** — team/function per system family
+- **Cross-cutting concerns** — compliance (visual moderation), cost
+  (Gemini routing), performance (Varnish optimization), security (IP
+  whitelisting)
+
+Navigation aid: a single `wiki/ecosystem.md` or `wiki/domains/` hub giving
+the 10-minute ecosystem map.
+
+#### About a specific topic / system
+
+After reading one topic page, a reader should know:
+
+- **Definition** — one sentence, the first sentence of the lead paragraph
+- **Purpose** — why it exists, what problem it solves
+- **Current state** — live / beta / planned / deprecated
+- **Mechanics** — how it works (at whatever depth the source data supports)
+- **Metrics** — quantitative results, if measured
+- **History / Timeline** — major events, when they happened
+- **Decisions / rationale** — why this design and not something else
+- **Owners** — who to ask
+- **Open questions / planned work** — what's next
+- **Related topics / systems** — the neighborhood in the graph
+
+Not every page will have every bullet. Depth tracks source-material depth.
+
+#### About a specific person (entity)
+
+After reading an entity page, a reader should know:
+
+- **Role / function** — PM, engineer, QA, team lead
+- **What they work on / have worked on** — linked topics
+- **Team affiliation** — implicit via co-mentioned people
+- **How to contact** — email, sometimes ticket system
+- **Recent contributions** — traced via `sources:` and inline mentions
+
+An entity page is NOT an autobiography. It is a short "this is who they
+are in our context" reference. CC-only mentions do not warrant a page.
+
+#### About a policy
+
+After reading a policy page, a reader should know:
+
+- **What the rule is** — current state, in one paragraph
+- **When it was set / changed** — timeline of revisions
+- **Why it exists** — rationale
+- **What it supersedes / is superseded by** — lineage
+- **Scope / applicability** — who / what it applies to
+
+Policies are evergreen; every edit appends to history, never deletes.
+
+#### About a conflict
+
+After reading a conflict page, a reader should see:
+
+- **The two (or more) positions** — clearly attributed
+- **Source emails** — so a human can verify
+- **Current resolution status** — open / resolved / deprecated
+- **Which pages it affects** (linked, shown as `contested`)
+
+### What this implies for the compiler prompt
+
+Concrete prompt clauses that trace back to the above:
+
+1. *"Before creating a page, ask: would a new joiner six months from now
+   benefit from reading this? If not, skip the page and do not extract."*
+2. *"Capture decisions with their rationale — the 'why', not just the
+   'what'. A design that says 'we used X' is incomplete; 'we used X
+   because Y, having considered Z' is right."*
+3. *"Do not create entity pages for CC-only mentions, scheduling chatter,
+   or acknowledgment-only involvement. Strong evidence = From / To /
+   quoted signature / named leadership role."*
+4. *"If the information exists in code, dashboards, or existing wiki
+   pages, link to it rather than duplicating."*
+5. *"The first sentence of every topic page is a definition. If you can't
+   write a definition for the subject in one sentence, the subject
+   probably isn't a topic — revisit."*
+6. *"Every metric must be paired with interpretation. '23K corrected' is
+   noise; '23K corrected (= 3.5% error rate, in line with model
+   precision)' is signal."*
+
+### What this implies for tooling
+
+- **Validator** — enforce: topic pages have a lead paragraph ≥2 sentences
+  starting with a definition; entity pages have `sources:` ≥ 2 OR
+  evidence of From/To participation (from `message_participants` table);
+  policy pages have a `current state` section and a `history` table.
+- **Content-selector** (new, before compile) — a "is this batch
+  wiki-worthy?" gate. Classify the thread by signal markers (launch,
+  decision, policy, post-mortem) OR bail. Saves compile cost on pure-
+  scheduling threads.
+- **Rollup generators** — hub pages per domain, ecosystem map, ownership
+  rollup, weekly digest — all generated from frontmatter, not authored
+  by the compile agent.
+- **Glossary** — seed with ~30 acronyms (BL, MCAT, PDP, PNS, LEAP,
+  ISQ, BLS, PMS, etc.). Agent required to use `[[glossary#BL]]` or link
+  on first use.
+
+### What this implies for measurement
+
+We should be able to answer, from the catalog:
+
+- % of compiled emails that produced a net-new topic page (vs enrichment)
+- Avg sources per topic page (higher = better synthesis)
+- Stub rate by page_type (target: entities <20%, systems <10%, topics <5%)
+- Domain coverage — how many topic pages exist per domain hub
+- Orphan rate — pages with zero inbound links (target: near 0 for topics)
+- Age of `last_compiled` per page (stale pages need re-enrichment)
+
+Add these to `scripts/audit.py` once the concept is stable.
+
+### How this composes with earlier backlog entries
+
+- **Topic format (light, 5 rules)** — the syntactic contract
+- **Auto-stub strategy / create_entity evidence gate** — the noise filter
+  at write time
+- **Agent tooling audit** — the gaps to fill so the agent can execute
+  the above efficiently (e.g. `get_page_summary` supports the
+  "would-a-new-joiner-benefit" check; `resolve_page` supports "link to
+  existing, don't duplicate")
+- **Two-pass compilation / evergreen rewrite** — operationalizes the
+  "synthesis, not chronology" norm from above
+
+This north-star doc is the *why*. The other backlog entries are the *how*.
+
+---
+
 ## Agent tooling audit — gaps, token-heavy returns, observability (2026-04-14)
 
 **Context.** Diagnosing why glm-4.6 fails 52% of batches (while minimax-m2.7 and
