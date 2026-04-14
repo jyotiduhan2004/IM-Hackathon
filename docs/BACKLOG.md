@@ -5,6 +5,78 @@ them up.
 
 ---
 
+## Auto-stub strategy: stop bleeding, then prune (2026-04-14)
+
+**Decision:** stop auto-creating stubs in `scripts/lint_wiki.py`. Leave
+broken wikilinks visible (operator-facing report) instead of silently
+rewriting. Ship as 3 small commits, not a big bang.
+
+**Background**
+Audit on 2026-04-14 found 52% of 587 wiki pages are stubs (<500B);
+the worst offenders are `wiki/systems/*.md` shells like
+`devtron.md` ("Stub page auto-created because [[devtron]] was
+referenced but no page existed."). Phase 1 plan
+(docs/issues/09-internal-wiki-structure.md) explicitly wants
+"entity de-noising" and topic-first navigation — these stubs
+violate the strategy.
+
+Source of the noise: `scripts/lint_wiki.py::create_missing_stubs`
+(line ~218). Triggered by `make lint-wiki-fix`. For every
+unresolved `[[target]]` it splits on hyphens and creates a
+skeleton in entities/ or systems/ depending on a naive
+two-token-alphabetic heuristic.
+
+NOT to be touched: `src/compile/compiler.py::create_entity`
+(line ~351). That's the LLM tool for deterministic email-keyed
+entity creation. Legitimate.
+
+**Codex review findings (2026-04-14)**
+- My initial estimate of 200-280 auto-stub files was wrong.
+  Filesystem scan returned **26**. Cleanup is small.
+- Silent bracket-stripping erases an important failure signal —
+  `src/compile/prompts.py:210-212` already tells the agent
+  "NEVER wikilink a target that doesn't have a file"; a silent
+  rewrite hides that the agent disobeyed.
+- Catalog drift: `wiki_pages` table is upsert-only. Deleting
+  pages without a follow-up sync leaves stale DB rows.
+- Validator behavior: broken wikilinks are advisory in
+  `lint_wiki.py:120-141`, not hard errors in
+  `validate_wiki.py`. So removing auto-stubs won't break
+  the publish-gate.
+
+**3-commit plan when we pick this up**
+
+1. **Stop the bleed** — gate `create_missing_stubs` behind a
+   new `--create-stubs` flag in `scripts/lint_wiki.py`. Update
+   `make lint-wiki-fix` and any cron / overnight loop comments.
+   Zero-risk flag flip.
+2. **Visible report** — new `scripts/report_broken_wikilinks.py`
+   that scans wiki/, lists `[[target]]` with no file, writes to
+   `docs/audits/broken-wikilinks-<ts>.md`. Optional `--strip`
+   for operator-invoked rewrite (NOT silent / automatic).
+3. **One-shot cleanup** — exact-signature match
+   ("*Stub page auto-created...*" body AND `sources: []`),
+   delete the ~26 files, then re-run `backfill_wiki_pages.py`
+   so the catalog stays in sync.
+
+**Skip / explicitly NOT in scope**
+- Post-batch auto-strip in `compile_all.py` (silent rewrites —
+  see codex finding above)
+- Touching `create_entity` tool flow
+- Promoting broken-wikilinks to publish-gate errors (would
+  block deploys without proportional benefit)
+
+**Things to check before picking this up**
+- `mkdocs-roamlinks-plugin` behavior on click of an unresolved
+  `[[foo]]` on the live site. Codex flagged this as untested.
+  Hit https://email-kb-viewer-kntbneg73q-el.a.run.app and click a
+  known broken link first.
+- `scripts/backfill_stubs.py` is built around stubs existing.
+  After this work, decide whether the stub-filler script is
+  still part of the repair path or can be deleted.
+
+---
+
 ## Parallel compile — decide the concurrency model (2026-04-13)
 
 **Status: deferred.** User pulled back on shipping parallel compile
