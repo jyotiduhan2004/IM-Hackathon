@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC
+from datetime import date
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +26,28 @@ logger = structlog.get_logger(__name__)
 # === Custom Tools for the Compiler Agent ===
 
 
+_FIND_NEW_SOURCES_MAX_LIMIT = 200
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_iso_date(value: str | None, field: str) -> str | None:
+    """Return value unchanged if it's a YYYY-MM-DD ISO date, else raise ValueError.
+
+    Guards against SQL injection-lite inputs like `'; DROP TABLE'` and typos
+    like `2026/04/13` that would silently mismatch Postgres' date parse.
+    """
+    if value is None:
+        return None
+    if not _ISO_DATE_RE.match(value):
+        raise ValueError(f"{field}: expected YYYY-MM-DD, got {value!r}")
+    # Cheap full parse catches Feb 30 / month=13 / etc.
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field}: invalid calendar date {value!r} ({exc})") from exc
+    return value
+
+
 @tool
 def find_new_sources(
     date_from: str | None = None,
@@ -34,7 +57,7 @@ def find_new_sources(
     thread_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict[str, str]]:
+) -> list[dict[str, str]] | dict[str, str]:
     """Filter-aware search for uncompiled email sources. Returns paginated results.
 
     Use this INSTEAD of list_uncompiled_emails when you want to narrow down
@@ -46,12 +69,26 @@ def find_new_sources(
         sender_contains: case-insensitive substring match on from_address.
         subject_contains: case-insensitive substring match on subject.
         thread_id: exact thread_id match.
-        limit: max results (default 50, keep small — paginate).
+        limit: max results (default 50, capped at 200 — paginate larger pulls).
         offset: skip first N matches.
 
     Returns:
-        List of dicts with keys: path, date, subject, from, thread_id.
+        List of dicts with keys: path, date, subject, from, thread_id. When the
+        input is malformed, returns `{"error": "<reason>"}` instead so the
+        agent can recover rather than crash the batch.
     """
+    try:
+        date_from = _validate_iso_date(date_from, "date_from")
+        date_to = _validate_iso_date(date_to, "date_to")
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if limit < 1 or offset < 0:
+        return {"error": f"limit must be ≥1 and offset must be ≥0 (got limit={limit}, offset={offset})"}
+
+    # Cap `limit` so a runaway agent call can't drag 10k rows back.
+    capped_limit = min(limit, _FIND_NEW_SOURCES_MAX_LIMIT)
+
     from src.db.messages import list_uncompiled_with_filters
 
     rows = list_uncompiled_with_filters(
@@ -60,7 +97,7 @@ def find_new_sources(
         sender_contains=sender_contains,
         subject_contains=subject_contains,
         thread_id=thread_id,
-        limit=limit,
+        limit=capped_limit,
         offset=offset,
     )
     return [

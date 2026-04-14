@@ -216,3 +216,55 @@ def test_find_new_sources_returns_correct_dict_shape(
         limit=50,
         offset=0,
     )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["2026/04/13", "abc", "2026-13-01", "2026-02-30", ""],
+)
+def test_find_new_sources_rejects_malformed_date_from(
+    bad: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-ISO date_from values return an error dict (no DB call, no crash)."""
+    mock_fn = MagicMock()
+    monkeypatch.setattr("src.db.messages.list_uncompiled_with_filters", mock_fn)
+
+    result = compiler.find_new_sources.invoke({"date_from": bad})
+    assert isinstance(result, dict) and "error" in result
+    assert "date_from" in result["error"]
+    mock_fn.assert_not_called()
+
+
+def test_find_new_sources_rejects_malformed_date_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_fn = MagicMock()
+    monkeypatch.setattr("src.db.messages.list_uncompiled_with_filters", mock_fn)
+
+    result = compiler.find_new_sources.invoke({"date_to": "2026-02-30"})
+    assert isinstance(result, dict) and "date_to" in result["error"]
+    mock_fn.assert_not_called()
+
+
+def test_find_new_sources_caps_unbounded_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requesting limit=10000 gets silently capped at 200 so the tool can't
+    drag a huge result set back. The agent still gets data, just paginated."""
+    mock_fn = MagicMock(return_value=[])
+    monkeypatch.setattr("src.db.messages.list_uncompiled_with_filters", mock_fn)
+
+    compiler.find_new_sources.invoke({"limit": 10_000})
+    assert mock_fn.call_args.kwargs["limit"] == 200
+
+
+@pytest.mark.parametrize("bad_kwargs", [{"limit": 0}, {"limit": -5}, {"offset": -1}])
+def test_find_new_sources_rejects_invalid_limit_offset(
+    bad_kwargs: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_fn = MagicMock()
+    monkeypatch.setattr("src.db.messages.list_uncompiled_with_filters", mock_fn)
+
+    result = compiler.find_new_sources.invoke(bad_kwargs)
+    assert isinstance(result, dict) and "error" in result
+    mock_fn.assert_not_called()
