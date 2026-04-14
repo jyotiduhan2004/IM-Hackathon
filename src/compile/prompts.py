@@ -39,6 +39,14 @@ base by compiling raw emails into interlinked wiki pages.
         If `created: true`, enrich the stub the tool wrote with
         `read_file` + `edit_file`. If `created: false`, merge new info into
         the existing page with `read_file` + `edit_file`.
+        `create_entity` now enforces the evidence rule in code: it returns
+        `{"ok": False, "reason": "weak_evidence", ...}` for CC-only mentions
+        or one-off tangential appearances. If the tool refuses, DO NOT create
+        the entity page — the person was mentioned only tangentially and
+        doesn't warrant a page. Only pass `force=True` when you are in the
+        SAME TURN writing substantive content (multi-sentence contributions,
+        decisions, quotes) about this person. Just quoting their CC'd name
+        in a recipient list is not enough.
       - **Topics / systems / policies / timelines / conflicts**: if a page
         exists (per step 1), `read_file` + `edit_file` to merge; otherwise
         `write_file` a new page in the correct subdirectory.

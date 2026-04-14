@@ -84,7 +84,9 @@ def find_new_sources(
         return {"error": str(exc)}
 
     if limit < 1 or offset < 0:
-        return {"error": f"limit must be ≥1 and offset must be ≥0 (got limit={limit}, offset={offset})"}
+        return {
+            "error": f"limit must be ≥1 and offset must be ≥0 (got limit={limit}, offset={offset})"
+        }
 
     # Cap `limit` so a runaway agent call can't drag 10k rows back.
     capped_limit = min(limit, _FIND_NEW_SOURCES_MAX_LIMIT)
@@ -624,7 +626,7 @@ def write_draft_page(
 
 
 @tool
-def create_entity(email: str, display_name: str = "") -> dict[str, Any]:
+def create_entity(email: str, display_name: str = "", force: bool = False) -> dict[str, Any]:
     """Resolve or create an entity page by EMAIL. Call this INSTEAD of
     inventing entity slugs yourself.
 
@@ -634,8 +636,23 @@ def create_entity(email: str, display_name: str = "") -> dict[str, Any]:
 
     - If an entity page already exists for this email (by canonical slug
       OR by legacy display-name slug with `email:` frontmatter), the
-      existing slug is returned. `created: false`.
-    - If no page exists, a minimal stub page is written with
+      existing slug is returned. `created: false`. The evidence gate is
+      SKIPPED for existing pages — we don't revoke people who already have
+      wiki coverage.
+    - If no page exists, the tool first checks the messages catalog for
+      how this email actually appears (From/To/Cc, across how many
+      threads) and buckets the result:
+        * **strong** — appears in From or To at least once.
+        * **medium** — not in From/To, but shows up across 2+ distinct
+          threads as CC/referenced.
+        * **weak** — 0-1 mentions, or CC-only on a single thread.
+      Weak evidence causes the tool to REFUSE and return
+      ``{"ok": False, "reason": "weak_evidence", "evidence_summary": {...}}``.
+      This is the anti-stub gate: CC-only mentions don't warrant an
+      entity page unless you are also writing substantive prose about
+      the person in the same turn. In that case, and only then, pass
+      ``force=True`` to bypass.
+    - On successful creation, a minimal stub page is written with
       `title`, `page_type: entity`, `status: current`, `email:`, empty
       `sources` and `related`. `created: true`. Enrich it with
       `read_file` + `edit_file` afterward as you do today.
@@ -646,16 +663,24 @@ def create_entity(email: str, display_name: str = "") -> dict[str, Any]:
         display_name: Optional. Used as the stub page title only when a
             new page is created. Ignored for existing pages. Examples:
             "Amit Jain", "Ruchi Gupta".
+        force: Bypass the weak-evidence gate. Default False. Only set
+            True when the same turn will write multi-sentence content
+            about the person; merely linking their CC'd name is not
+            enough.
 
     Returns:
         On success: {"ok": True, "slug": "amit-indiamart-com",
         "path": "wiki/entities/amit-indiamart-com.md",
-        "created": True|False, "email": "amit@indiamart.com"}.
+        "created": True|False, "email": "amit@indiamart.com",
+        "evidence_level": "strong"|"medium"|"forced"}.
+        On weak-evidence refusal: {"ok": False, "reason": "weak_evidence",
+        "email": ..., "would_be_slug": ..., "evidence_summary": {...},
+        "guidance": "..."}.
         On invalid email: {"ok": False, "error": "..."}.
     """
     from src.compile.entities import create_entity_page
 
-    return create_entity_page(email, display_name or None)
+    return create_entity_page(email, display_name or None, force=force)
 
 
 # === Frontmatter helpers ===

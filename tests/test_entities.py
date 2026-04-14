@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from src.compile import entities as entities_module
 from src.compile.entities import create_entity_page
 from src.compile.entities import email_to_slug
 from src.compile.entities import find_entity_by_email
@@ -12,44 +13,55 @@ from src.compile.entities import is_external_email
 from src.compile.entities import is_valid_email
 
 
+# By default, assume emails have NO participants catalog entries — that's
+# the behaviour tests in TestCreateEntityPage were written against before
+# the evidence gate landed. Individual tests in TestCreateEntityEvidenceGate
+# override this with richer counts. Autouse so we don't have to thread a
+# fixture through every existing test.
+@pytest.fixture(autouse=True)
+def _default_strong_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend every email is in From of one message by default.
+
+    Previous tests asserted "any call to create_entity_page creates a
+    page". The new evidence gate would break that assumption when the DB
+    is unreachable (everyone gets weak). Stub the lookup to return strong
+    evidence so the legacy happy-path tests still pass; evidence-gate
+    tests below override this.
+    """
+    monkeypatch.setattr(
+        entities_module,
+        "_evidence_counts",
+        lambda _email: {
+            "from_count": 1,
+            "to_count": 0,
+            "cc_count": 0,
+            "distinct_threads": 1,
+        },
+    )
+
+
 class TestEmailToSlug:
     def test_basic_internal(self) -> None:
         assert email_to_slug("amit@indiamart.com") == "amit-indiamart-com"
 
     def test_dotted_local_part(self) -> None:
-        assert (
-            email_to_slug("amit.patel@indiamart.com") == "amit-patel-indiamart-com"
-        )
+        assert email_to_slug("amit.patel@indiamart.com") == "amit-patel-indiamart-com"
 
     def test_digits_in_local_part(self) -> None:
-        assert (
-            email_to_slug("akash.singh6@indiamart.com")
-            == "akash-singh6-indiamart-com"
-        )
-        assert (
-            email_to_slug("vishakha.01@indiamart.com")
-            == "vishakha-01-indiamart-com"
-        )
+        assert email_to_slug("akash.singh6@indiamart.com") == "akash-singh6-indiamart-com"
+        assert email_to_slug("vishakha.01@indiamart.com") == "vishakha-01-indiamart-com"
 
     def test_plus_and_hyphen(self) -> None:
-        assert (
-            email_to_slug("first.last+tag@gmail.com") == "first-last-tag-gmail-com"
-        )
-        assert (
-            email_to_slug("jean-paul@example.co") == "jean-paul-example-co"
-        )
+        assert email_to_slug("first.last+tag@gmail.com") == "first-last-tag-gmail-com"
+        assert email_to_slug("jean-paul@example.co") == "jean-paul-example-co"
 
     def test_case_insensitive(self) -> None:
-        assert (
-            email_to_slug("Amit.Patel@IndiaMART.com") == "amit-patel-indiamart-com"
-        )
+        assert email_to_slug("Amit.Patel@IndiaMART.com") == "amit-patel-indiamart-com"
 
     def test_deterministic(self) -> None:
         """Same email in, same slug out. Always."""
         for _ in range(5):
-            assert email_to_slug("ruchi.gupta1@indiamart.com") == (
-                "ruchi-gupta1-indiamart-com"
-            )
+            assert email_to_slug("ruchi.gupta1@indiamart.com") == ("ruchi-gupta1-indiamart-com")
 
     def test_strips_whitespace(self) -> None:
         assert email_to_slug("  amit@indiamart.com  ") == "amit-indiamart-com"
@@ -173,9 +185,7 @@ class TestCreateEntityPage:
         assert not (tmp_path / "amit-indiamart-com.md").exists()
 
     def test_case_insensitive_email_match(self, tmp_path: Path) -> None:
-        result = create_entity_page(
-            "Amit@IndiaMART.com", entities_dir=tmp_path
-        )
+        result = create_entity_page("Amit@IndiaMART.com", entities_dir=tmp_path)
         assert result["email"] == "amit@indiamart.com"
         assert result["slug"] == "amit-indiamart-com"
 
@@ -190,9 +200,7 @@ class TestCreateEntityPage:
         assert "required" in result["error"]
 
     def test_no_display_name_uses_email_as_title(self, tmp_path: Path) -> None:
-        result = create_entity_page(
-            "akash.singh6@indiamart.com", entities_dir=tmp_path
-        )
+        result = create_entity_page("akash.singh6@indiamart.com", entities_dir=tmp_path)
         assert result["created"] is True
         content = Path(result["path"]).read_text(encoding="utf-8")
         assert "title: akash.singh6@indiamart.com" in content
@@ -257,3 +265,159 @@ class TestFindEntityByEmail:
     def test_returns_none_when_dir_missing(self, tmp_path: Path) -> None:
         absent = tmp_path / "does-not-exist"
         assert find_entity_by_email("x@y.com", entities_dir=absent) is None
+
+
+def _patch_evidence(monkeypatch: pytest.MonkeyPatch, counts: dict[str, int]) -> None:
+    """Pin `_evidence_counts` to a fixed dict for the current test."""
+    monkeypatch.setattr(entities_module, "_evidence_counts", lambda _e: counts)
+
+
+class TestCreateEntityEvidenceGate:
+    """Verify the evidence gate added to stop the compiler producing 1-line
+    CC-only entity stubs (see docs/BACKLOG.md). The gate sits in front of
+    new-page creation only; existing-page lookups are unaffected.
+    """
+
+    def test_weak_evidence_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # CC-only, single thread → weak → refuse.
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 1, "distinct_threads": 1},
+        )
+        result = create_entity_page(
+            "manay.shankar@indiamart.com",
+            display_name="Manay Shankar",
+            entities_dir=tmp_path,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "weak_evidence"
+        assert result["email"] == "manay.shankar@indiamart.com"
+        assert result["would_be_slug"] == "manay-shankar-indiamart-com"
+        assert result["evidence_summary"] == {
+            "from_count": 0,
+            "to_count": 0,
+            "cc_count": 1,
+            "distinct_threads": 1,
+        }
+        assert "force=True" in result["guidance"]
+        # No file was written.
+        assert not (tmp_path / "manay-shankar-indiamart-com.md").exists()
+
+    def test_weak_evidence_with_force_creates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same weak-evidence email, but the agent has decided it's
+        # writing substantive content — force=True bypasses the gate.
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 1, "distinct_threads": 1},
+        )
+        result = create_entity_page(
+            "manay.shankar@indiamart.com",
+            display_name="Manay Shankar",
+            entities_dir=tmp_path,
+            force=True,
+        )
+        assert result["ok"] is True
+        assert result["created"] is True
+        assert result["slug"] == "manay-shankar-indiamart-com"
+        assert result["evidence_level"] == "forced"
+        assert Path(result["path"]).exists()
+
+    def test_strong_evidence_creates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 3, "to_count": 1, "cc_count": 0, "distinct_threads": 4},
+        )
+        result = create_entity_page(
+            "rajeev@indiamart.com", display_name="Rajeev", entities_dir=tmp_path
+        )
+        assert result["ok"] is True
+        assert result["created"] is True
+        assert result["evidence_level"] == "strong"
+        assert Path(result["path"]).exists()
+
+    def test_existing_page_bypasses_evidence_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Seed an existing page (canonical slug path).
+        canonical = tmp_path / "ghost-nowhere-com.md"
+        canonical.write_text(
+            "---\n"
+            "title: Ghost\n"
+            "page_type: entity\n"
+            "status: current\n"
+            "email: ghost@nowhere.com\n"
+            "---\n\n"
+            "Email: ghost@nowhere.com\n",
+            encoding="utf-8",
+        )
+        # Force the evidence check to "weak". It must NOT fire for the
+        # existing page — recompiling a weak-signal page we already have
+        # should be a no-op, not a regression.
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads": 0},
+        )
+        result = create_entity_page(
+            "ghost@nowhere.com", display_name="Ghost", entities_dir=tmp_path
+        )
+        assert result["ok"] is True
+        assert result["created"] is False
+        assert result["slug"] == "ghost-nowhere-com"
+        assert result["path"] == str(canonical)
+
+    def test_existing_legacy_page_bypasses_evidence_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pre-existing display-name slug like we have lots of in
+        # production wiki/entities/. `find_entity_by_email` resolves via
+        # frontmatter and must still return it even under weak counts.
+        legacy = tmp_path / "some-body.md"
+        legacy.write_text(
+            "---\nemail: some.body@indiamart.com\npage_type: entity\n---\n",
+            encoding="utf-8",
+        )
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads": 0},
+        )
+        result = create_entity_page("some.body@indiamart.com", entities_dir=tmp_path)
+        assert result["ok"] is True
+        assert result["slug"] == "some-body"
+        assert result["created"] is False
+
+    def test_medium_evidence_creates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Not in From/To anywhere, but CC'd across 3 distinct threads →
+        # medium. The person is recurring; a page is warranted.
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 4, "distinct_threads": 3},
+        )
+        result = create_entity_page(
+            "recurring.cc@indiamart.com",
+            display_name="Recurring CC",
+            entities_dir=tmp_path,
+        )
+        assert result["ok"] is True
+        assert result["created"] is True
+        assert result["evidence_level"] == "medium"
+        assert Path(result["path"]).exists()
+
+    def test_weak_cc_single_thread_refuses_even_with_many_ccs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Lots of CC rows but all on ONE thread (e.g. one long reply
+        # chain) is still weak — we want thread diversity to be the
+        # signal, not raw CC volume.
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 0, "cc_count": 8, "distinct_threads": 1},
+        )
+        result = create_entity_page(
+            "pramod.purohit@indiamart.com",
+            display_name="Pramod Purohit",
+            entities_dir=tmp_path,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "weak_evidence"
