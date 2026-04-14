@@ -38,6 +38,7 @@ from src.config import settings  # noqa: E402
 from src.db.compile_runs import finish_run  # noqa: E402
 from src.db.compile_runs import start_run  # noqa: E402
 from src.db.insights import list_for_run as list_insights_for_run  # noqa: E402
+from src.db.insights import max_id_for_run as _insights_max_id  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
@@ -245,15 +246,27 @@ def _append_batch_log(
         f.write(row)
 
 
-def _insights_suffix(run_id: str, limit: int = 3) -> str:
+def _max_insight_id_safe(run_id: UUID) -> int:
+    """Best-effort fetch of the current max insight id. Returns 0 on DB error
+    so a DB blip doesn't crash the compile loop — we just lose the
+    "since-last-batch" filter for this one batch's digest."""
+    try:
+        return _insights_max_id(run_id)
+    except Exception as exc:  # noqa: BLE001 — insights are best-effort
+        logger.warning("insights cursor fetch failed", run_id=run_id, error=str(exc))
+        return 0
+
+
+def _insights_suffix(run_id: UUID, since_id: int, limit: int = 3) -> str:
     """Return a short ``insights=N: <preview>`` fragment for the log notes.
 
-    Pulls the newest `limit` rows from compile_insights for `run_id`. Fails
-    open with an empty string if the DB is unreachable — the audit log row
-    still gets written either way.
+    Pulls rows newer than `since_id` for this `run_id` so the digest reflects
+    only the insights logged during the just-completed batch — not every
+    insight accumulated in earlier batches of the same run. Fails open with
+    an empty string if the DB is unreachable.
     """
     try:
-        rows = list_insights_for_run(run_id, limit=limit)
+        rows = list_insights_for_run(run_id, limit=limit, since_id=since_id)
     except Exception as exc:  # noqa: BLE001 — insights are best-effort
         logger.warning("insights fetch failed", run_id=run_id, error=str(exc))
         return ""
@@ -587,7 +600,13 @@ def main(
                 f"earliest={earliest}, model={batch_model}) ==="
             )
             cache_cb = BatchStatsCallback(model=batch_model)
+<<<<<<< HEAD
             tool_cb = ToolCallLogHandler()
+=======
+            # Snapshot the insight-id cursor BEFORE the batch so we can show
+            # only the insights logged during this batch in the digest.
+            insights_cursor = _max_insight_id_safe(run_id)
+>>>>>>> 7154b89 (fix(compile): address log_insight review — batch-scoped digest + uuid FK + real test)
             try:
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it
@@ -631,7 +650,7 @@ def main(
                 click.echo(f"Batch complete. Progress: {processed}/{total}{suffix}")
                 log_outcome: BatchOutcome = "partial" if (not_cited or missing) else "compiled"
                 log_notes_parts = list(suffix_parts)
-                insights_tail = _insights_suffix(str(run_id))
+                insights_tail = _insights_suffix(run_id, since_id=insights_cursor)
                 if insights_tail:
                     log_notes_parts.append(insights_tail)
                 log_notes = "; ".join(log_notes_parts) if log_notes_parts else ""

@@ -225,7 +225,6 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS compile_model TEXT;
 
 
 -- ---------------------------------------------------------------------------
-<<<<<<< HEAD
 -- Per-tool-call telemetry (2026-04-13)
 --
 -- BatchStatsCallback only aggregates tool-call COUNT. This table records one
@@ -253,7 +252,9 @@ CREATE INDEX IF NOT EXISTS compile_tool_calls_run_id_idx
   ON compile_tool_calls(run_id);
 CREATE INDEX IF NOT EXISTS compile_tool_calls_tool_started_idx
   ON compile_tool_calls(tool_name, started_at DESC);
-=======
+
+
+-- ---------------------------------------------------------------------------
 -- compile_insights — structured meta-observations emitted by the agent
 -- during a compile run. The agent has no other channel to say "this is
 -- ambiguous" or "two pages look like they should merge"; this table is
@@ -261,8 +262,8 @@ CREATE INDEX IF NOT EXISTS compile_tool_calls_tool_started_idx
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS compile_insights (
-  id serial PRIMARY KEY,
-  run_id text,
+  id bigserial PRIMARY KEY,
+  run_id uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
   category text CHECK (category IN (
     'topic_merge_candidate',
     'question_for_human',
@@ -280,4 +281,3 @@ CREATE TABLE IF NOT EXISTS compile_insights (
 CREATE INDEX IF NOT EXISTS compile_insights_run_id_idx ON compile_insights(run_id);
 CREATE INDEX IF NOT EXISTS compile_insights_category_created_idx
   ON compile_insights(category, created_at DESC);
->>>>>>> 7a0e32a (feat(compile): add log_insight tool + compile_insights table + batch digest)

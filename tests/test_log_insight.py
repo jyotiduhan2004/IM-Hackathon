@@ -69,36 +69,63 @@ class TestLogInsightTool:
 
 
 class TestInsightsRepoListForRun:
-    def test_list_for_run_returns_shape_correct_dicts(self) -> None:
-        fake_rows: list[dict[str, Any]] = [
-            {
-                "id": 2,
-                "category": "topic_merge_candidate",
-                "message": "merge foo and bar",
-                "email_path": "raw/x.md",
-                "suggested_action": "combine",
-                "created_at": "2026-04-13T12:00:00+00:00",
-            },
-            {
-                "id": 1,
-                "category": "tool_gap",
-                "message": "need a rename tool",
-                "email_path": None,
-                "suggested_action": None,
-                "created_at": "2026-04-13T11:59:00+00:00",
-            },
-        ]
-        with patch("src.db.insights.list_for_run", return_value=fake_rows) as list_for_run:
-            from src.db.insights import list_for_run as real
+    """list_for_run hits real SQL via the test-schema fixture — the previous
+    mock-of-itself pattern validated nothing (the import-after-patch rebound
+    `real` to the mock, so the assertion tested the mock's call signature,
+    not the query that would run against Postgres)."""
 
-            # Patch replaces the symbol; importing after the patch gets the mock.
-            rows = real("run-xyz", limit=10)
+    def test_list_for_run_filters_by_run_id(self, db_conn: Any) -> None:
+        from src.db import compile_runs as runs_repo
+        from src.db import insights as insights_repo
 
-        list_for_run.assert_called_once_with("run-xyz", limit=10)
-        assert rows == fake_rows
-        assert {"id", "category", "message", "email_path", "suggested_action", "created_at"} <= (
-            set(rows[0].keys())
+        run_a = runs_repo.start_run(model="test", notes="a")
+        run_b = runs_repo.start_run(model="test", notes="b")
+
+        insights_repo.record(
+            run_id=run_a,
+            category="tool_gap",
+            message="run-a first",
         )
+        insights_repo.record(
+            run_id=run_b,
+            category="tool_gap",
+            message="run-b decoy",
+        )
+        insights_repo.record(
+            run_id=run_a,
+            category="prompt_ambiguity",
+            message="run-a second",
+        )
+
+        rows = insights_repo.list_for_run(run_a, limit=10)
+        messages = {r["message"] for r in rows}
+        assert messages == {"run-a first", "run-a second"}
+
+    def test_list_for_run_since_id_filters_out_earlier_rows(self, db_conn: Any) -> None:
+        from src.db import compile_runs as runs_repo
+        from src.db import insights as insights_repo
+
+        run = runs_repo.start_run(model="test", notes="since_id test")
+        first_id = insights_repo.record(
+            run_id=run, category="tool_gap", message="batch 1"
+        )
+        second_id = insights_repo.record(
+            run_id=run, category="tool_gap", message="batch 2"
+        )
+
+        # since_id = first_id → only rows with id > first_id (i.e., second_id).
+        rows = insights_repo.list_for_run(run, limit=10, since_id=first_id)
+        assert [r["id"] for r in rows] == [second_id]
+
+    def test_max_id_for_run_returns_latest_id(self, db_conn: Any) -> None:
+        from src.db import compile_runs as runs_repo
+        from src.db import insights as insights_repo
+
+        run = runs_repo.start_run(model="test", notes="max_id test")
+        assert insights_repo.max_id_for_run(run) == 0
+        first = insights_repo.record(run_id=run, category="tool_gap", message="one")
+        second = insights_repo.record(run_id=run, category="tool_gap", message="two")
+        assert insights_repo.max_id_for_run(run) == max(first, second)
 
 
 class TestPromptContainsLogInsightSection:

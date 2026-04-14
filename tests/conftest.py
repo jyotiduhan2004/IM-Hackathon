@@ -224,6 +224,28 @@ def _load_messages_ddl() -> str:
       ON {TEST_SCHEMA}.compile_tool_calls(run_id);
     CREATE INDEX compile_tool_calls_tool_started_idx
       ON {TEST_SCHEMA}.compile_tool_calls(tool_name, started_at DESC);
+
+    CREATE TABLE {TEST_SCHEMA}.compile_insights (
+      id bigserial PRIMARY KEY,
+      run_id uuid REFERENCES {TEST_SCHEMA}.compile_runs(run_id) ON DELETE CASCADE,
+      category text CHECK (category IN (
+        'topic_merge_candidate',
+        'question_for_human',
+        'prompt_ambiguity',
+        'tool_gap',
+        'supersession_doubt',
+        'structure_suggestion'
+      )),
+      message text NOT NULL,
+      email_path text,
+      suggested_action text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX compile_insights_run_id_idx
+      ON {TEST_SCHEMA}.compile_insights(run_id);
+    CREATE INDEX compile_insights_category_created_idx
+      ON {TEST_SCHEMA}.compile_insights(category, created_at DESC);
     """
 
 
@@ -272,6 +294,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     import src.db as db_pkg
     import src.db.compile_runs as db_compile_runs
     import src.db.cursors as db_cursors
+    import src.db.insights as db_insights
     import src.db.messages as db_messages
     import src.db.participants as db_participants
     import src.db.threads as db_threads
@@ -290,6 +313,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(db_wiki_pages, "connect", _scoped_connect)
     monkeypatch.setattr(db_touched_pages, "connect", _scoped_connect)
     monkeypatch.setattr(db_tool_call_log, "connect", _scoped_connect)
+    monkeypatch.setattr(db_insights, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
         # message_participants + message_touched_pages → messages/users/
@@ -303,9 +327,14 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
             f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
             f"{TEST_SCHEMA}.threads CASCADE"
         )
-        # compile_tool_calls has a FK on compile_runs — Postgres requires both
-        # tables in one TRUNCATE statement (or CASCADE). Single statement is clean.
-        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_tool_calls, {TEST_SCHEMA}.compile_runs")
+        # compile_tool_calls + compile_insights both have FKs to compile_runs
+        # — Postgres requires all dependent tables in one TRUNCATE statement.
+        conn.execute(
+            f"TRUNCATE TABLE "
+            f"{TEST_SCHEMA}.compile_tool_calls, "
+            f"{TEST_SCHEMA}.compile_insights, "
+            f"{TEST_SCHEMA}.compile_runs"
+        )
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.ingest_cursors")
 
     yield
