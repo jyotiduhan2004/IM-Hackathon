@@ -16,13 +16,11 @@ wiki corpus.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+import pytest
 
+REPO_ROOT = Path(__file__).parent.parent
 FIXTURE_CONFIG = REPO_ROOT / "tests" / "fixtures" / "nav_fixture" / "mkdocs.yml"
 
 
@@ -36,45 +34,42 @@ def _run_mkdocs_build(build_dir: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_fixture_build_succeeds(tmp_path: Path) -> None:
-    """The synthetic fixture builds cleanly."""
-    build_dir = tmp_path / "build-nav"
-    result = _run_mkdocs_build(build_dir)
-    assert build_dir.exists(), result.stderr
+@pytest.fixture(scope="module")
+def built_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the fixture once per module — each test just asserts over the output."""
+    build_dir = tmp_path_factory.mktemp("nav-build")
+    _run_mkdocs_build(build_dir)
+    return build_dir
 
 
-def test_home_renders_products_and_platforms_label(tmp_path: Path) -> None:
+def test_fixture_build_succeeds(built_site: Path) -> None:
+    assert built_site.exists()
+
+
+def test_home_renders_products_and_platforms_label(built_site: Path) -> None:
     """The UI rename from 'Systems' to 'Products & Platforms' is visible.
 
     MkDocs Material emits the literal ``&`` in the rendered sidebar (it
     does not HTML-encode it), so we accept either form for robustness in
     case a future theme switch starts escaping.
     """
-    build_dir = tmp_path / "build-nav"
-    _run_mkdocs_build(build_dir)
-    home_html = (build_dir / "home" / "index.html").read_text(encoding="utf-8")
+    home_html = (built_site / "home" / "index.html").read_text(encoding="utf-8")
     assert "Products & Platforms" in home_html or "Products &amp; Platforms" in home_html
 
 
-def test_about_page_is_emitted(tmp_path: Path) -> None:
-    """``About`` landing page reaches the generated site."""
-    build_dir = tmp_path / "build-nav"
-    _run_mkdocs_build(build_dir)
-    assert (build_dir / "about" / "index.html").exists()
+def test_about_page_is_emitted(built_site: Path) -> None:
+    assert (built_site / "about" / "index.html").exists()
 
 
-def test_all_top_level_landing_pages_emitted(tmp_path: Path) -> None:
-    """Every top-level nav entry has its landing page rendered."""
-    build_dir = tmp_path / "build-nav"
-    _run_mkdocs_build(build_dir)
+def test_all_top_level_landing_pages_emitted(built_site: Path) -> None:
     expected = [
-        build_dir / "home" / "index.html",
-        build_dir / "topics" / "index.html",
-        build_dir / "systems" / "index.html",
-        build_dir / "policies" / "index.html",
-        build_dir / "entities" / "index.html",
-        build_dir / "log" / "index.html",
-        build_dir / "about" / "index.html",
+        built_site / "home" / "index.html",
+        built_site / "topics" / "index.html",
+        built_site / "systems" / "index.html",
+        built_site / "policies" / "index.html",
+        built_site / "entities" / "index.html",
+        built_site / "log" / "index.html",
+        built_site / "about" / "index.html",
     ]
     missing = [p for p in expected if not p.exists()]
     assert not missing, f"missing rendered pages: {missing}"

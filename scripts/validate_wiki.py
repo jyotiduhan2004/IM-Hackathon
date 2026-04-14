@@ -44,7 +44,7 @@ from src.config import settings  # noqa: E402
 
 REQUIRED_FIELDS = {"title", "page_type", "status"}
 VALID_STATUSES = {"current", "superseded", "contested"}
-VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict"}
+VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict", "index"}
 CATEGORY_TO_TYPE = {
     "topics": "topic",
     "entities": "entity",
@@ -53,6 +53,10 @@ CATEGORY_TO_TYPE = {
     "timelines": "timeline",
     "conflicts": "conflict",
 }
+# Nav-only directory landing pages live at `<category>/index.md` and never
+# carry sources/related — they're placeholders rendered by MkDocs for nav
+# targets. Exclude them from all content-level checks.
+_INDEX_FILENAME = "index.md"
 
 
 @dataclass
@@ -163,10 +167,10 @@ def validate_page(path: Path) -> list[Error]:
     if st and st not in VALID_STATUSES:
         errors.append(Error(path, f"invalid status: {st!r}"))
 
-    # page_type matches directory
+    # page_type matches directory (skip nav-only index pages)
     category = path.parent.name
     want = CATEGORY_TO_TYPE.get(category)
-    if want and pt and pt != want:
+    if want and pt and pt != want and pt != "index":
         errors.append(Error(path, f"in {category}/ but page_type={pt!r}, expected {want!r}"))
 
     # Systems directory is for products/services — a populated `email:`
