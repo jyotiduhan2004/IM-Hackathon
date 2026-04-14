@@ -235,14 +235,14 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS compile_model TEXT;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS compile_tool_calls (
-  id serial PRIMARY KEY,
-  run_id text,
+  id bigserial PRIMARY KEY,
+  run_id uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
   tool_name text NOT NULL,
   inputs_json jsonb,
   output_preview varchar(500),
   output_bytes int,
   latency_ms int,
-  status text CHECK (status IN ('ok', 'error')),
+  status text CHECK (status IN ('ok', 'error', 'abandoned')),
   error_message text,
   started_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz

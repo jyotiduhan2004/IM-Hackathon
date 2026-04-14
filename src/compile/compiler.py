@@ -6,6 +6,7 @@ import re
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
 
 import structlog
@@ -14,6 +15,9 @@ from langchain_core.tools import tool
 
 from src.compile.prompts import COMPILER_SYSTEM_PROMPT
 from src.config import settings
+
+if TYPE_CHECKING:
+    from src.compile.tool_call_log import ToolCallLogHandler
 
 logger = structlog.get_logger(__name__)
 
@@ -680,7 +684,7 @@ def run_compilation(
     wiki_dir: str = "wiki",
     recursion_limit: int = 150,
     cache_stats: Any | None = None,
-    tool_log: Any | None = None,
+    tool_log: ToolCallLogHandler | None = None,
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 

@@ -21,37 +21,39 @@ def insert_many(run_id: str, records: list[dict[str, Any]]) -> int:
 
     `records` is the coordinator's dict-cast of `ToolCallRecord` TypedDicts.
     Times are POSIX floats (seconds) — `to_timestamp(...)` converts at DB
-    write. Missing optional fields default to NULL.
+    write. Missing optional fields default to NULL. Uses `executemany` so
+    all rows ship in one round trip inside a single transaction.
     """
     if not records:
         return 0
-    count = 0
+    params = [
+        (
+            run_id,
+            r["tool_name"],
+            r.get("inputs_json"),
+            r.get("output_preview"),
+            r.get("output_bytes"),
+            r.get("latency_ms"),
+            r.get("status"),
+            r.get("error_message"),
+            r.get("started_at"),
+            r.get("finished_at"),
+        )
+        for r in records
+    ]
     with connect() as conn, conn.transaction():
-        for r in records:
-            conn.execute(
-                """
-                INSERT INTO compile_tool_calls (
-                  run_id, tool_name, inputs_json, output_preview,
-                  output_bytes, latency_ms, status, error_message,
-                  started_at, finished_at
-                ) VALUES (%s, %s, %s::jsonb, %s, %s, %s, %s, %s,
-                          to_timestamp(%s), to_timestamp(%s))
-                """,
-                (
-                    run_id,
-                    r["tool_name"],
-                    r.get("inputs_json"),
-                    r.get("output_preview"),
-                    r.get("output_bytes"),
-                    r.get("latency_ms"),
-                    r.get("status"),
-                    r.get("error_message"),
-                    r.get("started_at"),
-                    r.get("finished_at"),
-                ),
-            )
-            count += 1
-    return count
+        conn.cursor().executemany(
+            """
+            INSERT INTO compile_tool_calls (
+              run_id, tool_name, inputs_json, output_preview,
+              output_bytes, latency_ms, status, error_message,
+              started_at, finished_at
+            ) VALUES (%s, %s, %s::jsonb, %s, %s, %s, %s, %s,
+                      to_timestamp(%s), to_timestamp(%s))
+            """,
+            params,
+        )
+    return len(records)
 
 
 def summarize(run_id: str) -> dict[str, Any]:
@@ -84,14 +86,25 @@ def summarize(run_id: str) -> dict[str, Any]:
     }
 
 
-def fallback_to_jsonl(run_id: str, records: list[dict[str, Any]]) -> Path:
-    """Append records to `docs/audits/tool_calls-<run_id>.jsonl`.
+def fallback_to_jsonl(
+    run_id: str,
+    records: list[dict[str, Any]],
+    *,
+    base_dir: Path | None = None,
+) -> Path:
+    """Append records to `{base_dir}/docs/audits/tool_calls-<run_id>.jsonl`.
 
     Used when the DB insert raises — we don't want to lose telemetry just
     because Postgres is down. File is append-only so repeated flushes for
     the same run concatenate.
+
+    Pass `base_dir` to anchor the output path at a known location. Defaults
+    to the repo root so the JSONL lands in the right place regardless of
+    the process's CWD (e.g. CI scripts that `cd /tmp && uv run …`).
     """
-    audits_dir = Path("docs/audits")
+    if base_dir is None:
+        base_dir = Path(__file__).resolve().parents[2]
+    audits_dir = base_dir / "docs" / "audits"
     audits_dir.mkdir(parents=True, exist_ok=True)
     out_path = audits_dir / f"tool_calls-{run_id}.jsonl"
     with out_path.open("a", encoding="utf-8") as f:

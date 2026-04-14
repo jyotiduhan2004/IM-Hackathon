@@ -207,14 +207,14 @@ def _load_messages_ddl() -> str:
       ON {TEST_SCHEMA}.message_touched_pages (page_id, compiled_at DESC);
 
     CREATE TABLE {TEST_SCHEMA}.compile_tool_calls (
-      id serial PRIMARY KEY,
-      run_id text,
+      id bigserial PRIMARY KEY,
+      run_id uuid REFERENCES {TEST_SCHEMA}.compile_runs(run_id) ON DELETE CASCADE,
       tool_name text NOT NULL,
       inputs_json jsonb,
       output_preview varchar(500),
       output_bytes int,
       latency_ms int,
-      status text CHECK (status IN ('ok', 'error')),
+      status text CHECK (status IN ('ok', 'error', 'abandoned')),
       error_message text,
       started_at timestamptz NOT NULL DEFAULT now(),
       finished_at timestamptz
@@ -303,9 +303,10 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
             f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
             f"{TEST_SCHEMA}.threads CASCADE"
         )
-        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_runs")
+        # compile_tool_calls has a FK on compile_runs — Postgres requires both
+        # tables in one TRUNCATE statement (or CASCADE). Single statement is clean.
+        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_tool_calls, {TEST_SCHEMA}.compile_runs")
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.ingest_cursors")
-        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.compile_tool_calls")
 
     yield
 

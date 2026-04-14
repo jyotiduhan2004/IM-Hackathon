@@ -79,7 +79,9 @@ class ToolCallLogHandler(BaseCallbackHandler):
         now = time.time()
         out_str = str(output)
         rec["output_preview"] = out_str[:300]
-        rec["output_bytes"] = len(out_str)
+        # Actual byte length (UTF-8); `len(str)` returns char count which
+        # undercounts multi-byte (emoji, non-ASCII) payloads.
+        rec["output_bytes"] = len(out_str.encode("utf-8"))
         rec["finished_at"] = now
         rec["latency_ms"] = int((now - rec["started_at"]) * 1000)
         rec["status"] = "ok"
@@ -97,8 +99,35 @@ class ToolCallLogHandler(BaseCallbackHandler):
         self._completed.append(rec)
 
     def records(self) -> list[ToolCallRecord]:
-        """Return a snapshot of completed records (copy, safe to iterate)."""
+        """Return a snapshot of completed records (shallow copy of list).
+
+        NOTE: inner dict rows are shared with internal state. Do not mutate
+        returned dicts — the coordinator should `dict(r)` each row if it
+        needs a private copy. Use `flush_all()` to take ownership of both
+        completed and in-flight records and empty internal state.
+        """
         return list(self._completed)
+
+    def flush_all(self) -> list[ToolCallRecord]:
+        """Return completed + abandoned in-flight records, emptying state.
+
+        Called by the coordinator on batch boundary *and* on exceptions so
+        the most-diagnostic rows (the tool call the agent was running when
+        it crashed) aren't silently lost. In-flight rows are marked
+        `status="abandoned"` so operators can tell them from successful
+        completions.
+        """
+        now = time.time()
+        abandoned: list[ToolCallRecord] = []
+        for rec in self._in_flight.values():
+            rec["finished_at"] = now
+            rec["latency_ms"] = int((now - rec["started_at"]) * 1000)
+            rec["status"] = "abandoned"
+            abandoned.append(rec)
+        out = self._completed + abandoned
+        self._in_flight.clear()
+        self._completed.clear()
+        return out
 
     def clear(self) -> None:
         """Drop all buffered state. Call after flushing to the DB per batch."""

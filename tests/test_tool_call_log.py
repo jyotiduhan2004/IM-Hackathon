@@ -92,6 +92,52 @@ def test_long_output_is_truncated_to_300_chars() -> None:
     assert rec["output_bytes"] == 5000
 
 
+def test_output_bytes_counts_utf8_bytes_not_chars() -> None:
+    """Multi-byte output (emoji / non-ASCII) must count BYTES, not code points.
+
+    `len("🚀")` == 1 but it encodes to 4 UTF-8 bytes. Previous impl used
+    `len(str)` which silently undercounted multi-byte payloads — Claude
+    review on PR #62 flagged this.
+    """
+    h = ToolCallLogHandler()
+    rid = uuid4()
+    _start(h, rid)
+    emoji_output = "🚀" * 10  # 10 chars, 40 bytes
+    h.on_tool_end(emoji_output, run_id=rid)
+
+    rec = h.records()[0]
+    assert rec["output_bytes"] == 40
+    assert rec["output_bytes"] != len(emoji_output)
+
+
+def test_flush_all_captures_abandoned_in_flight_records() -> None:
+    """In-flight tool calls (agent crashed mid-call) surface as abandoned."""
+    h = ToolCallLogHandler()
+    completed_rid = uuid4()
+    abandoned_rid = uuid4()
+
+    # One completes normally.
+    _start(h, completed_rid, tool_name="read_file")
+    h.on_tool_end("ok", run_id=completed_rid)
+
+    # One stays in-flight (never gets on_tool_end/error).
+    _start(h, abandoned_rid, tool_name="write_file")
+
+    out = h.flush_all()
+    assert len(out) == 2
+    statuses = sorted(r["status"] for r in out)
+    assert statuses == ["abandoned", "ok"]
+
+    abandoned = next(r for r in out if r["status"] == "abandoned")
+    assert abandoned["tool_name"] == "write_file"
+    assert abandoned["finished_at"] is not None
+    assert abandoned["latency_ms"] is not None
+
+    # flush_all also empties internal state.
+    assert h.records() == []
+    assert h.flush_all() == []
+
+
 def test_long_error_is_truncated_to_500_chars() -> None:
     h = ToolCallLogHandler()
     rid = uuid4()
@@ -166,16 +212,30 @@ def test_concurrent_tool_calls_are_tracked_separately() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FakeCursor:
+    """Minimal cursor stand-in that records executemany calls."""
+
+    def __init__(self, parent: _FakeConn) -> None:
+        self._parent = parent
+
+    def executemany(self, sql: str, params_seq: list[tuple[Any, ...]]) -> None:
+        self._parent.executemany_calls.append((sql, list(params_seq)))
+
+
 class _FakeConn:
     """Minimal stand-in for a psycopg connection used by `insert_many`."""
 
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.executemany_calls: list[tuple[str, list[tuple[Any, ...]]]] = []
         self.committed = False
 
-    def execute(self, sql: str, params: tuple[Any, ...]) -> _FakeConn:
-        self.executed.append((sql, params))
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> _FakeConn:
+        self.executed.append((sql, params or ()))
         return self
+
+    def cursor(self) -> _FakeCursor:
+        return _FakeCursor(self)
 
     def fetchone(self) -> None:
         return None
@@ -246,9 +306,10 @@ def test_insert_many_returns_zero_on_empty_records(
     assert conn.executed == []
 
 
-def test_insert_many_executes_one_insert_per_record(
+def test_insert_many_uses_executemany_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """One executemany() call ships all records in a single round-trip."""
     conn = _FakeConn()
     monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
     records = _sample_records()
@@ -256,12 +317,14 @@ def test_insert_many_executes_one_insert_per_record(
     count = repo.insert_many("run-abc", records)
 
     assert count == 2
-    assert len(conn.executed) == 2
-    for sql, _ in conn.executed:
-        assert "INSERT INTO compile_tool_calls" in sql
-        assert "::jsonb" in sql  # inputs_json cast
+    # One executemany call (not N loop iterations).
+    assert len(conn.executemany_calls) == 1
+    sql, params_seq = conn.executemany_calls[0]
+    assert "INSERT INTO compile_tool_calls" in sql
+    assert "::jsonb" in sql  # inputs_json cast
+    assert len(params_seq) == 2
     # Parameter order follows the column list in the SQL.
-    _sql0, params0 = conn.executed[0]
+    params0 = params_seq[0]
     assert params0[0] == "run-abc"
     assert params0[1] == records[0]["tool_name"]
     assert params0[2] == records[0]["inputs_json"]
@@ -330,14 +393,13 @@ def test_summarize_handles_empty_rows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_fallback_to_jsonl_writes_one_line_per_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
     records = _sample_records()
 
-    out_path = repo.fallback_to_jsonl("run-42", records)
+    out_path = repo.fallback_to_jsonl("run-42", records, base_dir=tmp_path)
 
-    assert out_path == Path("docs/audits/tool_calls-run-42.jsonl")
+    assert out_path == tmp_path / "docs" / "audits" / "tool_calls-run-42.jsonl"
     assert out_path.exists()
     lines = out_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == len(records)
@@ -349,15 +411,39 @@ def test_fallback_to_jsonl_writes_one_line_per_record(
     assert first["status"] == "ok"
 
 
-def test_fallback_to_jsonl_appends_on_repeat(
+def test_fallback_to_jsonl_defaults_resolve_repo_root_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    """Without base_dir, path resolves off repo root — not CWD.
+
+    Patches `Path(__file__).resolve().parents[2]` indirection by giving a
+    fake module file path whose `parents[2]` is tmp_path. Avoids writing
+    into the real repo tree during tests.
+    """
+    import src.db.tool_call_log as module
+
+    # Force the default branch to resolve under tmp_path instead of the repo.
+    fake_module_file = tmp_path / "src" / "db" / "tool_call_log.py"
+    fake_module_file.parent.mkdir(parents=True, exist_ok=True)
+    fake_module_file.touch()
+    monkeypatch.setattr(module, "__file__", str(fake_module_file))
+
+    # CWD does not matter — the default should anchor on the patched __file__.
+    monkeypatch.chdir(tmp_path / "src")
+
+    records = _sample_records()[:1]
+    out_path = repo.fallback_to_jsonl("run-default", records)
+
+    assert out_path == tmp_path / "docs" / "audits" / "tool_calls-run-default.jsonl"
+    assert out_path.exists()
+
+
+def test_fallback_to_jsonl_appends_on_repeat(tmp_path: Path) -> None:
     records = _sample_records()
 
-    repo.fallback_to_jsonl("run-42", records[:1])
-    repo.fallback_to_jsonl("run-42", records[1:])
+    repo.fallback_to_jsonl("run-42", records[:1], base_dir=tmp_path)
+    repo.fallback_to_jsonl("run-42", records[1:], base_dir=tmp_path)
 
-    out_path = Path("docs/audits/tool_calls-run-42.jsonl")
+    out_path = tmp_path / "docs" / "audits" / "tool_calls-run-42.jsonl"
     lines = out_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == len(records)
