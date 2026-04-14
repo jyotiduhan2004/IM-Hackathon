@@ -126,6 +126,46 @@ Do NOT do:
 
 ---
 
+## `create_entity` has no evidence gate (2026-04-14, related to auto-stub)
+
+**Observation** (from live compile audit 2026-04-14): the agent is still
+creating entity stubs for CC-only mentions even though PR #66 landed the
+Phase 1 "entity evidence strength" prompt rules (via `d44d39a` + `b10f52a`).
+Examples from a run launched 30 min after those rules landed:
+
+- `wiki/entities/manay-shankar-indiamart-com.md` — 322 bytes, 1 source (CC-only)
+- `wiki/entities/rameshwar-paryani-indiamart-com.md` — 342 bytes, 1 source (CC-only)
+
+Both bodies are literally one email line and nothing else.
+
+**Root cause.** `src/compile/compiler.py::create_entity` is a deterministic
+tool: given an email it writes a stub page unconditionally, regardless of
+how often that address appears in the wiki or whether the agent plans to
+enrich it in this turn. The prompt rule is an instruction with no
+enforcement mechanism behind it.
+
+**Mitigation options** (pick one, not all):
+
+1. **Evidence gate inside `create_entity`** — before creating, count the
+   appearances of the email in `raw/` (or `message_participants`). Require
+   ≥2 source messages (not CC-only) OR a `force=True` arg the agent must
+   pass explicitly after reading the evidence rule.
+2. **Post-batch stub-pruner** — after each batch, walk new/touched entity
+   pages. If body <500B AND sources ≤ 1 AND no other wiki page links to
+   them, delete. Reuses the existing `_mark_batch_compiled` hook point.
+3. **Quarantine, don't delete** — move thin stubs to `wiki/_quarantine/`
+   (not on mkdocs nav). Preserves data for re-enrichment, hides from
+   readers. Needs mkdocs nav exclusion.
+
+Option 1 is the most structural (prevents the stubs from existing at all).
+Option 2 is the easiest to ship. Option 3 preserves the "this person was
+mentioned once" breadcrumb without inflating the reader surface.
+
+Pair with the auto-stub strategy below — same root cause (lack of
+reader-vs-noise arbitration at write time).
+
+---
+
 ## Auto-stub strategy: stop bleeding, then prune (2026-04-14)
 
 **Decision:** stop auto-creating stubs in `scripts/lint_wiki.py`. Leave
