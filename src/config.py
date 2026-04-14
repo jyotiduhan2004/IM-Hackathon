@@ -34,12 +34,17 @@ class Settings(BaseSettings):
     # and stamps the choice in `messages.compile_model` so we can join
     # model → outcome later.
     #
-    # z-ai/glm-5.1 was in this pool on 2026-04-13 but the LiteLLM proxy
-    # returns 400 ("Invalid model name ... Call /v1/models") on every
-    # call — upstream routing issue, not a key-access problem. Removed
-    # to stop burning 25% of batches on guaranteed failures. Re-add
-    # once the proxy routes it.
-    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-4.6"
+    # Pool history:
+    # - z-ai/glm-5.1 (2026-04-13): LiteLLM proxy returns 400
+    #   ("Invalid model name ... Call /v1/models") on every call —
+    #   upstream routing issue, not key-access. Dropped.
+    # - z-ai/glm-4.6 (2026-04-14): across 44 batch attempts across 5
+    #   runs it failed 52% of the time, almost always hitting the
+    #   recursion limit (model loops past 120 tool-calls without
+    #   converging). minimax-m2.7 and glm-5 both run ~5% failure on
+    #   the same workload. Dropped until we understand why glm-4.6
+    #   doesn't converge on our 3000-token tool-heavy prompt.
+    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5"
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
