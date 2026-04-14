@@ -5,6 +5,181 @@ them up.
 
 ---
 
+## Wiki quality audit snapshot (2026-04-14)
+
+Live sample of 14 pages covering topics / entities / systems at varied sizes.
+Grounds the north-star doc in real examples. Use as an eval set when
+shipping format/validator/stub changes — re-audit these same pages after
+each intervention to see if quality actually moved.
+
+### 🌟 GOOD — aligned with strategy (reference quality bar)
+
+1. **`topics/bl-quality-agent.md`** (5.3KB, 2 sources)
+   - Wikipedia-style lead: *"The BL Quality Agent is an AI-powered system
+     that analyzes IndiaMART BuyLeads to detect quality issues…"* — perfect
+     definition sentence.
+   - Sections: Overview / Model & Architecture / Performance Metrics
+     (accuracy 97.1%, precision 96.7%, recall 99.5%) / Rollout phases /
+     Example Corrections (real Offer IDs) / Prompt engineering iterations /
+     Timeline / Next Steps / Related People.
+   - Captures rationale + iteration history, not just outcomes.
+   - Even surfaces CEO feedback: *"Dinesh Agarwal flagged response speed:
+     'Too late response too slow'"*.
+   - **Violations**: agent-wrote `## Related People` (should be
+     auto-generated).
+
+2. **`topics/visual-moderation-api-launch-obscenity-nudity-regulation.md`**
+   (6.3KB, 1 source)
+   - Dense 4-model benchmarking tables (Gemini 2.5 Pro / Qwen 2.5 32B / 72B /
+     VL Max) across 4 moderation categories.
+   - Per-model accuracy, precision, recall, cost/request.
+   - Ongoing POC with Llama 3.2 90B listed as in-progress.
+   - Contributors grouped by role (Vision / Ideation / Guidance / Deployment /
+     Implementation) — rich ownership info.
+   - **Violations**: `## Key Contributors` is agent-authored.
+
+3. **`topics/lens-mobile-ui-upgrade-ab-test.md`** (2.4KB, 3 sources)
+   - Clean A/B-test writeup: setup, analysis method, impact numbers
+     (+2.81% engagement, +1.04% before/after), note on confounding (API
+     level changes causing dip), decision to scale to 100%.
+   - Captures concern raised later: *"amarinder raised concerns about
+     statistical significance"* — preserves the skeptical voice.
+   - **Violations**: no lead paragraph (opens with `## Overview`);
+     agent-written `## Related`.
+
+4. **`entities/nirbhay-jishtu-indiamart-com.md`** (3.5KB, 10 sources)
+   - Real Senior PM with cross-initiative footprint (GST/KYC blocker logic,
+     Instagram Photos, Mobile Company Varnish, Mobile PDP, MSite PDP HTML).
+   - Multiple "Activity" subsections under real projects.
+   - Inline references to teammates by slug.
+   - **Violations**: `## Related` at end duplicates inline links.
+
+### ⚠️ PARTIAL — good content, format violations
+
+5. **`topics/secondary-number-chat-display-barge-in-weberp.md`** (4.6KB)
+   - Rich: Business Objective, Background, Features Implemented, Testing
+     results (9/9 + 35/35 passed), Functional scenarios, Launch audit score,
+     Feedback (Dinesh + Chittresh quoted).
+   - **Violations**:
+     - Opens with `**Launch Date:** January 7, 2026` bold line, not a
+       definition sentence.
+     - Agent-written `## Related` bullet list at the end.
+
+6. **`topics/buyer-specs-scale-up-phase-2.md`** (1.3KB, 1 source)
+   - Strong metrics: 22,460 MCATs processed, +55.13% Buyer Filled ISQ/BL
+     improvement, 90% total BL coverage.
+   - **Violations**:
+     - No lead paragraph — opens with H2 `## Overview`.
+     - Agent-written `## Related Entities` + `## Related Systems` (two
+       redundant sections).
+
+7. **`topics/buylead-whatsapp-display.md`** (prior audit, 2.6KB)
+   - Covers BuyLead display/consumption on WhatsApp with real customer
+     feedback.
+   - **Violations**: separate `## Related Systems` AND `## Related` —
+     unclear why both; includes a link `[[whatsapp-9696-bot]]` which doesn't
+     resolve at that slug.
+
+8. **`systems/marketplace-launch.md`** (2.8KB, 15 sources)
+   - Documents the mailing list's purpose + recent activity.
+   - **Taxonomy issue**: per `CLAUDE.md`, systems = products/services/URLs/
+     mailing lists, so a mailing list CAN be a system — OK. But the page's
+     role (coordination mechanism) is arguably better as a topic describing
+     the coordination pattern.
+   - **Violations**: agent-written `## Related Topics` bullet list.
+
+### ❌ BAD — stubs, broken, or violate the six-month-new-joiner test
+
+9. **`systems/swagger.md`** (323B)
+   - Literal content: *"Stub page auto-created because [[swagger]] was
+     referenced but no page existed."*
+   - `sources: []`, `related: []`.
+   - Created by `scripts/lint_wiki.py::create_missing_stubs`.
+   - Reader value: zero. Fails six-month test outright.
+   - **Action**: delete in the auto-stub cleanup (see auto-stub strategy
+     backlog entry).
+
+10. **`systems/mesh-pg.md`** (423B, 1 source)
+    - Body is one sentence: *"PostgreSQL database system for Mesh platform,
+      consisting of 4 nodes."*
+    - **Violations**: too thin to justify a page — could fold into
+      `topics/mesh-pg-reindexing-4tb-disk-reclamation.md` as context.
+
+11. **`systems/tech-security-team.md`** (450B) — **CORRUPTED FRONTMATTER**
+    ```
+    sources:
+    - raw/2026-04-06_mplaunchim-informational
+    last_compiled: '...'
+    updated_by: z-ai/glm-4.6
+    update_count: 1
+    ---
+
+    transforming-sonarqube-_3b4ad89f.md
+    related:
+    - '[[sonarqube-quality-profile-transformation]]'
+    last_compiled: '...'
+    ---
+    ```
+    Filename got split across a newline; TWO `---` blocks appear. The page
+    has two frontmatter sections that partially parse. Slipped past the
+    validator because the first block parses as valid YAML.
+    - **Action**: `validate_wiki.py` should count `---` fence occurrences
+      and fail if not exactly 2.
+
+12. **`entities/gauri-mandlik-indiamart-com.md`** (639B, 1 source)
+    - Body: *"Recipient of BiRefNet launch announcement for Seller Manage
+      Product background removal"*.
+    - Being a recipient of ONE mailing-list announcement is not
+      entity-worthy per the evidence-strength rule.
+
+13. **`entities/shikha-prakash-indiamart-com.md`** (563B, 1 source)
+    - Body mentions Server Admin Team contribution with a ticket number,
+      but this person's whole wiki presence is one CC on a security
+      launch. Not entity-worthy.
+
+14. **`entities/saurabh-gupta3-indiamart-com.md`** (981B, presumably thin
+    given size — sampled for comparison)
+    **`entities/sahilpreet-singh-indiamart-com.md`** (915B)
+    **`entities/pramod-purohit-indiamart-com.md`** (886B)
+    **`entities/rameshwar-paryani-indiamart-com.md`** (342B)
+    **`entities/manay-shankar-indiamart-com.md`** (322B)
+
+    Cluster of thin entity pages. Sources vary from 1 to 8 but bodies are
+    ~1-3 lines ("Email: X. ## Contributions. - did Y once."). All fail
+    the evidence-strength test.
+
+### Summary of violations across the 14 samples
+
+| Violation | Count | Strategy rule violated |
+|---|---:|---|
+| Agent-written `## Related` / `## People` / `## Team` | 7 | Light format — inline-only |
+| No lead paragraph (page opens with H2) | 5 | Light format — lead required |
+| First sentence is not a definition | 6 | Light format — definition first |
+| Entity stub fails evidence test | 7 | Entity evidence strength |
+| Auto-stub system page | 1 (+N siblings) | Auto-stub policy |
+| Corrupted frontmatter | 1 | Validator too permissive |
+
+### Signal for planning
+
+- **Format violations are the most common** (7/14 have agent-written
+  Related sections). Ship **light-format prompt + formatter** first —
+  this single change fixes 50%+ of pages.
+- **Stubs dominate the noise** (8/14 or more are stubs or stub-adjacent).
+  Ship **evidence gate + auto-stub deletion** second — reduces the wiki's
+  visible noise by ~50%.
+- **Corrupted pages slip through** (1/14). Ship the **"exactly two `---`
+  fences" check** in validate_wiki.py — one-liner, catches a whole class.
+
+### How to re-use this sample
+
+After each intervention (formatter, evidence gate, validator rule),
+re-read this same 14-page sample and tally violations. If the count
+goes down, the intervention worked. If not, the change missed.
+
+Save subsequent snapshots as `docs/audits/wiki-quality-<ts>.md`.
+
+---
+
 ## North-star — what this wiki is FOR (2026-04-14)
 
 This entry is the editorial brief. It answers: *what counts as wiki-worthy
