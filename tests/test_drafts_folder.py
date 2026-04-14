@@ -73,6 +73,9 @@ def test_write_draft_page_creates_file_with_frontmatter(tmp_path: Path) -> None:
     assert fm["status"] == "pending_review"
     assert fm["reason_logged"] == "unclear if this is a topic or a system page"
     assert fm["title"] == "Cool Concept"
+    # created_at is stamped at write time so operators can tell stale
+    # drafts apart without running `git blame`.
+    assert isinstance(fm.get("created_at"), str) and "T" in fm["created_at"]
     assert "## Summary" in body
     assert "TODO" in body
 
@@ -112,6 +115,23 @@ def test_write_draft_page_rejects_trailing_and_double_dashes(
     assert result["ok"] is False
     assert "invalid slug" in str(result["error"])
     assert not (wiki_dir / "_drafts").exists()
+
+
+@pytest.mark.parametrize("bad_wiki", ["../etc", "wiki/../../etc", "./foo/../bar"])
+def test_write_draft_page_rejects_path_traversal_in_wiki_dir(
+    tmp_path: Path, bad_wiki: str
+) -> None:
+    """LLM-callable tool must reject `..` in wiki_dir so a crafted prompt
+    can't escape the wiki tree."""
+    result = _invoke_write_draft(
+        slug="ok-slug",
+        reason="anything",
+        content="body",
+        wiki_dir=bad_wiki,
+    )
+
+    assert result["ok"] is False
+    assert ".." in str(result["error"])
 
 
 def test_write_draft_page_is_idempotent_overwrite(tmp_path: Path) -> None:
