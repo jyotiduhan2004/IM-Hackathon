@@ -19,12 +19,12 @@ def test_topic_vs_system_core_phrases() -> None:
 
 
 def test_worked_example_anchors() -> None:
-    assert "Lens" in COMPILER_SYSTEM_PROMPT
-    assert "WhatsApp 9696" in COMPILER_SYSTEM_PROMPT
+    assert "`Lens` = system" in COMPILER_SYSTEM_PROMPT
+    assert "`WhatsApp 9696` = system" in COMPILER_SYSTEM_PROMPT
 
 
 def test_cc_only_weak_evidence_rule() -> None:
-    assert "CC-only" in COMPILER_SYSTEM_PROMPT or "CC only" in COMPILER_SYSTEM_PROMPT
+    assert "CC-only" in COMPILER_SYSTEM_PROMPT
 
 
 def test_sections_ordered_before_wikilinks() -> None:

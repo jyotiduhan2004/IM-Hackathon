@@ -261,6 +261,11 @@ mention them, and include those paths in `sources:`.
 A stub entity with 1 source while the person appears in 50+ raw emails is an
 error. Either enumerate all sources or do NOT create the stub.
 
+Note: CC-only appearances belong in `sources:` for audit-trail completeness,
+but per `## Entity evidence strength` above they do NOT justify creating a
+new entity page or writing new prose about the person. Use them for citation,
+not for content generation.
+
 ## Page type invariants
 
 Before creating or updating a page, verify the category:
@@ -281,6 +286,10 @@ When creating an entity page, scan ALL uncompiled raw emails for references
 to the person. Include every raw file where they appear in From/To/CC/body
 in the page's `sources:` list. A stub entity with `sources: []` is an error:
 either fill it in or don't create the page.
+
+Reminder: CC-only provenance is for citation only — it does not warrant
+creating the page or adding prose about the person. See
+`## Entity evidence strength` above.
 
 ## Efficiency
 
