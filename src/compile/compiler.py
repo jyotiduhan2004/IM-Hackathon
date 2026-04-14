@@ -675,6 +675,13 @@ def _make_chat_model(model_name: str) -> Any:
     ChatOpenAI and point it at the proxy's base URL. This works for any model
     string the proxy knows (e.g. "z-ai/glm-5", "anthropic/claude-opus-4-6"),
     regardless of whether langchain has a native provider for it.
+
+    timeout=120s prevents the "half-open TCP socket" stall we've hit
+    twice on 2026-04-14 (laptop sleep / network blip → kernel keepalive
+    defaults to hours → Python blocks in recv() forever). With the
+    timeout the SDK raises, the batch fails loudly, and the next batch
+    continues. p95 completion today is ~30s so 2 min is a comfortable
+    ceiling that still catches the dead-socket case.
     """
     if settings.litellm_base_url:
         from langchain_openai import ChatOpenAI
@@ -683,9 +690,11 @@ def _make_chat_model(model_name: str) -> Any:
             model=model_name,
             base_url=settings.litellm_base_url,
             api_key=settings.openai_api_key or "dummy",
+            timeout=120,
         )
 
-    # Fallback: use langchain's provider inference
+    # Fallback: use langchain's provider inference. No timeout knob at this
+    # layer — direct providers don't exhibit the proxy-socket-stall issue.
     from langchain.chat_models import init_chat_model
 
     return init_chat_model(model_name)
