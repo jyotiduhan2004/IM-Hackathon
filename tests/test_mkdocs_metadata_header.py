@@ -158,7 +158,38 @@ def test_hook_renders_banner_on_system_page_with_missing_last_compiled() -> None
     }
     body = "# Legacy System\n\nOlder system.\n"
     out = on_page_markdown(body, page=_page("systems/legacy.md", meta), config={}, files=[])
-    assert "1 sources · last compiled unknown · status: superseded" in out
+    assert "1 source · last compiled unknown · status: superseded" in out
+
+
+def test_singular_source_uses_singular_noun() -> None:
+    """1 source (singular) — not '1 sources'."""
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "current",
+        "last_compiled": "2026-04-13",
+        "sources": ["raw/a.md"],
+    }
+    out = on_page_markdown(
+        "# Topic\n", page=_page("topics/t.md", meta), config={}, files=[]
+    )
+    assert "1 source · last compiled" in out
+    assert "1 sources · " not in out
+
+
+def test_zero_and_many_sources_use_plural_noun() -> None:
+    for count in (0, 2, 5):
+        meta = {
+            "title": "Topic",
+            "page_type": "topic",
+            "status": "current",
+            "last_compiled": "2026-04-13",
+            "sources": [f"raw/{i}.md" for i in range(count)],
+        }
+        out = on_page_markdown(
+            "# Topic\n", page=_page("topics/t.md", meta), config={}, files=[]
+        )
+        assert f"{count} sources · last compiled" in out
 
 
 def test_hook_skips_banner_on_index_page() -> None:
@@ -168,10 +199,8 @@ def test_hook_skips_banner_on_index_page() -> None:
     assert "sources · last compiled" not in out
 
 
-def test_hook_does_not_duplicate_banner_on_rerun() -> None:
-    # Hook is idempotent-enough: calling it twice shouldn't stack banners.
-    # (MkDocs calls the hook once per build, but this guards against future
-    # callers or test scaffolding invoking it repeatedly on the same body.)
+def test_hook_is_idempotent_on_rerun() -> None:
+    """Calling the hook twice on the same body must not stack banners."""
     meta = {
         "title": "Topic",
         "page_type": "topic",
@@ -182,11 +211,8 @@ def test_hook_does_not_duplicate_banner_on_rerun() -> None:
     body = "# Topic\n\nBody.\n"
     once = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
     twice = on_page_markdown(once, page=_page("topics/t.md", meta), config={}, files=[])
-    # Count how many times the banner substring appears — we don't mind
-    # that the second pass re-injects (it's a mkdocs contract violation
-    # to call twice), we just assert the output has ≥1 banner and no
-    # missing text.
-    assert twice.count("1 sources · last compiled 2026-04-13 · status: current") >= 1
+    # Idempotency: second pass must NOT add a second banner.
+    assert twice.count("· last compiled 2026-04-13 · status: current") == 1
 
 
 # --- fixture-driven tests (one of each page type) ------------------------
@@ -207,4 +233,4 @@ def test_fixture_entity_page_renders_zero_sources_banner() -> None:
 def test_fixture_system_page_renders_superseded_status() -> None:
     fm, body = _split_fixture(FIXTURE_ROOT / "systems" / "legacy-system.md")
     out = on_page_markdown(body, page=_page("systems/legacy-system.md", fm), config={}, files=[])
-    assert "1 sources · last compiled unknown · status: superseded" in out
+    assert "1 source · last compiled unknown · status: superseded" in out

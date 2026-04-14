@@ -200,7 +200,8 @@ def _page_metadata_banner(fm: dict) -> str:
 
     status = fm.get("status") or "current"
 
-    line = f"{sources_count} sources · last compiled {last_compiled_str} · status: {status}"
+    noun = "source" if sources_count == 1 else "sources"
+    line = f"{sources_count} {noun} · last compiled {last_compiled_str} · status: {status}"
     return line + "\n\n"
 
 
@@ -274,8 +275,11 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     # there is one; otherwise prepend (entity pages rely on Material to
     # auto-generate the h1 from `title:`, so there's nothing in the body to
     # splice next to — the banner renders directly under the auto-h1).
+    # Skip injection if a banner already exists at the top of the body —
+    # MkDocs may invoke this hook more than once during plugin chains.
     banner = _page_metadata_banner(fm)
-    if banner:
+    body_head = "\n".join(body.splitlines()[:10])
+    if "· last compiled " not in body_head:
         body_lines = body.splitlines(keepends=False)
         h1_idx = -1
         for i, line in enumerate(body_lines):
