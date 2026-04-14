@@ -565,7 +565,10 @@ def check_required_sections(
             except (OSError, UnicodeDecodeError):
                 continue
             _, body = split_frontmatter(content)
-            headings_lower = [h.strip().lower() for h in heading_re.findall(body)]
+            # Strip fenced code blocks so `## Summary` inside a code
+            # snippet can't falsely satisfy the Summary requirement.
+            body_no_fences = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+            headings_lower = [h.strip().lower() for h in heading_re.findall(body_no_fences)]
             missing = [sec for sec in required if not any(sec.lower() in h for h in headings_lower)]
             if missing:
                 reason = f"missing required H2 sections for {page_type}: {missing}"

@@ -85,6 +85,27 @@ def test_case_insensitive_substring_match() -> None:
     assert "good-policy.md" not in flagged
 
 
+def test_headings_inside_fenced_code_blocks_do_not_count(tmp_path: Path) -> None:
+    """Codex: `## Summary` in a code snippet must NOT satisfy the Summary check.
+
+    Otherwise a template-drift page that embeds the old template inside a
+    ```` ```md ```` block would pass `--strict-sections` despite having no
+    real section headings.
+    """
+    topics = tmp_path / "topics"
+    topics.mkdir(parents=True)
+    (topics / "only-fenced.md").write_text(
+        "---\ntitle: Fenced\npage_type: topic\nstatus: current\n---\n\n"
+        "Intro paragraph.\n\n"
+        "```md\n## Summary\n## Current state\n## Recent activity\n```\n",
+        encoding="utf-8",
+    )
+
+    errors, warnings = validator.check_required_sections(tmp_path, strict=True)
+    flagged = {e.page.name for e in errors}
+    assert "only-fenced.md" in flagged
+
+
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     """Run validate_wiki.py against the fixture wiki via subprocess.
 
