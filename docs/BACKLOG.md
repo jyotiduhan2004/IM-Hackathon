@@ -5,6 +5,127 @@ them up.
 
 ---
 
+## Agent tooling audit — gaps, token-heavy returns, observability (2026-04-14)
+
+**Context.** Diagnosing why glm-4.6 fails 52% of batches (while minimax-m2.7 and
+glm-5 succeed ~95%) led to a full inventory of what the agent has vs what it
+needs. We have almost no trace-level visibility — `LANGFUSE_ENABLED=false` —
+so everything below is inferred from batch-outcome stats across 105 successful
++ 30 failed batches in the last 24h.
+
+### Tools the agent actually has
+
+Wired in `src/compile/compiler.py::create_compiler`:
+```
+tools=[
+    list_uncompiled_emails,  # custom (DB-backed)
+    list_wiki_pages,         # custom (filesystem scan)
+    create_entity,           # custom (email-deterministic)
+]
+backend=FilesystemBackend(root_dir=cwd, virtual_mode=True)
+```
+
+`FilesystemBackend` injects these 6 via
+`.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py`:
+`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`. `execute` is
+listed but `FilesystemBackend` doesn't implement `SandboxBackendProtocol`,
+so it returns "not supported" (safe).
+
+**Total effective toolbox = 9 tools.** Three custom + six filesystem.
+
+### What each tool gives us (by info-return quality)
+
+| Tool | Returns | Info quality | Notes |
+|---|---|---|---|
+| `list_uncompiled_emails` | list[dict]: path/date/subject/from/thread_id | **GOOD** — enough to plan | But unbounded: 6,400+ rows when called. See token-heavy below. |
+| `list_wiki_pages` | dict[category, list[stem]] | **WEAK** — names only, no page_type / status / sources count / last_compiled | Agent has to read each file to learn anything about it |
+| `create_entity` | `{ok, slug, path, created, email}` | **GOOD** — plus "created: true/false" distinguishes new stub from existing | Missing: whether existing page has body or is a placeholder |
+| `ls` | list of names | **WEAK** — identical to `list_wiki_pages` limits |
+| `read_file` | first 100 lines by default | **MEDIUM** — 100-line default truncates long topic pages silently; agent must re-read with offset |
+| `write_file` | success/failure | OK |
+| `edit_file` | success/failure | OK — no "here's what changed" report |
+| `glob` | list of paths | **GOOD** — fast discovery |
+| `grep` | paths / content / count modes | **GOOD** — the underused search tool |
+
+### Gaps — what we don't have
+
+High-leverage missing capabilities (ordered by expected impact on turn count):
+
+1. **`get_page_summary(path) -> {type, status, sources_count, last_compiled, h2_headings, ~200-char snippet}`**
+   Solves the biggest inefficiency: agent `read_file`s every page it considers
+   touching just to check "does this need updating?" Summary avoids full-page
+   reads in the discovery phase.
+
+2. **`get_thread_context(thread_id) -> {message_count, date_range, subjects, participants, already_cited_pages}`**
+   Current flow: agent reads each raw email individually. We have this data in
+   Postgres (`messages` + `message_participants` + `message_touched_pages`) —
+   a single SQL query replaces N read_file calls.
+
+3. **`find_related_pages(slug_or_email) -> list[path]`**
+   Reverse-index lookup. Agent trying to cross-link often reads 5-10 pages to
+   find which ones are topical kin. Could drive off `related:` frontmatter +
+   `message_touched_pages` join.
+
+4. **`propose_page(frontmatter_dict, body_md) -> {validated: bool, errors: list, preview: str}`**
+   Dry-run validation so the agent sees frontmatter errors BEFORE writing
+   (current: write → silent broken-YAML state → gets caught post-hoc by the
+   cleanup we ran earlier). Also forces a structured contract on the agent's
+   output.
+
+5. **`list_entity_by_email(email)` — already partially exists via `create_entity`'s lookup path.**
+   Exposing "just resolve, don't create" would let the agent query the canonical
+   slug without the side-effect of stub creation.
+
+### Token-heavy tools — cost risk
+
+| Tool | Risk | Why |
+|---|---|---|
+| `list_uncompiled_emails` | **CRITICAL** if the agent calls it | Returns ALL 6,400+ pending rows × 5 fields ≈ 1.2 MB. Each row is ~200 tokens. Full dump = ~1.3M tokens. The COORDINATOR calls this; we should **remove it from the agent's tool list** to prevent accidental invocation. |
+| `list_wiki_pages` | **HIGH** | 587 pages × ~15 chars per stem ≈ 10 KB per call. Called at the start of every batch. Per-batch ~3 KB tokens. Over 50 batches = 150 KB tokens. Could paginate by category or return a count + sample. |
+| `read_file` default | **MEDIUM** | First 100 lines ≈ 3-5 KB per call. Long topic pages (kundan-kishore, shivam-jha before cleanup) were 100-500 lines; agent had to offset-read 2-5x to see the whole thing. |
+| `grep content` mode | **MEDIUM** | Context lines can balloon. Default mode `files_with_matches` is lean; if agent picks content mode unwittingly, cost climbs. |
+| `create_entity` | **LOW** | Tiny in, tiny out (`{ok, slug, path, created, email}`). Ideal shape. |
+
+### Observability gaps — we're not seeing agent's doubts
+
+- **No tool-call trace** — Langfuse disabled (OTLP-hang issue #17). We see cache
+  stats + turn count but not "at step 45, agent called `read_file` on X then
+  `grep`ed for Y". So when glm-4.6 hits the 120-step ceiling, we don't know if
+  it's looping on the same file, retrying failed edits, or burning steps on
+  novel exploration.
+- **`wiki/log.md`** is an outcome log, not a trace log. One line per batch saying
+  "compiled / partial / failed".
+- **`compile_attempts` column is stuck at 0** — the claim logic increments it
+  but the post-batch path doesn't read it; no retry visibility in audits.
+- **Failure reasons are just strings** ("Recursion limit reached") with no
+  classification (loop-on-read vs edit-retry vs tool-error-retry).
+
+### Recommended order of attack
+
+1. **Remove `list_uncompiled_emails` from agent tool list** (5 min). Zero risk —
+   coordinator already handles it; agent never needs this. Eliminates a 1.3M-
+   token footgun.
+2. **Enable Langfuse on a 1-batch scoped run** with glm-4.6 to capture a full
+   trace and see *what* it loops on. ~30 min including the known OTLP-hang
+   review.
+3. **Ship `get_page_summary`** (1-2 hr). Biggest turn-reduction lever. Uses
+   existing `wiki_pages` table.
+4. **Ship `get_thread_context`** (1-2 hr). One SQL query replaces N read_file
+   calls on thread-grouped batches.
+5. **Paginate / summarize `list_wiki_pages`** (30 min). Return `{topics: 119,
+   entities: 354, systems: 59}` counts by default; require explicit category
+   arg for the full list.
+6. **Fix `compile_attempts` instrumentation** (10 min). Small DB write path
+   bug. Makes retry visibility real.
+
+Do NOT do:
+- Invent `search_wiki` — `grep` already is search. Document that in the prompt.
+- Add `execute` / shell — explicitly unsupported by `FilesystemBackend`.
+- Ship middleware before #2 tells us what the loops actually look like — we'd
+  be guessing at the fix.
+
+---
+
 ## Auto-stub strategy: stop bleeding, then prune (2026-04-14)
 
 **Decision:** stop auto-creating stubs in `scripts/lint_wiki.py`. Leave
