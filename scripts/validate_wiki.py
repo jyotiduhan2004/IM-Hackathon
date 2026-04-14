@@ -53,10 +53,6 @@ CATEGORY_TO_TYPE = {
     "timelines": "timeline",
     "conflicts": "conflict",
 }
-# Nav-only directory landing pages live at `<category>/index.md` and never
-# carry sources/related — they're placeholders rendered by MkDocs for nav
-# targets. Exclude them from all content-level checks.
-_INDEX_FILENAME = "index.md"
 
 
 @dataclass

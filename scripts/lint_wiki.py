@@ -35,8 +35,11 @@ class LintIssue:
 
 
 REQUIRED_FRONTMATTER = {"title", "page_type", "status", "sources", "last_compiled"}
+# Nav-only landing pages (page_type: index) don't carry sources/last_compiled —
+# they're MkDocs nav placeholders, not compiled content.
+_INDEX_REQUIRED_FRONTMATTER = {"title", "page_type", "status"}
 VALID_STATUSES = {"current", "superseded", "contested"}
-VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict"}
+VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict", "index"}
 WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
@@ -83,7 +86,12 @@ def check_frontmatter(wiki_dir: Path) -> list[LintIssue]:
             )
             continue
 
-        missing = REQUIRED_FRONTMATTER - set(fm.keys())
+        required = (
+            _INDEX_REQUIRED_FRONTMATTER
+            if fm.get("page_type") == "index"
+            else REQUIRED_FRONTMATTER
+        )
+        missing = required - set(fm.keys())
         if missing:
             issues.append(
                 LintIssue(
@@ -397,7 +405,7 @@ def check_page_type_mismatch(wiki_dir: Path) -> list[LintIssue]:
             continue
         fm = _extract_frontmatter(path.read_text(encoding="utf-8"))
         got = fm.get("page_type")
-        if got and got != want:
+        if got and got != want and got != "index":
             issues.append(
                 LintIssue(
                     severity="error",
