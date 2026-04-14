@@ -121,7 +121,8 @@ def lookup_page(
                       FROM wiki_pages
                      WHERE lower(title) = lower(%s)
                      ORDER BY (status = 'current') DESC,
-                              last_compiled_at DESC NULLS LAST
+                              last_compiled_at DESC NULLS LAST,
+                              page_id ASC
                      LIMIT 1
                     """,
                     (title,),

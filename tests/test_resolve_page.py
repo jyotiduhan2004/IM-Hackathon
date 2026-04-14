@@ -212,6 +212,34 @@ def test_lookup_page_falls_through_to_title(db_conn: psycopg.Connection) -> None
     assert row["confidence"] == 0.9
 
 
+def test_lookup_page_title_prefers_current_over_superseded(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Duplicate lowercased titles: `current` beats `superseded`, then page_id breaks ties."""
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="old-policy",
+        path="wiki/policies/old-policy.md",
+        title="Refund Policy",
+        page_type="policy",
+        status="superseded",
+    )
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="new-policy",
+        path="wiki/policies/new-policy.md",
+        title="Refund Policy",
+        page_type="policy",
+        status="current",
+    )
+    db_conn.commit()
+
+    row = repo.lookup_page(title="refund policy")
+    assert row is not None
+    assert row["slug"] == "new-policy"
+    assert row["status"] == "current"
+
+
 def test_lookup_page_email_only_matches_entity_pages(
     db_conn: psycopg.Connection,
 ) -> None:
