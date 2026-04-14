@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -89,6 +91,26 @@ def test_write_draft_page_rejects_non_kebab_slug(tmp_path: Path) -> None:
     assert "invalid slug" in str(result["error"])
     assert not (wiki_dir / "_drafts" / "BADSLUG!.md").exists()
     # Drafts folder is NOT created when validation fails before mkdir.
+    assert not (wiki_dir / "_drafts").exists()
+
+
+@pytest.mark.parametrize("bad_slug", ["foo-", "-foo", "foo--bar", "foo-bar-", "--"])
+def test_write_draft_page_rejects_trailing_and_double_dashes(
+    tmp_path: Path, bad_slug: str
+) -> None:
+    """Regression guard: kebab-case must not allow edge-case dashes that
+    produce weird filenames (e.g. `foo-.md` or `foo--bar.md`)."""
+    wiki_dir = tmp_path / "wiki"
+
+    result = _invoke_write_draft(
+        slug=bad_slug,
+        reason="anything",
+        content="body",
+        wiki_dir=wiki_dir,
+    )
+
+    assert result["ok"] is False
+    assert "invalid slug" in str(result["error"])
     assert not (wiki_dir / "_drafts").exists()
 
 
