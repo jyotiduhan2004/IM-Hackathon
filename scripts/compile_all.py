@@ -559,7 +559,9 @@ def main(
                         f"(thread={thread_id[:12]})"
                     )
                 else:
-                    err_msg = str(e)
+                    # str(e) is empty for some zero-message exception types;
+                    # repr(e) keeps the type name so the log row stays useful.
+                    err_msg = str(e) or repr(e)
                 logger.error("batch compilation failed", batch_index=batch_idx, error=err_msg)
                 failed_marked = _mark_batch_failed(batch, err_msg, compile_model=batch_model)
                 failed += failed_marked
