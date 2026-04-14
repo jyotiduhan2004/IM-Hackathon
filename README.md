@@ -92,6 +92,9 @@ uv sync
 cp .env.example .env  # edit with your API keys
 ```
 
+Linked git worktrees automatically fall back to the main checkout's `.env` if
+the worktree does not have its own copy.
+
 ### Gmail API setup
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
@@ -118,6 +121,9 @@ cat wiki/index.md   # master catalog
 
 # 4. Lint the wiki for issues
 uv run python scripts/lint_wiki.py
+
+# 5. Smoke-test Langfuse tracing
+make langfuse-smoke
 ```
 
 ## Architecture
@@ -205,6 +211,7 @@ email-knowledge-base/
 ## Delivery plan
 
 ### Phase 0 — working pipeline ✅
+- Langfuse tracing (`make langfuse-smoke` to verify end-to-end export)
 
 Done today:
 

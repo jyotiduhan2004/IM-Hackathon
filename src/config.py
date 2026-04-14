@@ -5,6 +5,57 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _discover_env_file(repo_root: Path) -> str | None:
+    """Return the .env file for this checkout.
+
+    Normal checkouts use ``<repo>/.env`` directly. Linked worktrees often omit
+    that file so secrets stay in the main checkout only; in that case fall back
+    to the main checkout's ``.env`` via git's ``commondir`` metadata.
+    """
+
+    local_env = repo_root / ".env"
+    if local_env.exists():
+        return str(local_env)
+
+    git_path = repo_root / ".git"
+    if not git_path.is_file():
+        return None
+
+    try:
+        gitdir_line = git_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+    prefix = "gitdir:"
+    if not gitdir_line.startswith(prefix):
+        return None
+
+    git_dir = Path(gitdir_line.removeprefix(prefix).strip())
+    if not git_dir.is_absolute():
+        git_dir = (repo_root / git_dir).resolve()
+
+    commondir_path = git_dir / "commondir"
+    if commondir_path.exists():
+        try:
+            relative_common_dir = commondir_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        common_dir = (git_dir / relative_common_dir).resolve()
+    else:
+        try:
+            common_dir = git_dir.parents[1]
+        except IndexError:
+            return None
+
+    shared_env = common_dir.parent / ".env"
+    if shared_env.exists():
+        return str(shared_env)
+
+    return None
+
 
 class Settings(BaseSettings):
     """Email Knowledge Base configuration.
@@ -13,7 +64,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_discover_env_file(_REPO_ROOT),
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
