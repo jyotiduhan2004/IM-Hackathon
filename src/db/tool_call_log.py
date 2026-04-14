@@ -12,11 +12,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from src.db import connect
 
 
-def insert_many(run_id: str, records: list[dict[str, Any]]) -> int:
+def insert_many(run_id: UUID, records: list[dict[str, Any]]) -> int:
     """Bulk-insert tool-call records for one batch. Returns count inserted.
 
     `records` is the coordinator's dict-cast of `ToolCallRecord` TypedDicts.
@@ -56,7 +57,7 @@ def insert_many(run_id: str, records: list[dict[str, Any]]) -> int:
     return len(records)
 
 
-def summarize(run_id: str) -> dict[str, Any]:
+def summarize(run_id: UUID) -> dict[str, Any]:
     """Roll up tool-call stats for one run. Used for the batch-log `top_tools=…`."""
     with connect() as conn:
         raw_rows = conn.execute(
@@ -78,7 +79,7 @@ def summarize(run_id: str) -> dict[str, Any]:
     return {
         "top_by_count": [(r["tool_name"], r["calls"]) for r in rows[:5]],
         "top_by_latency": sorted(
-            [(r["tool_name"], r["avg_ms"]) for r in rows if r["avg_ms"]],
+            [(r["tool_name"], r["avg_ms"]) for r in rows if r["avg_ms"] is not None],
             key=lambda x: -x[1],
         )[:5],
         "total_calls": sum(r["calls"] for r in rows),
@@ -87,7 +88,7 @@ def summarize(run_id: str) -> dict[str, Any]:
 
 
 def fallback_to_jsonl(
-    run_id: str,
+    run_id: UUID,
     records: list[dict[str, Any]],
     *,
     base_dir: Path | None = None,

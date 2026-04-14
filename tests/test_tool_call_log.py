@@ -302,7 +302,7 @@ def test_insert_many_returns_zero_on_empty_records(
 ) -> None:
     conn = _FakeConn()
     monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
-    assert repo.insert_many("run-abc", []) == 0
+    assert repo.insert_many(uuid4(), []) == 0
     assert conn.executed == []
 
 
@@ -313,8 +313,9 @@ def test_insert_many_uses_executemany_once(
     conn = _FakeConn()
     monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
     records = _sample_records()
+    run_uuid = uuid4()
 
-    count = repo.insert_many("run-abc", records)
+    count = repo.insert_many(run_uuid, records)
 
     assert count == 2
     # One executemany call (not N loop iterations).
@@ -325,7 +326,7 @@ def test_insert_many_uses_executemany_once(
     assert len(params_seq) == 2
     # Parameter order follows the column list in the SQL.
     params0 = params_seq[0]
-    assert params0[0] == "run-abc"
+    assert params0[0] == run_uuid
     assert params0[1] == records[0]["tool_name"]
     assert params0[2] == records[0]["inputs_json"]
     assert params0[3] == records[0]["output_preview"]
@@ -359,7 +360,7 @@ def test_summarize_returns_expected_shape(
     conn = _FakeSummaryConn(rows)
     monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
 
-    result = repo.summarize("run-xyz")
+    result = repo.summarize(uuid4())
 
     assert result["total_calls"] == 75
     assert result["total_errors"] == 2
@@ -374,11 +375,24 @@ def test_summarize_returns_expected_shape(
     assert result["top_by_latency"][2] == ("read_file", 30)
 
 
+def test_summarize_includes_zero_ms_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """avg(latency_ms)::int can round to 0 for very fast tools; they must still surface."""
+    rows = [
+        {"tool_name": "fast_tool", "calls": 10, "avg_ms": 0, "errors": 0},
+        {"tool_name": "slow_tool", "calls": 5, "avg_ms": 200, "errors": 0},
+    ]
+    conn = _FakeSummaryConn(rows)
+    monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
+
+    result = repo.summarize(uuid4())
+    assert ("fast_tool", 0) in result["top_by_latency"]
+
+
 def test_summarize_handles_empty_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _FakeSummaryConn([])
     monkeypatch.setattr(repo, "connect", _fake_connect_ctx(conn))
 
-    result = repo.summarize("run-nothing")
+    result = repo.summarize(uuid4())
     assert result == {
         "top_by_count": [],
         "top_by_latency": [],
@@ -396,10 +410,11 @@ def test_fallback_to_jsonl_writes_one_line_per_record(
     tmp_path: Path,
 ) -> None:
     records = _sample_records()
+    run_uuid = uuid4()
 
-    out_path = repo.fallback_to_jsonl("run-42", records, base_dir=tmp_path)
+    out_path = repo.fallback_to_jsonl(run_uuid, records, base_dir=tmp_path)
 
-    assert out_path == tmp_path / "docs" / "audits" / "tool_calls-run-42.jsonl"
+    assert out_path == tmp_path / "docs" / "audits" / f"tool_calls-{run_uuid}.jsonl"
     assert out_path.exists()
     lines = out_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == len(records)
@@ -432,18 +447,20 @@ def test_fallback_to_jsonl_defaults_resolve_repo_root_path(
     monkeypatch.chdir(tmp_path / "src")
 
     records = _sample_records()[:1]
-    out_path = repo.fallback_to_jsonl("run-default", records)
+    run_uuid = uuid4()
+    out_path = repo.fallback_to_jsonl(run_uuid, records)
 
-    assert out_path == tmp_path / "docs" / "audits" / "tool_calls-run-default.jsonl"
+    assert out_path == tmp_path / "docs" / "audits" / f"tool_calls-{run_uuid}.jsonl"
     assert out_path.exists()
 
 
 def test_fallback_to_jsonl_appends_on_repeat(tmp_path: Path) -> None:
     records = _sample_records()
+    run_uuid = uuid4()
 
-    repo.fallback_to_jsonl("run-42", records[:1], base_dir=tmp_path)
-    repo.fallback_to_jsonl("run-42", records[1:], base_dir=tmp_path)
+    repo.fallback_to_jsonl(run_uuid, records[:1], base_dir=tmp_path)
+    repo.fallback_to_jsonl(run_uuid, records[1:], base_dir=tmp_path)
 
-    out_path = tmp_path / "docs" / "audits" / "tool_calls-run-42.jsonl"
+    out_path = tmp_path / "docs" / "audits" / f"tool_calls-{run_uuid}.jsonl"
     lines = out_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == len(records)
