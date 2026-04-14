@@ -33,9 +33,13 @@ class Settings(BaseSettings):
     # (uses `llm_model` above). Each batch picks one uniformly at random
     # and stamps the choice in `messages.compile_model` so we can join
     # model → outcome later.
-    llm_model_pool: str = (
-        "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-4.6,z-ai/glm-5.1"
-    )
+    #
+    # z-ai/glm-5.1 was in this pool on 2026-04-13 but the LiteLLM proxy
+    # returns 400 ("Invalid model name ... Call /v1/models") on every
+    # call — upstream routing issue, not a key-access problem. Removed
+    # to stop burning 25% of batches on guaranteed failures. Re-add
+    # once the proxy routes it.
+    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-4.6"
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
