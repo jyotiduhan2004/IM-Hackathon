@@ -468,9 +468,18 @@ def print_report(issues: list[LintIssue]) -> None:
 
 
 @click.command()
-@click.option("--fix", is_flag=True, help="Auto-fix safe issues")
+@click.option("--fix", is_flag=True, help="Auto-fix safe issues (normalize wikilinks)")
+@click.option(
+    "--create-stubs",
+    is_flag=True,
+    help=(
+        "Also auto-create stub pages for unresolved [[target]] wikilinks. "
+        "Requires --fix. OFF by default — stub creation hides agent mistakes "
+        "and bloats the wiki (see docs/BACKLOG.md 'Auto-stub strategy')."
+    ),
+)
 @click.option("--category", help="Only check this category")
-def main(fix: bool, category: str | None) -> None:
+def main(fix: bool, create_stubs: bool, category: str | None) -> None:
     """Check wiki health and report issues."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
@@ -481,9 +490,12 @@ def main(fix: bool, category: str | None) -> None:
         click.echo("Auto-fixing wikilinks (normalizing Title Case → kebab-case)...")
         fixed = normalize_wikilinks(wiki_dir, dry_run=False)
         click.echo(f"Normalized wikilinks in {len(fixed)} pages.")
-        click.echo("Creating stubs for unresolved wikilink targets...")
-        stubs = create_missing_stubs(wiki_dir, dry_run=False)
-        click.echo(f"Created {len(stubs)} stub pages.")
+        if create_stubs:
+            click.echo("Creating stubs for unresolved wikilink targets...")
+            stubs = create_missing_stubs(wiki_dir, dry_run=False)
+            click.echo(f"Created {len(stubs)} stub pages.")
+        else:
+            click.echo("Skipping stub creation (default). Pass --create-stubs to opt back in.")
         click.echo()
 
     issues = run_all_checks(wiki_dir)

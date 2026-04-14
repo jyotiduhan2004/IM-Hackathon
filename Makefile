@@ -30,7 +30,7 @@ langfuse-smoke: ## Verify Langfuse health + trace export with current env
 lint-wiki: ## Run wiki health checks
 	uv run python scripts/lint_wiki.py
 
-lint-wiki-fix: ## Run wiki health checks and auto-fix safe issues
+lint-wiki-fix: ## Run wiki health checks and auto-normalize wikilinks (no auto-stub creation — pass --create-stubs explicitly to opt in)
 	uv run python scripts/lint_wiki.py --fix
 
 # === Full Pipeline ===
