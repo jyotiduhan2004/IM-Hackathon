@@ -609,8 +609,9 @@ def main(
                 _append_batch_log(batch_idx, batch, log_outcome, wiki_dir, notes=log_notes)
             except KeyboardInterrupt:
                 # Ctrl+C: flush any in-flight tool records before letting the
-                # outer handler mark the run 'killed'. Without this, every
-                # tool call since the last batch boundary is lost.
+                # outer handler mark the run 'killed'. Without this, the
+                # Postgres compile_tool_calls table loses every tool call
+                # since the last batch boundary.
                 _flush_tool_calls(run_id, tool_cb)
                 raise
             except Exception as e:  # noqa: BLE001
