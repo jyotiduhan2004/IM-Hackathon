@@ -108,6 +108,36 @@ a "Current Policy" section, and a "History" table with dates + source links.
 - **conflict** (`wiki/conflicts/{slug}.md`): Two+ emails disagree, no clear
   supersession.
 
+## Topic page format (light rules)
+
+Readers scan. Pages open with meaning, not nav. The coordinator regenerates
+nav, so stop hand-writing it.
+
+1. **Lead paragraph first.** No heading. ≤4 sentences. Sentence 1 MUST be a
+   definition: *"X is a [noun phrase] that…"*.
+   - Good: *"The BL Quality Agent is an AI-powered system that analyzes
+     BuyLeads to detect quality issues and auto-correct titles."*
+   - Bad: *"## Overview\n\nThis page covers the BL Quality Agent."* (opens
+     with a heading; no definition).
+
+2. **Inline `[[links]]`; do NOT write a `## Related` section.** Cross-link
+   entities, systems, topics, and policies inline on first mention. DO NOT
+   write `## Related` / `## People` / `## Team` / `## Related Topics` /
+   `## Related Systems` / `## Related Entities` / `## Related People` —
+   the coordinator auto-generates these from the `related:` frontmatter
+   plus inline `[[slug]]` links. Hand-written versions go stale and drift.
+
+3. **First-mention links, subsequent plain text.** Link `[[lucky-agarwal]]`
+   the first time he's named; after that, say "Lucky" in prose. A page with
+   the same wikilink five times reads like spam.
+
+4. **Sentence-case headings.** `## Current state`, not `## Current State`.
+   Proper nouns keep their capitalisation (`## WhatsApp rollout`).
+
+5. **Structured data in frontmatter, not prose.** `status:`, `sources:`,
+   `owners:`, `supersedes:`, etc. live in YAML. Don't also repeat
+   "**Status:** current" as a bold line in the body.
+
 ## Topic vs system
 
 A **topic** answers "what is happening?" — projects, rollouts, decisions,
@@ -203,11 +233,12 @@ Never wikilink something without a page.
 
 ## Cross-referencing
 
-- Link to related pages via `[[kebab-case-slug]]` wikilinks
-- Every page should have a "Related" section at the bottom listing wikilinks
-  to related pages
+- Link to related pages via `[[kebab-case-slug]]` wikilinks inline in prose.
+- Do NOT hand-write a trailing `## Related` section — see the light-format
+  rules above. The coordinator regenerates nav from `related:` + inline
+  `[[slug]]` links.
 - Mention people/systems by display name in prose, but the wikilink must use
-  the kebab-case slug, e.g., "Lead Engineer [[lucky-agarwal]]"
+  the kebab-case slug, e.g., "Lead Engineer [[lucky-agarwal]]".
 
 ## Supersession rules
 
@@ -225,22 +256,6 @@ Never wikilink something without a page.
   links
 - Mark affected pages `status: contested`
 - Analyze: is this a contradiction, exception, or clarification?
-
-## When to log_insight
-
-If you notice something a human should review, call `log_insight` BEFORE moving on.
-Categories:
-
-- `topic_merge_candidate`: two pages cover the same concept and should probably merge
-- `question_for_human`: genuinely ambiguous — operator decision needed
-- `prompt_ambiguity`: this prompt doesn't tell you what to do for this case
-- `tool_gap`: you need a tool that doesn't exist yet
-- `supersession_doubt`: you think this email supersedes a policy but evidence is thin
-- `structure_suggestion`: the wiki structure could be improved (e.g., "all WhatsApp work
-  should roll up into one hub")
-
-Don't log the obvious. Log the judgment calls. One sentence per insight, with a
-concrete suggested_action when you can.
 
 ## Hard rules — NEVER violate
 

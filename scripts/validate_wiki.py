@@ -6,6 +6,8 @@ invoked after every compile_all batch so we notice damage immediately.
 
 Checks (ERROR severity — exit code 1):
 - Page has parseable YAML frontmatter
+- Page has exactly two `---` fences (catches the `tech-security-team.md`
+  corruption pattern surfaced in the 2026-04-14 wiki quality audit)
 - Required fields present: title, page_type, status
 - page_type matches the directory the file lives in
 - No duplicate bodies (after hashing minus last_compiled)
@@ -20,6 +22,9 @@ Checks (WARN severity — stderr only, no exit-code effect):
 - Topic/system/policy page has the required H2 sections for its type
   ({topic,system,policy}-sections). Promoted to ERROR with
   `--strict-sections`.
+- Topic/policy page opens with a ≥2-sentence lead paragraph before the
+  first H2 ({topic,policy}-lead-paragraph). Warning-only for now — legacy
+  pages have this pattern and we don't want to break CI immediately.
 
 Usage:
     uv run python scripts/validate_wiki.py                    # report + exit 1 on errors
@@ -167,6 +172,19 @@ def _extract_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     return fm, body
 
 
+def _count_fm_fences(content: str) -> int:
+    """Count how many lines are exactly `---` in the raw file content.
+
+    A well-formed page has exactly two: one opening + one closing the
+    frontmatter block. Three or more means the file got corrupted (see
+    `tech-security-team.md` in the 2026-04-14 audit — a newline split a
+    filename across what looked like a second `---\n...\n---` block,
+    producing a page with two frontmatter sections that partially parse).
+    Zero or one means the frontmatter is broken.
+    """
+    return sum(1 for line in content.splitlines() if line == "---")
+
+
 def validate_page(path: Path) -> list[Error]:
     errors: list[Error] = []
     try:
@@ -174,15 +192,30 @@ def validate_page(path: Path) -> list[Error]:
     except (OSError, UnicodeDecodeError) as e:
         return [Error(path, f"unreadable: {e}")]
 
+    # Fence count check — must be exactly two `---` lines. Run this before
+    # frontmatter parse so corrupted two-block files still surface the
+    # concrete fence count rather than a "no parseable YAML" message.
+    fence_count = _count_fm_fences(content)
+    if fence_count != 2:
+        errors.append(
+            Error(
+                path,
+                f"malformed frontmatter: expected 2 --- fences, found {fence_count}",
+            )
+        )
+
     fm, body = _extract_frontmatter(content)
 
     if not fm:
-        return [Error(path, "no parseable YAML frontmatter")]
+        if not errors:
+            errors.append(Error(path, "no parseable YAML frontmatter"))
+        return errors
 
     # Detect orphan body: only last_compiled present means auto-stamp
     # recovered from a broken frontmatter. Caller should re-compile this page.
     if set(fm.keys()) == {"last_compiled"}:
-        return [Error(path, "orphan frontmatter (only last_compiled present)")]
+        errors.append(Error(path, "orphan frontmatter (only last_compiled present)"))
+        return errors
 
     # Required fields
     missing = REQUIRED_FIELDS - set(fm.keys())
@@ -537,6 +570,70 @@ def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
+_SENTENCE_END_RE = re.compile(r"[.?!](?:\s|$)")
+
+
+def _count_sentences(text: str) -> int:
+    """Rough sentence count — `.`, `?`, `!` each followed by whitespace or EOS.
+
+    Good enough for "does this lead paragraph feel like 2+ sentences?"
+    without dragging in an NLP dependency. URLs and abbreviations
+    (`e.g.`) will over-count, which is fine for a warn-only check.
+    """
+    return len(_SENTENCE_END_RE.findall(text))
+
+
+def check_lead_paragraph(wiki_dir: Path) -> list[ValidationWarning]:
+    """Topic/policy pages should open with a lead paragraph, not an H2.
+
+    Per the "North-star" rules in docs/BACKLOG.md, a page's first sentence
+    is a Wikipedia-style definition and the lead is ≤4 sentences. Pages
+    that open with `## Overview` or `## Summary` fail the "new joiner
+    scannability" test because they force readers to pick a section
+    before seeing what the page is about.
+
+    Warning-only for now — legacy pages have this pattern and we don't
+    want to break CI while the formatter catches up.
+    """
+    warnings: list[ValidationWarning] = []
+    for category, page_type in (("topics", "topic"), ("policies", "policy")):
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in cat_dir.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            _, body = split_frontmatter(content)
+            if not body.strip():
+                # Empty body is already flagged in validate_page.
+                continue
+            # Everything before the first H2 is the lead region.
+            first_h2 = re.search(r"^##\s+", body, re.MULTILINE)
+            lead = body[: first_h2.start()] if first_h2 else body
+            # Drop H1 lines (`# Title`) and bold "**Key:** value" metadata
+            # lines so a page that opens with just a title + bold stamps
+            # still flags as missing a lead.
+            cleaned_lines = [
+                ln for ln in lead.splitlines() if ln.strip() and not ln.startswith("#")
+            ]
+            cleaned = " ".join(cleaned_lines).strip()
+            sentences = _count_sentences(cleaned)
+            if not cleaned or sentences < 2:
+                warnings.append(
+                    ValidationWarning(
+                        path,
+                        "topic page missing lead paragraph (expected ≥2 sentences before first H2)"
+                        if page_type == "topic"
+                        else "policy page missing lead paragraph "
+                        "(expected ≥2 sentences before first H2)",
+                        f"{page_type}-lead-paragraph",
+                    )
+                )
+    return warnings
+
+
 def check_required_sections(
     wiki_dir: Path, *, strict: bool = False
 ) -> tuple[list[Error], list[ValidationWarning]]:
@@ -601,6 +698,7 @@ def run(
     section_errors, section_warnings = check_required_sections(wiki_dir, strict=strict_sections)
     errors.extend(section_errors)
     warnings.extend(section_warnings)
+    warnings.extend(check_lead_paragraph(wiki_dir))
     return errors, warnings
 
 
