@@ -851,55 +851,62 @@ def log_insight(
 
 
 @tool
-def resolve_page(
-    slug: str | None = None,
-    title: str | None = None,
-    canonical_user_email: str | None = None,
-) -> dict[str, Any]:
-    """Find the canonical wiki page for a slug, title, or entity email.
+def resolve_page(query: str) -> dict[str, Any]:
+    """Find a wiki page by slug, title, or entity email.
 
-    Use this BEFORE creating a new page — consults the `wiki_pages` catalog
-    so the agent stops duplicating pages by grepping the filesystem.
+    WHEN TO USE: before creating a new page — check the `wiki_pages`
+    catalog for an existing page covering the same concept or person.
+    On a miss, the tool returns up to 5 substring candidates so you
+    don't have to retry with slug variants.
 
-    Args (at least one required):
-        slug: Try exact slug match first (confidence 1.0).
-        title: Case-insensitive exact title match (confidence 0.9).
-        canonical_user_email: Exact match on entity-page email (confidence 1.0).
+    WHEN NOT TO USE:
+    - You already have the exact slug and want the file contents
+      → use `read_file` directly.
+    - You want to browse the full catalog by category
+      → use `list_wiki_pages`.
+    - You need free-text search across page BODIES
+      → use `grep` on the wiki directory.
+
+    Args:
+        query: A single string. Auto-detected by shape:
+          - contains "@"    → email lookup against entity pages
+          - kebab-case slug → exact slug match
+          - anything else   → exact title match (case-insensitive)
+          The tool falls back across all three shapes before giving up,
+          so a mis-classified shape still has a chance to hit.
 
     Returns:
-        Dict with keys {exists, slug, title, page_type, path, status, confidence}.
-        `status` surfaces `current`/`superseded`/`contested` so the agent can
-        decide whether to create a replacement page.
-        When nothing matches, `exists` is False and the ID fields are None.
-        When called with no arguments, returns exists=False with an `error`
-        describing the missing input.
+        On hit: {"exists": True, "slug", "title", "page_type", "path",
+                 "status", "confidence"}.
+                `status` is "current" | "superseded" | "contested" — use
+                it to decide whether to create a replacement page.
+        On miss with candidates:
+                {"exists": False, "candidates": [<up to 5 substring
+                matches with slug/title/page_type/path/status>]}.
+        On miss with nothing close:
+                {"exists": False, "candidates": []}.
+        On empty/stale catalog:
+                {"exists": False, "catalog_empty_or_stale": True,
+                 "error": "...", "catalog_counts": {...}}.
     """
     # deferred to avoid circular import at module load time
     from src.db.wiki_pages import count_wiki_pages_by_type
     from src.db.wiki_pages import lookup_page
+    from src.db.wiki_pages import search_pages
 
-    if slug is None and title is None and canonical_user_email is None:
+    q = (query or "").strip()
+    if not q:
         return {
             "exists": False,
-            "slug": None,
-            "title": None,
-            "page_type": None,
-            "path": None,
-            "status": None,
-            "confidence": 0.0,
-            "error": "provide at least one of: slug, title, canonical_user_email",
+            "error": "query is empty",
+            "candidates": [],
         }
 
     catalog_counts = count_wiki_pages_by_type()
     if not catalog_counts or sum(catalog_counts.values()) == 0:
         return {
             "exists": False,
-            "slug": None,
-            "title": None,
-            "page_type": None,
-            "path": None,
-            "status": None,
-            "confidence": 0.0,
+            "catalog_empty_or_stale": True,
             "error": (
                 "wiki_pages catalog is empty or stale; run "
                 "`uv run python scripts/backfill_wiki_pages.py` before relying on resolve_page"
@@ -907,25 +914,48 @@ def resolve_page(
             "catalog_counts": catalog_counts,
         }
 
-    row = lookup_page(slug=slug, title=title, canonical_user_email=canonical_user_email)
-    if row is None:
-        return {
-            "exists": False,
-            "slug": None,
-            "title": None,
-            "page_type": None,
-            "path": None,
-            "status": None,
-            "confidence": 0.0,
-        }
+    # Fallback chain: try whichever shape is most likely first, but if
+    # that misses, try the others before declaring the query a miss. This
+    # stops an agent that passes "Amit Agarwal" (a title) as `query` from
+    # missing just because title-lookup happened to run last.
+    lookups: list[tuple[str, dict[str, str]]] = []
+    if "@" in q:
+        lookups.append(("email", {"canonical_user_email": q.lower()}))
+    if " " not in q:
+        lookups.append(("slug", {"slug": q.lower()}))
+    lookups.append(("title", {"title": q}))
+
+    seen_kinds: set[str] = set()
+    for kind, kwargs in lookups:
+        if kind in seen_kinds:
+            continue
+        seen_kinds.add(kind)
+        row = lookup_page(**kwargs)  # type: ignore[arg-type]
+        if row is not None:
+            return {
+                "exists": True,
+                "slug": row["slug"],
+                "title": row["title"],
+                "page_type": row["page_type"],
+                "path": row["path"],
+                "status": row["status"],
+                "confidence": float(row["confidence"]),
+            }
+
+    # Real miss — help the agent find something close without retrying.
+    candidates = search_pages(q, limit=5)
     return {
-        "exists": True,
-        "slug": row["slug"],
-        "title": row["title"],
-        "page_type": row["page_type"],
-        "path": row["path"],
-        "status": row["status"],
-        "confidence": float(row["confidence"]),
+        "exists": False,
+        "candidates": [
+            {
+                "slug": c["slug"],
+                "title": c["title"],
+                "page_type": c["page_type"],
+                "path": c["path"],
+                "status": c["status"],
+            }
+            for c in candidates
+        ],
     }
 
 

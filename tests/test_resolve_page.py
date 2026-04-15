@@ -1,9 +1,11 @@
-"""Tests for src/db/wiki_pages.lookup_page and src/compile/compiler.resolve_page.
+"""Tests for src/db/wiki_pages and src/compile/compiler.resolve_page.
 
-The tool invokes the DB helper, which runs real SQL inside a schema-isolated
-test database (see conftest.py). For the tool wrapper we either use real rows
-via db_conn or monkey-patch lookup_page — both paths are exercised here so
-regressions in either layer surface.
+After the 2026-04-15 trace audit, `resolve_page` collapsed from three
+optional args to a single `query` arg with shape-based intent detection,
+a fallback chain across all three lookup kinds, and a candidates list
+on miss so the agent doesn't retry with slug variants. The tests here
+cover the tool wrapper (shape detection, catalog-empty signal, miss
+with/without candidates) and the DB helpers (lookup_page / search_pages).
 """
 
 from __future__ import annotations
@@ -16,9 +18,8 @@ from src.compile import compiler as compiler_mod
 from src.db import wiki_pages as repo
 
 
-def _resolve(**kwargs: Any) -> dict[str, Any]:
-    result: dict[str, Any] = compiler_mod.resolve_page.invoke(kwargs)
-    return result
+def _resolve(query: str) -> dict[str, Any]:
+    return compiler_mod.resolve_page.invoke({"query": query})
 
 
 def _upsert_entity_user(conn: psycopg.Connection, email: str) -> None:
@@ -28,25 +29,25 @@ def _upsert_entity_user(conn: psycopg.Connection, email: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_page tool
+# resolve_page (tool)
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_page_no_args_returns_error() -> None:
-    result = _resolve()
+def test_resolve_page_empty_query_returns_error() -> None:
+    result = _resolve("   ")
     assert result["exists"] is False
-    assert result["slug"] is None
-    assert result["confidence"] == 0.0
-    assert "provide at least one" in result["error"]
+    assert result["error"] == "query is empty"
+    assert result["candidates"] == []
 
 
 def test_resolve_page_surfaces_empty_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", dict)
 
-    result = _resolve(slug="anything")
+    result = _resolve("anything")
     assert result["exists"] is False
+    assert result["catalog_empty_or_stale"] is True
     assert result["catalog_counts"] == {}
-    assert "wiki_pages catalog is empty or stale" in result["error"]
+    assert "wiki_pages catalog is empty" in result["error"]
 
 
 def test_resolve_page_hit_by_slug(db_conn: psycopg.Connection) -> None:
@@ -59,29 +60,11 @@ def test_resolve_page_hit_by_slug(db_conn: psycopg.Connection) -> None:
     )
     db_conn.commit()
 
-    result = _resolve(slug="buylead")
-    assert result == {
-        "exists": True,
-        "slug": "buylead",
-        "title": "BuyLead",
-        "page_type": "topic",
-        "path": "wiki/topics/buylead.md",
-        "status": "current",
-        "confidence": 1.0,
-    }
-
-
-def test_resolve_page_miss_returns_exists_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"topic": 1})
-    result = _resolve(slug="does-not-exist")
-    assert result["exists"] is False
-    assert result["slug"] is None
-    assert result["title"] is None
-    assert result["page_type"] is None
-    assert result["path"] is None
-    assert result["status"] is None
-    assert result["confidence"] == 0.0
-    assert "error" not in result
+    result = _resolve("buylead")
+    assert result["exists"] is True
+    assert result["slug"] == "buylead"
+    assert result["page_type"] == "topic"
+    assert result["confidence"] == 1.0
 
 
 def test_resolve_page_hit_by_title(db_conn: psycopg.Connection) -> None:
@@ -94,14 +77,15 @@ def test_resolve_page_hit_by_title(db_conn: psycopg.Connection) -> None:
     )
     db_conn.commit()
 
-    # Case-insensitive match.
-    result = _resolve(title="affiliate program")
+    # Mixed-case query lands on the case-insensitive title lookup after
+    # slug-lookup misses (the query contains a space → slug skipped).
+    result = _resolve("affiliate program")
     assert result["exists"] is True
     assert result["slug"] == "affiliate-program"
     assert result["confidence"] == 0.9
 
 
-def test_resolve_page_hit_by_canonical_email(db_conn: psycopg.Connection) -> None:
+def test_resolve_page_hit_by_email(db_conn: psycopg.Connection) -> None:
     _upsert_entity_user(db_conn, "alice@example.com")
     repo.upsert_wiki_page(
         db_conn,
@@ -113,63 +97,149 @@ def test_resolve_page_hit_by_canonical_email(db_conn: psycopg.Connection) -> Non
     )
     db_conn.commit()
 
-    result = _resolve(canonical_user_email="alice@example.com")
+    result = _resolve("alice@example.com")
     assert result["exists"] is True
     assert result["slug"] == "alice-example-com"
     assert result["page_type"] == "entity"
-    assert result["confidence"] == 1.0
 
 
-def test_resolve_page_uses_mocked_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Smoke-test the tool wrapper in isolation — no DB round-trip."""
-    calls: list[dict[str, Any]] = []
+def test_resolve_page_miss_returns_candidates(db_conn: psycopg.Connection) -> None:
+    """On a real miss, the tool returns up to 5 substring candidates so
+    the agent doesn't have to retry with slug variants."""
+    for slug, title in [
+        ("whatsapp-rollout-9696", "WhatsApp Rollout 9696"),
+        ("whatsapp-onboarding", "WhatsApp Onboarding"),
+        ("whatsapp-lead-handoff", "WhatsApp Lead Handoff"),
+        ("unrelated-topic", "Unrelated Topic"),
+    ]:
+        repo.upsert_wiki_page(
+            db_conn, slug=slug, path=f"wiki/topics/{slug}.md", title=title, page_type="topic"
+        )
+    db_conn.commit()
 
-    def fake_lookup(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {
-            "slug": "foo",
-            "title": "Foo",
-            "page_type": "topic",
-            "path": "wiki/topics/foo.md",
-            "status": "current",
-            "confidence": 1.0,
-        }
+    result = _resolve("whatsapp-thing-that-isnt-a-real-slug")
+    assert result["exists"] is False
+    candidates = result["candidates"]
+    # All 3 whatsapp-* pages appear as candidates; the unrelated one does not.
+    returned_slugs = {c["slug"] for c in candidates}
+    assert "whatsapp-rollout-9696" in returned_slugs
+    assert "whatsapp-onboarding" in returned_slugs
+    assert "whatsapp-lead-handoff" in returned_slugs
+    assert "unrelated-topic" not in returned_slugs
 
-    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"topic": 1})
-    monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
 
-    result = _resolve(slug="foo")
+def test_resolve_page_miss_with_no_close_candidates(
+    db_conn: psycopg.Connection,
+) -> None:
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="foo",
+        path="wiki/topics/foo.md",
+        title="Foo",
+        page_type="topic",
+    )
+    db_conn.commit()
+
+    result = _resolve("zebras-giraffes-hippos")
+    assert result["exists"] is False
+    assert result["candidates"] == []
+
+
+def test_resolve_page_fallback_across_shapes(db_conn: psycopg.Connection) -> None:
+    """A query that looks like a slug but actually matches a title still
+    resolves — the tool tries slug first, then falls through to title."""
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="quarterly-refund-review",
+        path="wiki/topics/quarterly-refund-review.md",
+        title="refund-audit",  # quirky title that looks like a slug
+        page_type="topic",
+    )
+    db_conn.commit()
+
+    # slug lookup on "refund-audit" misses; title lookup catches it.
+    result = _resolve("refund-audit")
     assert result["exists"] is True
-    assert result["slug"] == "foo"
-    assert result["status"] == "current"
-    assert calls == [{"slug": "foo", "title": None, "canonical_user_email": None}]
+    assert result["slug"] == "quarterly-refund-review"
 
 
 def test_resolve_page_surfaces_superseded_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Superseded pages surface via `status` so the agent can create a replacement."""
-
-    def fake_lookup(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "slug": "old-policy",
-            "title": "Old Policy",
-            "page_type": "policy",
-            "path": "wiki/policies/old-policy.md",
-            "status": "superseded",
-            "confidence": 1.0,
-        }
-
+    """Superseded pages surface via `status` so the agent can decide to
+    create a replacement."""
     monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"policy": 1})
-    monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
 
-    result = _resolve(slug="old-policy")
+    def fake_lookup(**kwargs: Any) -> dict[str, Any] | None:
+        if kwargs.get("slug") == "old-policy":
+            return {
+                "slug": "old-policy",
+                "title": "Old Policy",
+                "page_type": "policy",
+                "path": "wiki/policies/old-policy.md",
+                "status": "superseded",
+                "confidence": 1.0,
+            }
+        return None
+
+    monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
+    monkeypatch.setattr("src.db.wiki_pages.search_pages", lambda q, limit=5: [])
+
+    result = _resolve("old-policy")
     assert result["exists"] is True
     assert result["status"] == "superseded"
 
 
 # ---------------------------------------------------------------------------
-# lookup_page
+# search_pages (DB helper)
+# ---------------------------------------------------------------------------
+
+
+def test_search_pages_returns_substring_matches(db_conn: psycopg.Connection) -> None:
+    for slug, title in [
+        ("buylead-dispatch", "BuyLead Dispatch"),
+        ("buylead-scoring", "BuyLead Scoring"),
+        ("unrelated", "Unrelated"),
+    ]:
+        repo.upsert_wiki_page(
+            db_conn, slug=slug, path=f"wiki/topics/{slug}.md", title=title, page_type="topic"
+        )
+    db_conn.commit()
+
+    hits = repo.search_pages("buylead", limit=5)
+    slugs = {h["slug"] for h in hits}
+    assert {"buylead-dispatch", "buylead-scoring"}.issubset(slugs)
+    assert "unrelated" not in slugs
+
+
+def test_search_pages_orders_exact_matches_first(db_conn: psycopg.Connection) -> None:
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="buylead-dispatch",
+        path="wiki/topics/buylead-dispatch.md",
+        title="BuyLead Dispatch",
+        page_type="topic",
+    )
+    repo.upsert_wiki_page(
+        db_conn,
+        slug="buylead",
+        path="wiki/topics/buylead.md",
+        title="BuyLead",
+        page_type="topic",
+    )
+    db_conn.commit()
+
+    hits = repo.search_pages("buylead", limit=2)
+    assert hits[0]["slug"] == "buylead"  # exact slug beats substring
+
+
+def test_search_pages_empty_query_returns_empty() -> None:
+    assert repo.search_pages("") == []
+    assert repo.search_pages("   ") == []
+
+
+# ---------------------------------------------------------------------------
+# lookup_page (DB helper — unchanged signature kept for internal use)
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +261,6 @@ def test_lookup_page_slug_wins_over_title(db_conn: psycopg.Connection) -> None:
     )
     db_conn.commit()
 
-    # title="bar" would match page "bar", but slug="foo" wins.
     row = repo.lookup_page(slug="foo", title="Bar Topic")
     assert row is not None
     assert row["slug"] == "foo"

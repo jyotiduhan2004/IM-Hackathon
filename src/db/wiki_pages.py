@@ -69,6 +69,69 @@ def find_by_slug(slug: str) -> dict[str, Any] | None:
         ).fetchone()
 
 
+def search_pages(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Substring search over slug + title.
+
+    Used by `resolve_page` to return candidates when the exact lookup
+    misses — so the agent sees "you tried X, did you mean one of these
+    five?" instead of blankly missing and retrying with variants.
+
+    Ordering prioritises:
+      1. exact slug match (redundant with lookup_page, but kept so the
+         fallback chain is self-contained)
+      2. case-insensitive exact title match
+      3. slug starts-with the query
+      4. any substring match on slug or title
+      5. page_id tiebreaker for determinism across test runs
+
+    `current` status beats `superseded`/`contested` at the same rank.
+    """
+    import re
+
+    query = query.strip()
+    if not query:
+        return []
+    # Tokenize so "whatsapp-lead-handoff" matches pages containing
+    # "whatsapp" even when the exact full string doesn't appear
+    # anywhere. Full-string substring stays the primary signal; tokens
+    # are a fallback that widens recall on multi-word queries.
+    tokens = [t for t in re.split(r"[-\s_]+", query) if len(t) >= 3]
+    patterns = [f"%{query}%"] + [f"%{t}%" for t in tokens]
+    # De-duplicate while preserving order so the exact-substring pattern
+    # stays first (Postgres ILIKE ANY uses the array as a set of ORs).
+    seen: set[str] = set()
+    deduped_patterns: list[str] = []
+    for p in patterns:
+        if p not in seen:
+            seen.add(p)
+            deduped_patterns.append(p)
+    starts_with = f"{query}%"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, title, page_type, path, status
+              FROM wiki_pages
+             WHERE slug ILIKE ANY(%(patterns)s)
+                OR title ILIKE ANY(%(patterns)s)
+             ORDER BY
+               CASE WHEN slug = %(q)s THEN 0
+                    WHEN lower(title) = lower(%(q)s) THEN 1
+                    WHEN slug ILIKE %(starts_with)s THEN 2
+                    ELSE 3 END,
+               (status = 'current') DESC,
+               page_id ASC
+             LIMIT %(limit)s
+            """,
+            {
+                "q": query,
+                "patterns": deduped_patterns,
+                "starts_with": starts_with,
+                "limit": limit,
+            },
+        ).fetchall()
+    return list(rows)
+
+
 def lookup_page(
     *,
     slug: str | None = None,
