@@ -1,0 +1,181 @@
+# North-Star eval golden set (pinned 30 cases).
+#
+# Used by scripts/eval_harness.py to produce same-day before/after readouts
+# on every prompt/tool PR. Distribution intentionally mirrors the Workstream A
+# spec: 10 merge, 5 new topic/system, 5 supersession, 5 ambiguity/draft,
+# 5 trivial-skip. Message IDs were selected from the live Postgres catalog on
+# 2026-04-16; subjects are preserved verbatim for human scanability. Re-pin
+# only if the underlying messages are re-ingested or the queue shape shifts.
+#
+# Each case needs: message_id (real, from messages table), case_type
+# (one of the six buckets), description (why this case is representative).
+# Optional: thread_id, subject — cosmetic, for human eyeballing.
+
+cases:
+  # ---- merge-into-existing (10) ----
+  # Thread already has >=1 compiled message; pending reply should fold into
+  # the existing topic page, NOT spawn a duplicate.
+  - message_id: "<CAMOCtfbV6F=H4XdyprxFqU0R=dEB+YWwHXiZrUW2Bk6-Fg7WbQ@mail.gmail.com>"
+    case_type: merge
+    description: "Reply in a compiled M-Site Search relevancy-feedback thread — should merge, not create."
+    thread_id: "19d4d979a05af0c3"
+    subject: "Re: [MPLaunch@IM][M-Site Search] | Simplified search result relevancy feedback submission for buyers"
+  - message_id: "<CAL+Zz22QtTA1SpOKafXQZNp+-fY9mjMRktVZ_dBPzDNpe8t_eA@mail.gmail.com>"
+    case_type: merge
+    description: "Reply to WhatsApp messaging search-keyword enhancement; thread has compiled history."
+    thread_id: "19d7210b3fff7ac4"
+    subject: "Re: [MPLaunch@IM] WhatsApp Messaging Enhancement with Search Keyword Inclusion"
+  - message_id: "<CAPyAggvhL8gpVhmYCow3VTsGGQgrNzX1c8Gf1_1fu+N0y2+_kg@mail.gmail.com>"
+    case_type: merge
+    description: "Reply on Photosearch multimodal embeddings thread — merge target is an existing topic page."
+    thread_id: "19d6c86e90d98c72"
+    subject: "Re: [MPLaunch@IM] Enhanced Photosearch : Introducing Multimodal Embeddings for better matchmaking and relevancy"
+  - message_id: "<CAFqyeem_Xhd5-iyOrtbKLvd8xRmXGvOiUY3wAqCZ3Bi9NoCHhg@mail.gmail.com>"
+    case_type: merge
+    description: "Reply in Multimodal Photo+Text Search thread; should update parent topic."
+    thread_id: "19d76f2c2cb00ed5"
+    subject: "Re: [MPLaunch@IM] Multimodal (Photo + Text) Search Integration in PhotoSearch"
+  - message_id: "<CAEkgjFHF39MTCYpBPUMQzyaUMThTJZE=kYAJq9EgCQtS80Vcog@mail.gmail.com>"
+    case_type: merge
+    description: "Reply on Live Assistant Buyer Helpdesk Export thread — compiled parent exists."
+    thread_id: "19d48c5c5654b324"
+    subject: "Re: [MPLaunch@IM] | Live Assistant Buyer Helpdesk Launched on Export Platform"
+  - message_id: "<CAK-XST3nAM+akVQzy2HOASxQi2u11HgA1Wg2Hin5XzM7wRXZew@mail.gmail.com>"
+    case_type: merge
+    description: "Reply in Export.IM CSL tracking thread; should merge into existing system page."
+    thread_id: "19d6216aab125193"
+    subject: "Re: [MPLaunch@IM] export.indiamart.com | CSL Tracking for Unmapped URLs on Export.IM"
+  - message_id: "<CAAOw=uGHo3mJ-1kDhriEEvajf8ZfnZuH3wEzDu5sk7ZrC77Uvw@mail.gmail.com>"
+    case_type: merge
+    description: "Reply in A/B-testing BuyLead Autosuggest thread; thread already partly compiled."
+    thread_id: "19d521fd76c435b5"
+    subject: "Re: [MPLaunch@IM] A/B testing BuyLead Search Autosuggest Homepage UI on Apps"
+  - message_id: "<CAP7PKsYCLAAueH6KvgAKUS8_BF76aMe_7wf-vCdytjmjE6+eaQ@mail.gmail.com>"
+    case_type: merge
+    description: "Reply on Foreign BL Purchase ownership transfer thread; merge target exists."
+    thread_id: "19d2dedf2b2f5a24"
+    subject: "Re: [MPLaunch@IM] Foreign BL Purchase Mail ownership transfer from SOA-BL to Foreign Team - 10% Rollout"
+  - message_id: "<CAMzSeA8Fn21VUN84EqcXzr1sNs=WRS1P=PnzSW-kXEnP-QR3=Q@mail.gmail.com>"
+    case_type: merge
+    description: "Second reply in Live Assistant Buyer Helpdesk thread; check de-dup behavior."
+    thread_id: "19d48c5c5654b324"
+    subject: "Re: [MPLaunch@IM] | Live Assistant Buyer Helpdesk Launched on Export Platform"
+  - message_id: "<CA++obAVhvcMz_gXSgwX6CEJ-RNaG5Ch7JRNA9A5tA1entmUaLg@mail.gmail.com>"
+    case_type: merge
+    description: "Second reply in M-Site Search relevancy thread; back-to-back merge test."
+    thread_id: "19d4d979a05af0c3"
+    subject: "Re: [MPLaunch@IM][M-Site Search] | Simplified search result relevancy feedback submission for buyers"
+
+  # ---- new topic/system (5) ----
+  # Solo-thread kickoffs with concrete product/system references; LLM should
+  # create exactly one concept page (topic or system), not a stack of entity pages.
+  - message_id: "<CAJPHkDcoHMy=fHr-K5k37ijncfYAnQTwCEFE5ooXH_qrWEp6Ug@mail.gmail.com>"
+    case_type: new_topic
+    description: "Solo thread, new TDW Desktop CTA product-context initiative."
+    thread_id: "19d76b4b538f1c84"
+    subject: "[MPLaunch@IM] Improving Product Context for Header & Footer CTAs | TDW Desktop"
+  - message_id: "<CAHFiqzEaNPW9NSzXOYcUP3T2REox4jV-qYN8wVvrxPPBrUpC9Q@mail.gmail.com>"
+    case_type: new_system
+    description: "IndiaMART Lens new cropper/shutter rollout — candidate for system page."
+    thread_id: "19d76969b7a1ad4c"
+    subject: "[MPLaunch@IM] IndiaMART Lens | Google like Image search Experience live for 50% users | New Cropper & Shutter Experience Integrated"
+  - message_id: "<CACw6o2ZR4JoT4iS5tVs7UnkXUxoYhJEpxWaG-ZCBmoOepPAdZg@mail.gmail.com>"
+    case_type: new_topic
+    description: "Gladmin Allocate-Credits PHP→React migration; new topic, references GenUI Agent system."
+    thread_id: "19d7222e11fca122"
+    subject: "[MPLaunch@IM] [Gladmin Launch] || Allocate Credits Screen Migration from PHP to React-Nodejs using GenUI Agent"
+  - message_id: "<CAB0y43Q3CFRxyHVHLjAPQbryQ507bkEcjtu_b+63=L0W6FeTEg@mail.gmail.com>"
+    case_type: new_topic
+    description: "New security-control rollout on Buyer KYU endpoint — policy/topic boundary."
+    thread_id: "19d67898f80a356d"
+    subject: "[INFORMATIONAL][MPLaunch@IM] New Security Control: Separate IP-Specific Rate Limiting Enabled on BUYER Know Your User Endpoint"
+  - message_id: "<CAFjrdnmawA=Md6Nmc=Cvq8_enSZizjJ5SfiQPXgj3oLVXPZHCA@mail.gmail.com>"
+    case_type: new_system
+    description: "MCAT Search API GKE migration — system/platform concept page candidate."
+    thread_id: "19d5397d05d4d28a"
+    subject: "[MPLaunch@IM] [Technical] Advancing Scalability: MCAT Search API Migration to GKE"
+
+  # ---- supersession (5) ----
+  # Subjects with language suggesting older state is being replaced/revised.
+  # Correct behavior = mark old page superseded (preserve history), create/update current.
+  - message_id: "<CAGYDeZUtAt8tawc5Cvud30X+3e7q4dXe+=jOsHtx5XptcCK6hA@mail.gmail.com>"
+    case_type: supersession
+    description: "WhatsApp Nudge Messaging 'updated Buyer Attributes' — revise policy/topic page."
+    thread_id: "19d67f0498e4bad5"
+    subject: "Re: [MPLaunch@IM] Enhancement in WhatsApp Nudge Messaging based on updated Buyer Attributes"
+  - message_id: "<CAG19NYeTur8ryoPegzPuSHTB1S3YGs76rXbZH+TEeLB0yzxG1Q@mail.gmail.com>"
+    case_type: supersession
+    description: "'Updated and Centralized BL Search Autosuggest' — should supersede prior autosuggest page."
+    thread_id: "19cfa2e12fdaf242"
+    subject: "Re: [MPLaunch@IM] Updated and Centralized BL Search Autosuggest Homepage UI"
+  - message_id: "<CAEF9bj0rdncTz8D+hiaGMx4GW5pPKjR+SN-Qcx6qOMQ=y8GCAw@mail.gmail.com>"
+    case_type: supersession
+    description: "Same 'Updated and Centralized' thread; agent must recognize second revision."
+    thread_id: "19cfa2e12fdaf242"
+    subject: "Re: [MPLaunch@IM] Updated and Centralized BL Search Autosuggest Homepage UI"
+  - message_id: "<CAL+Zz22LSEj0u6Afba4okRa5v4CdoPRD06gcvz5OzXAbBrO4vA@mail.gmail.com>"
+    case_type: supersession
+    description: "Second 'updated' WhatsApp Nudge revision — check agent preserves history, doesn't duplicate."
+    thread_id: "19d67f0498e4bad5"
+    subject: "Re: [MPLaunch@IM] Enhancement in WhatsApp Nudge Messaging based on updated Buyer Attributes"
+  - message_id: "<CAHSJqAqkjc7YQqiKxaOtf14G6dj1+EZc0Z_Ak0t2HcmtNxhpWA@mail.gmail.com>"
+    case_type: supersession
+    description: "Third revision in same WhatsApp Nudge thread — supersession chain endpoint."
+    thread_id: "19d67f0498e4bad5"
+    subject: "Re: [MPLaunch@IM] Enhancement in WhatsApp Nudge Messaging based on updated Buyer Attributes"
+
+  # ---- ambiguity / draft (5) ----
+  # Short / low-signal subjects that don't obviously fit a concept. Expected
+  # behavior = write_draft_page OR log_insight, not jam it into an existing page.
+  - message_id: "<CAM8cwTav5QVUnr6uqT1nQhBx1iLF4i9FkC20Zf1xp0KSjUAFNQ@mail.gmail.com>"
+    case_type: ambiguity
+    description: "'AI Data Scraping Tool - DataHarvest' — unknown product, low context."
+    thread_id: "19c9a68519885996"
+    subject: "AI Data Scraping Tool - DataHarvest"
+  - message_id: "<CAF3LSj_vH1_pbFp6srPcNNG1=fJY_4YKFkWwcAEHDeCkGoqtMw@mail.gmail.com>"
+    case_type: ambiguity
+    description: "'Seller VANI - Ready for testing' — status update without enough context to define concept."
+    thread_id: "19bb83c1c8120c79"
+    subject: "Seller VANI - Ready for testing"
+  - message_id: "<CAMQ34GDFybN_hTW7hjNO47VBT3gyNk17Pdtm7Kvrxy-vhQ2WRg@mail.gmail.com>"
+    case_type: ambiguity
+    description: "'BuyLead Display & Consumption on WhatsApp' — no launch marker, scope unclear."
+    thread_id: "19d23c39f0d3a641"
+    subject: "BuyLead Display & Consumption on WhatsApp"
+  - message_id: "<CAJJs_KYUJYbPXw7+H1vhP++a1q2QY-xY-ySiWD9nGMMsnT7B=g@mail.gmail.com>"
+    case_type: ambiguity
+    description: "'Launch of Datawarehouse Training | Register Now' — training event, not a product — should log_insight."
+    subject: "Launch of Datawarehouse Training | Register Now"
+  - message_id: "<CAJJs_KbALa43SkF_dDPqdyH620MY1nwast=mFE_u8D208qDtcg@mail.gmail.com>"
+    case_type: ambiguity
+    description: "'Launch of AI Training for Developers | Nominate Now' — internal training announce, ambiguous concept fit."
+    subject: "Launch of AI Training for Developers | Nominate Now"
+
+  # ---- trivial-skip (5) ----
+  # Pure reply threads with low substantive content. Expected = compile_state='skipped'
+  # (once that state exists). For now, track they don't expand into new pages.
+  - message_id: "<CAPyAggvE5AYWyw22Kz-FwTM=xMiUnRePe_HnBbSi4Wn6v1JuNg@mail.gmail.com>"
+    case_type: trivial
+    description: "Short 'Re: Migration of LiteLLM Logs to DeltaLake' reply — trivial ack candidate."
+    thread_id: "19d6816ccb31cdd0"
+    subject: "Re: Migration of LiteLLM Logs to DeltaLake"
+  - message_id: "<CAG19NYf-bBOrGJ5NgZ4XTHUO1JDU10XgdaCp0WvB8UiqPeK1Qg@mail.gmail.com>"
+    case_type: trivial
+    description: "Short 'Re: Fair Use of A Ranks' reply — team chitchat, no new decision."
+    thread_id: "19d47d809e140998"
+    subject: "Re: Fair Use of A Ranks | Limiting A Ranks as Per Different Custtypes"
+  - message_id: "<CAMQ34GBjSWvJnvsZoUJP=v_+FoPPoNisCisKkeUnygEhQTwtNQ@mail.gmail.com>"
+    case_type: trivial
+    description: "'Re: BuyLead Display & Consumption on WhatsApp' — thank-you / acknowledgement style reply."
+    thread_id: "19d23c39f0d3a641"
+    subject: "Re: BuyLead Display & Consumption on WhatsApp"
+  - message_id: "<CABo4ygupg_sjtsOd0RyuSfO=N8g2CmGaarb0SxdE=hEHY4Hr9g@mail.gmail.com>"
+    case_type: trivial
+    description: "Another short reply in BuyLead WhatsApp thread — check trivial filter consistency."
+    thread_id: "19d23c39f0d3a641"
+    subject: "Re: BuyLead Display & Consumption on WhatsApp"
+  - message_id: "<CAPEtWjwfLwj8BJFv_EmSp3i57E8uGy3YCAu7PBp4RRgXJHZ4pQ@mail.gmail.com>"
+    case_type: trivial
+    description: "'Re: [BL-Tester]' status-chatter reply — classic trivial case."
+    thread_id: "19d23c39f0d3a641"
+    subject: "Re: [BL-Tester] Re: BuyLead Display & Consumption on WhatsApp"
