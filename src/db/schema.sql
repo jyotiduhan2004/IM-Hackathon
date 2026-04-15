@@ -305,9 +305,15 @@ CREATE TABLE IF NOT EXISTS compile_attempts (
   finished_at     timestamptz
 );
 
-CREATE INDEX IF NOT EXISTS compile_attempts_model_attempted_idx
-  ON compile_attempts (compile_model, attempted_at DESC);
-CREATE INDEX IF NOT EXISTS compile_attempts_outcome_attempted_idx
-  ON compile_attempts (outcome, attempted_at DESC);
+-- Health-stats path (`model_health_stats`) — partial index matches its
+-- exact filter so PG can satisfy the GROUP BY without scanning in-flight
+-- or model-less rows.
+CREATE INDEX IF NOT EXISTS compile_attempts_health_stats_idx
+  ON compile_attempts (compile_model, attempted_at DESC)
+  WHERE compile_model IS NOT NULL AND finished_at IS NOT NULL;
+-- Per-message lookup path + speeds up FK CASCADE on messages delete.
+CREATE INDEX IF NOT EXISTS compile_attempts_message_idx
+  ON compile_attempts (message_id);
+-- FK CASCADE on compile_runs delete + per-run debugging.
 CREATE INDEX IF NOT EXISTS compile_attempts_run_idx
   ON compile_attempts (run_id);

@@ -912,6 +912,18 @@ def main(
                 )
                 processed += len(marked_ids)
                 _record_attempts_outcome(attempts, marked_ids, outcome="compiled")
+                # Stamp the un-marked attempts as failures so they don't sit
+                # in-flight forever. `not_cited` (agent didn't cite the email)
+                # and `missing` (backfill drift) both count as model-level
+                # failures for that batch — `model_health_stats` will see them.
+                unfinished_ids = [mid for mid in attempts if mid not in marked_ids]
+                if unfinished_ids:
+                    _record_attempts_outcome(
+                        attempts,
+                        unfinished_ids,
+                        outcome="failed",
+                        error="not cited in wiki",
+                    )
                 # Post-batch normalization + validation. Catches agent-
                 # introduced format drift (duplicate ## Related headings,
                 # broken wikilinks, malformed frontmatter) right after the

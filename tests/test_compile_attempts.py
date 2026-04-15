@@ -198,6 +198,24 @@ def test_record_outcome_invalid_raises_check_violation(db_conn: psycopg.Connecti
         conn.commit()
 
 
+def test_record_outcome_warns_on_missing_attempt_id(
+    db_conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Bug or race: UPDATE matched no row → warn but don't raise.
+
+    structlog routes through its own pipeline (not stdlib `caplog`) so we
+    assert against captured stdout instead.
+    """
+    with db_pkg.connect() as conn:
+        repo.record_outcome(conn, attempt_id=999_999, outcome="compiled")
+        conn.commit()
+    out = capsys.readouterr().out
+    assert "compile_attempts.record_outcome no matching row" in out
+    # `attempt_id` and `999999` are emitted as kv pairs, ANSI-colored in
+    # interactive runs. Don't tie the assertion to terminal escape codes.
+    assert "999999" in out
+
+
 # ---------------------------------------------------------------------------
 # model_health_stats
 # ---------------------------------------------------------------------------

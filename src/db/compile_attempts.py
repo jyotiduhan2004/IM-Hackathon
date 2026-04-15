@@ -18,6 +18,9 @@ from __future__ import annotations
 import uuid
 
 import psycopg
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 
 def record_start(
@@ -40,7 +43,8 @@ def record_start(
         """,
         (message_id, run_id, compile_model),
     ).fetchone()
-    assert row is not None  # INSERT ... RETURNING always produces a row
+    if row is None:  # pragma: no cover — unreachable if INSERT succeeds
+        raise RuntimeError("INSERT compile_attempts returned no row")
     return int(row["id"])
 
 
@@ -56,8 +60,11 @@ def record_outcome(
     ``outcome`` must be one of ``'compiled'``, ``'failed'``, ``'timeout'``
     — the DB CHECK will reject others. ``error`` is trimmed by the caller
     (typical convention: 500 chars) to avoid bloating rows.
+
+    Logs a warning if the UPDATE matched no row — bug or race condition,
+    not a hard failure (the in-flight row will eventually time out).
     """
-    conn.execute(
+    cur = conn.execute(
         """
         UPDATE compile_attempts
            SET outcome = %s,
@@ -67,3 +74,10 @@ def record_outcome(
         """,
         (outcome, error, attempt_id),
     )
+    if cur.rowcount != 1:
+        logger.warning(
+            "compile_attempts.record_outcome no matching row",
+            attempt_id=attempt_id,
+            outcome=outcome,
+            rowcount=cur.rowcount,
+        )

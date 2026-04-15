@@ -262,10 +262,11 @@ def _load_messages_ddl() -> str:
       finished_at     timestamptz
     );
 
-    CREATE INDEX compile_attempts_model_attempted_idx
-      ON {TEST_SCHEMA}.compile_attempts (compile_model, attempted_at DESC);
-    CREATE INDEX compile_attempts_outcome_attempted_idx
-      ON {TEST_SCHEMA}.compile_attempts (outcome, attempted_at DESC);
+    CREATE INDEX compile_attempts_health_stats_idx
+      ON {TEST_SCHEMA}.compile_attempts (compile_model, attempted_at DESC)
+      WHERE compile_model IS NOT NULL AND finished_at IS NOT NULL;
+    CREATE INDEX compile_attempts_message_idx
+      ON {TEST_SCHEMA}.compile_attempts (message_id);
     CREATE INDEX compile_attempts_run_idx
       ON {TEST_SCHEMA}.compile_attempts (run_id);
     """
