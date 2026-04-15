@@ -1,45 +1,44 @@
 # Email Knowledge Base
 
-A topic-first knowledge base that ingests email from a Gmail/Google Workspace
-mailing list and compiles it into an interlinked markdown wiki.
+A **compiled, curated Wikipedia for IndiaMART** — not a directory of emails. Pages are about things (products, systems, initiatives, decisions), not events (threads, emails). Audience: everyone at IndiaMART, from day 1.
 
 Raw emails are immutable evidence. Wiki pages are compiled knowledge.
 
-Based on [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f),
-extended for email: thread awareness, supersession detection, and incremental
-compilation.
+Based on [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), extended for email: concept-page deduplication, supersession detection, and multi-stage pipeline (compile → dedupe → domain rollup → glossary refresh).
+
+## Where to start
+
+- **What we're building**: [`docs/NORTH-STAR.md`](docs/NORTH-STAR.md) — the single source of truth
+- **Design detail**: [`docs/proposal/NORTH-STAR-DRAFT.md`](docs/proposal/NORTH-STAR-DRAFT.md)
+- **Historical docs** (superseded 2026-04-15): [`docs/archive/README.md`](docs/archive/README.md)
 
 ## Current status
 
-The repo already works for:
+Shipped:
 
-- backlog ingest from Gmail into `raw/`
-- manual compile into `wiki/`
-- local/read-only browsing via MkDocs
-- coordinator-owned compile state in Postgres
+- Backlog ingest from Gmail into `raw/`
+- Manual compile into `wiki/`
+- Read-only browsing via MkDocs on Cloud Run behind IAP
+- Postgres-backed compile state + per-tool + per-model telemetry
+- Post-batch format validation + agent self-review for format quality
 
-The repo is **not** yet a polished team wiki. Live ingestion, strong search,
-and chatbot-style querying are still future phases, and entity pages remain
-noisy compared to topic pages.
+In flight (Phase 1 consolidation, see NORTH-STAR §5):
 
-Relevant design docs:
-
-- [Internal wiki structure](docs/issues/09-internal-wiki-structure.md)
-- [Phase 1 implementation plan](docs/issues/10-phase1-implementation-plan.md)
-- [User personas and knowledge flows](docs/issues/11-user-personas-and-knowledge-flows.md)
+- Drop filing-cabinet entity pages from primary nav
+- Domain hub model (8 compiler-generated rollups)
+- Trivial-message filter
+- Dedupe agent + domain rollup agent + glossary auto-generation
+- Synthesis self-review pass on every compile
+- Unified `make pipeline` command
 
 ## What this project is optimizing for
 
-Near-term, this project should optimize for four things:
+Near-term, this project optimizes for four things:
 
-1. **Trustworthy topic pages**: project and system pages should preserve the
-   concrete decisions, metrics, tables, and changes that matter.
-2. **Provenance without clutter**: readers should be able to trust a page
-   without scrolling through hundreds of lines of frontmatter.
-3. **Topic-first navigation**: the wiki should feel browsable via hubs,
-   rollups, glossary pages, and timelines, not just by scanning filenames.
-4. **People pages as support structure**: entity pages should help navigation
-   and attribution, not dominate the wiki or become the primary product.
+1. **Trustworthy topic pages**: concept pages (not per-thread) that preserve the decisions, metrics, tables, and changes that matter. Topic-as-concept means `Seller ISQ` is one page that grows, not N pages for N emails about it.
+2. **Provenance without clutter**: progressive disclosure (TL;DR → body → sources). Sources are collapsed; freshness is surfaced via a `Recent changes` section and status badges.
+3. **Topic-first navigation**: the wiki is browsable via 8 domain hubs (compiler-generated rollups) + glossary + search. People pages exist as wikilink targets only, not as a primary navigation surface.
+4. **People as reference**: entity pages are not in primary nav. They exist only when a topic page actually links to a person.
 
 ## What it does
 
