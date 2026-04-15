@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
+from src.db.users import upsert_user  # noqa: E402
 from src.db.wiki_pages import count_wiki_pages_by_type  # noqa: E402
 from src.db.wiki_pages import upsert_wiki_page  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
@@ -89,6 +90,14 @@ def main(wiki_dir: str | None) -> None:
                 canonical_email: str | None = None
                 if page_type == "entity":
                     canonical_email = _str_or_none(fm.get("email"))
+                    # The entity page's existence is itself evidence this user is
+                    # real. Pre-insert into `users` so the FK on `wiki_pages` can
+                    # resolve — otherwise a person whose only appearance is the
+                    # entity page stub (no participant record yet) would fail the
+                    # upsert with a FK violation.
+                    if canonical_email:
+                        display_name = _str_or_none(fm.get("title"))
+                        upsert_user(conn, email=canonical_email, display_name=display_name)
 
                 # slug is globally UNIQUE — record cross-folder clashes
                 # so we don't silently lose pages on the second insert.

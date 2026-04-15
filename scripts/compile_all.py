@@ -188,6 +188,106 @@ def _normalize_touched_pages(pages: list[Path], wiki_dir: Path) -> list[Path]:
     return changed
 
 
+_CATEGORY_BY_FOLDER: dict[str, str] = {
+    "topics": "topic",
+    "entities": "entity",
+    "systems": "system",
+    "policies": "policy",
+    "timelines": "timeline",
+    "conflicts": "conflict",
+}
+_VALID_WIKI_STATUS = {"current", "superseded", "contested"}
+
+
+def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
+    """Upsert each touched page into the `wiki_pages` catalog.
+
+    The catalog is what `resolve_page` queries. Without this sync the
+    agent's next run can't find pages this batch just created, and
+    `resolve_page` silently misses — see
+    docs/reviews/trace-tooling-audit-20260415T121025Z.md for the symptom.
+
+    Entity pages pre-insert their canonical email into `users` to satisfy
+    the wiki_pages→users FK (the stub tool already does this; this
+    mirror-call keeps the post-batch hook self-contained).
+
+    Failures per-page are logged but never raised — catalog staleness is
+    strictly less bad than a crashed compile coordinator.
+
+    Returns the count of pages successfully upserted.
+    """
+    from src.db import connect as _connect
+    from src.db.users import upsert_user as _upsert_user
+    from src.db.wiki_pages import upsert_wiki_page as _upsert_wiki_page
+    from src.utils import extract_frontmatter as _extract_fm
+
+    wiki_dir_abs = wiki_dir.resolve()
+    synced = 0
+    with _connect() as conn:
+        for page in pages:
+            page_abs = Path(page).resolve()
+            try:
+                rel = page_abs.relative_to(wiki_dir_abs)
+            except ValueError:
+                continue  # page outside the wiki root; skip
+            if len(rel.parts) < 2:
+                continue  # top-level files (home.md, index.md) aren't catalog entries
+            page_type = _CATEGORY_BY_FOLDER.get(rel.parts[0])
+            if page_type is None:
+                continue
+            try:
+                content = page_abs.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("catalog_sync_read_failed", path=str(page_abs), error=str(exc))
+                continue
+            fm = _extract_fm(content)
+            title_raw = fm.get("title")
+            title = title_raw.strip() if isinstance(title_raw, str) and title_raw.strip() else None
+            if not title:
+                title = page_abs.stem.replace("-", " ").title()
+            status_raw = fm.get("status")
+            status = (
+                status_raw
+                if isinstance(status_raw, str) and status_raw in _VALID_WIKI_STATUS
+                else "current"
+            )
+            canonical_email: str | None = None
+            if page_type == "entity":
+                email_raw = fm.get("email")
+                if isinstance(email_raw, str) and email_raw.strip():
+                    canonical_email = email_raw.strip()
+                    # Keep FK satisfied even if the person hasn't shown up as a
+                    # participant yet (new entity, not-yet-compiled emails).
+                    try:
+                        _upsert_user(conn, email=canonical_email, display_name=title)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "catalog_sync_user_upsert_failed",
+                            email=canonical_email,
+                            error=str(exc),
+                        )
+                        canonical_email = None  # drop to NULL rather than violate FK
+            try:
+                _upsert_wiki_page(
+                    conn,
+                    slug=page_abs.stem,
+                    path=str(page_abs),
+                    title=title,
+                    page_type=page_type,
+                    status=status,
+                    canonical_user_email=canonical_email,
+                )
+                synced += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "catalog_sync_upsert_failed",
+                    path=str(page_abs),
+                    error=str(exc),
+                )
+        conn.commit()
+    return synced
+
+
 def _validate_touched_pages(pages: list[Path], wiki_dir: Path) -> dict[Path, list[ValidationError]]:
     """Run the per-page validator against each touched page. Returns a
     page→errors map for pages that have at least one error.
@@ -1016,6 +1116,7 @@ def main(
                 # through silently.
                 touched_pages = _iter_touched_pages(batch_start, Path(wiki_dir))
                 normalized = _normalize_touched_pages(touched_pages, Path(wiki_dir))
+                catalog_synced = _sync_wiki_catalog(touched_pages, Path(wiki_dir))
                 errors_by_page = _validate_touched_pages(touched_pages, Path(wiki_dir))
                 if errors_by_page:
                     logger.warning(
@@ -1033,7 +1134,8 @@ def main(
                     suffix_parts.append(f"{missing} missing from catalog")
                 suffix_parts.append(
                     f"normalized {len(normalized)} pages, "
-                    f"{len(errors_by_page)} with validator errors"
+                    f"{len(errors_by_page)} with validator errors, "
+                    f"catalog_synced {catalog_synced}"
                 )
                 cache = cache_cb.snapshot()
                 served = ",".join(cache["served_models"]) or cache["requested_model"]
