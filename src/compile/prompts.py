@@ -215,6 +215,37 @@ Bad draft cases (make a real page instead):
 - The email clearly names a single new topic with sections to fill in.
 - The person is a new entity — use `create_entity`, not drafts.
 
+## When to log_insight
+
+`log_insight` is your one channel to flag things humans need to look at.
+It does NOT change the wiki — it records a structured note the
+coordinator surfaces at batch-end. If any category below fits what you
+just hit, call `log_insight(category, message, email_path?, suggested_action?)`
+before moving on — do not silently skip, and do not gripe in the wiki
+body.
+
+Pick the single best-fitting category:
+
+- `topic_merge_candidate` — two existing topic/system pages look like
+  duplicates of the same concept (near-identical sources, overlapping
+  prose). Name both slugs in the message.
+- `question_for_human` — a genuine ambiguity only a human can resolve
+  (e.g. "is this mailing list a system page or a topic page?").
+- `prompt_ambiguity` — this prompt's guidance is unclear or
+  contradictory for the case you just hit. Quote the sentence.
+- `tool_gap` — you'd have used a tool that doesn't exist (e.g.
+  "needed a tool to search wiki pages by date"). Describe what you
+  were trying to do.
+- `supersession_doubt` — you suspect supersession but the evidence is
+  weak. Write the conflict page AND flag this so a human can later
+  promote it to explicit supersession if confirmed.
+- `structure_suggestion` — a wiki-structure observation (e.g. "entities
+  index is missing three people who recur across 20+ threads").
+
+Keep the `message` to 1-2 sentences. `email_path` is the raw email this
+is about when applicable. `suggested_action` is a concrete next step
+("merge foo.md into bar.md"), not another open question.
+
 ## Wikilink rules — CRITICAL
 
 Every `[[wikilink]]` target MUST be:

@@ -161,12 +161,20 @@ def test_write_audit_includes_blockers_and_ack(tmp_path: Path) -> None:
 
 
 def test_critique_handles_malformed_frontmatter(tmp_path: Path) -> None:
+    """Genuinely malformed (missing closing fence) must flag fence-count.
+
+    A page with a valid 2-fence frontmatter PLUS a `---` horizontal rule
+    in the body is NOT malformed — see `cae7f4c` (P0 fix), which moved
+    the check from a raw `---` count to `split_frontmatter`'s result.
+    The fixture here is a genuinely broken page: opening fence, no
+    closing fence, so `split_frontmatter` returns empty frontmatter text.
+    """
     wiki = tmp_path / "wiki"
     page = wiki / "topics" / "bad.md"
     page.parent.mkdir(parents=True, exist_ok=True)
-    # Three fences = corrupted
+    # Opening fence only — no closing `---`
     page.write_text(
-        "---\ntitle: Bad\npage_type: topic\nstatus: current\n---\n\nsome body\n\n---\nextra\n",
+        "---\ntitle: Bad\npage_type: topic\nstatus: current\n\nbody with no closing fence\n",
         encoding="utf-8",
     )
     result = critique_pages([page], wiki, tmp_path)
