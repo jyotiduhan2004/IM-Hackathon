@@ -296,6 +296,17 @@ Publish the current local `wiki/` to the deployed viewer:
 make publish          # mkdocs build → rsync to GCS → redeploy Cloud Run
 ```
 
+To combine compile + publish in one step, pass `--deploy` to `compile_all.py` —
+the coordinator will invoke `make publish` automatically after a successful run
+(and skip it on a killed/failed run so you never ship a partially-compiled
+wiki). Use `--deploy-force` to skip the `validate_wiki` gate, equivalent to
+`make publish-force`.
+
+```bash
+uv run python scripts/compile_all.py --deploy          # compile + publish
+uv run python scripts/compile_all.py --deploy-force    # skip validator gate
+```
+
 Defaults target project `voice-eval-stack-im`, region `asia-south1`, bucket
 `indiamart-email-kb`, service `email-kb-viewer`, and IAP domain `indiamart.com`.
 Override via env vars (`GCP_PROJECT`, `GCP_REGION`, `GCP_BUCKET`, `GCP_SERVICE`,

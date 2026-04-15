@@ -452,6 +452,26 @@ def _group_by_thread(
         "the whole compile loop."
     ),
 )
+@click.option(
+    "--deploy",
+    is_flag=True,
+    default=False,
+    help=(
+        "After a successful compile, run the publish-gate + rsync wiki to GCS "
+        "+ redeploy Cloud Run viewer (equiv of `make publish`). No-op if the "
+        "run did not complete successfully (killed / failed)."
+    ),
+)
+@click.option(
+    "--deploy-force",
+    is_flag=True,
+    default=False,
+    help=(
+        "After a successful compile, deploy EVEN IF validate_wiki has errors "
+        "(equiv of `make publish-force`). Use only when you know the errors "
+        "are pre-existing and not introduced by this run."
+    ),
+)
 def main(
     batch_size: int,
     limit: int | None,
@@ -460,8 +480,16 @@ def main(
     model_pool: str | None,
     recursion_limit: int,
     batch_timeout: int,
+    deploy: bool,
+    deploy_force: bool,
 ) -> None:
-    """Compile uncompiled raw emails into wiki pages using Deep Agents."""
+    """Compile uncompiled raw emails into wiki pages using Deep Agents.
+
+    Pass ``--deploy`` (or ``--deploy-force``) to run ``make publish`` /
+    ``make publish-force`` after the compile loop. The deploy step only
+    fires when ``run_status == "completed"`` — a killed/failed run will
+    skip it so operators don't publish a partially-compiled wiki.
+    """
     import random
     import time
 
@@ -666,8 +694,7 @@ def main(
                 # notes column and the run looks silently broken.
                 if isinstance(e, concurrent.futures.TimeoutError):
                     err_msg = (
-                        f"TimeoutError: batch exceeded {batch_timeout}s "
-                        f"(thread={thread_id[:12]})"
+                        f"TimeoutError: batch exceeded {batch_timeout}s (thread={thread_id[:12]})"
                     )
                 else:
                     # str(e) is empty for some zero-message exception types;
@@ -753,6 +780,39 @@ def main(
             click.echo(f"This run cost: ${delta:.4f}")
 
     click.echo(f"\nDone. Processed {processed}/{total} emails.")
+
+    # Optional: publish the freshly-compiled wiki to Cloud Run. Only fires
+    # on a clean 'completed' run. KeyboardInterrupt re-raises through the
+    # `finally:` above so deploy never runs on Ctrl+C. Uncaught exceptions
+    # that escape the loop likewise bubble past this block. The elif below
+    # is defensive — reached only if a future refactor surfaces a non-
+    # 'completed' run_status into this code path.
+    if (deploy or deploy_force) and run_status == "completed":
+        import subprocess
+
+        target = "publish-force" if deploy_force else "publish"
+        click.echo(f"\n=== Deploy: running `make {target}` ===")
+        try:
+            result = subprocess.run(
+                ["make", target],
+                cwd=REPO_ROOT,
+                check=False,  # we want to handle failure, not raise
+            )
+            if result.returncode == 0:
+                click.echo("Deploy succeeded.")
+            else:
+                click.echo(
+                    f"Deploy failed (make {target} exited {result.returncode}). "
+                    "Wiki is NOT updated on Cloud Run."
+                )
+                sys.exit(result.returncode)
+        except FileNotFoundError:
+            click.echo("Deploy skipped: `make` not found on PATH. Run `make publish` manually.")
+    elif (deploy or deploy_force) and run_status != "completed":
+        click.echo(
+            f"\nDeploy skipped — run_status={run_status!r} (deploy runs only "
+            "after a clean 'completed' run)."
+        )
 
 
 if __name__ == "__main__":
