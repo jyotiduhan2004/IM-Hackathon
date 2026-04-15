@@ -251,3 +251,45 @@ def test_deploy_failure_propagates_exit_code(compile_all_module, monkeypatch, tm
     assert result.exit_code == 7, result.output
     make_calls = [c for c in calls if c[0] and c[0][0] == "make"]
     assert make_calls and make_calls[0][0] == ["make", "publish"]
+
+
+def test_deploy_missing_make_exits_non_zero(compile_all_module, monkeypatch, tmp_path):
+    """When ``--deploy`` is requested but ``make`` is not on PATH, compile_all
+    must exit non-zero. Silently "skipping" the deploy reports success even
+    though Cloud Run is still stale — operators / CI need to see the failure.
+    """
+    mod = compile_all_module
+    raw_dir = tmp_path / "raw"
+    wiki_dir = tmp_path / "wiki"
+    _seed_raw(raw_dir)
+    calls: list[tuple] = []
+
+    def fast(**_kwargs):
+        return {"messages": []}
+
+    _patch_main_dependencies(mod, monkeypatch, raw_dir, wiki_dir, fast, calls)
+
+    # Swap subprocess.run to raise FileNotFoundError on the `make` invocation
+    # (simulating `make` missing from PATH) while letting any non-make call
+    # through to the default stub behaviour.
+    def _fake_run(cmd, *args, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd and cmd[0] == "make":
+            raise FileNotFoundError(2, "No such file or directory: 'make'")
+        return _FakeResult(returncode=0, stdout="validator stub", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    result = CliRunner().invoke(
+        mod.main,
+        ["--batch-size", "1", "--batch-timeout", "10", "--deploy"],
+        catch_exceptions=False,
+    )
+    # Exit must be non-zero so CI/operators notice the missing toolchain.
+    assert result.exit_code != 0, (
+        f"expected non-zero exit when make is missing, got {result.exit_code}: {result.output}"
+    )
+    # The coordinator should have attempted to invoke `make publish` before
+    # giving up (that's where it discovers make is missing).
+    make_calls = [c for c in calls if c[0] and c[0][0] == "make"]
+    assert make_calls and make_calls[0][0] == ["make", "publish"]

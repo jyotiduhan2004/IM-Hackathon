@@ -807,7 +807,17 @@ def main(
                 )
                 sys.exit(result.returncode)
         except FileNotFoundError:
-            click.echo("Deploy skipped: `make` not found on PATH. Run `make publish` manually.")
+            # Operator explicitly asked to deploy but the toolchain is missing.
+            # Exit non-zero so CI/operators notice instead of silently leaving
+            # Cloud Run stale.
+            logger.error("deploy_toolchain_missing", target=target)
+            click.echo(
+                f"Deploy FAILED: `make` not found on PATH (cannot run `make {target}`). "
+                "Install `make` or run the deploy step manually. "
+                "Wiki is NOT updated on Cloud Run.",
+                err=True,
+            )
+            sys.exit(1)
     elif (deploy or deploy_force) and run_status != "completed":
         click.echo(
             f"\nDeploy skipped — run_status={run_status!r} (deploy runs only "
