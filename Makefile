@@ -4,10 +4,11 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-setup: ## First-time setup: install uv, sync deps
+setup: ## First-time setup: install uv, sync deps, install pre-commit hooks
 	@command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
 	uv sync
 	cp -n .env.example .env 2>/dev/null || true
+	uv run --with pre-commit pre-commit install
 	@echo "Setup complete. Edit .env with your API keys."
 
 sync: ## Sync dependencies

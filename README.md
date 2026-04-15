@@ -88,9 +88,12 @@ knowledge — not raw fragments.
 ```bash
 git clone https://github.com/indiamart-ai/email-knowledge-base.git
 cd email-knowledge-base
-uv sync
-cp .env.example .env  # edit with your API keys
+make setup  # installs uv deps, copies .env, and wires pre-commit hooks
 ```
+
+`make setup` runs `pre-commit install` so the merge-conflict and syntax
+hooks in `.pre-commit-config.yaml` execute on every `git commit`, matching
+the checks enforced in CI.
 
 Linked git worktrees automatically fall back to the main checkout's `.env` if
 the worktree does not have its own copy.
