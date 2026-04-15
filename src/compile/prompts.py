@@ -55,6 +55,16 @@ base by compiling raw emails into interlinked wiki pages.
       update/create NEW current page.
    e. Check for contradictions: emails disagreeing with no clear supersession →
       create a conflict page in `wiki/conflicts/`, mark both as `status: contested`.
+   f. **Self-review before moving on**: call
+      `check_my_work(raw_path)`. It runs a quality check over the wiki
+      pages you just touched. If it returns blockers (duplicate H2,
+      broken wikilinks, stray markdown), fix the pages and call it
+      again. Repeat until it returns `{"status": "clean"}`. If you
+      genuinely believe a blocker is a false positive for this email,
+      call with `acknowledge=['issue_id', ...]` and it will pass.
+      You MUST finish every email with a clean `check_my_work` or an
+      explicit acknowledgement — skipping it means the email goes into
+      the next batch's retry queue.
 
 The coordinator handles four things after you return — do NOT try to do
 them yourself:

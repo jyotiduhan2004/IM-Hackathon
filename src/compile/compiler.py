@@ -215,20 +215,116 @@ def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
 
 
 @tool
-def mark_as_compiled(file_path: str) -> dict[str, str | int]:
-    """Mark a raw email as compiled. Call ONLY after the email's content has
-    been merged into the correct wiki pages.
+def check_my_work(
+    file_path: str,
+    acknowledge: list[str] | None = None,
+) -> dict[str, Any]:
+    """WHEN TO USE: Call this as the last step of compiling each raw email,
+    before moving on to the next one. It runs a quality review over every
+    wiki page that cites this email as a source and either gives you a
+    punch list to fix, or confirms you're done.
 
-    Records the transition in the Postgres `messages` table. The raw file
-    itself is NOT modified — the legacy `compiled:` field in raw frontmatter
-    is dead state as of the catalog migration.
+    WHEN NOT TO USE: Don't call before writing the wiki pages. Don't call
+    when you haven't touched any page for this email. This is not a search
+    or lookup tool.
+
+    What it checks: malformed frontmatter, duplicate H2 headings
+    (most often caused by appending instead of merging), broken wikilinks
+    (pointing to pages that don't exist), stray markdown brackets,
+    H1-in-body (title belongs in frontmatter). Blockers fail the check;
+    warnings are advisory.
+
+    Feedback loop (single-thread, same session):
+      1. Finish writing. Call `check_my_work(raw_path)`.
+      2. If `blockers` is empty → you're done with this email. Move on.
+      3. If `blockers` is non-empty → edit the flagged pages to resolve
+         each one (usually a merge or a broken link to fix). Call the
+         tool again. Repeat until clean.
+      4. If you genuinely believe a blocker is a false positive for this
+         context, call again with ``acknowledge=['id1','id2']`` — the
+         check treats those IDs as intentional and passes.
+
+    Every call writes an audit file to
+    ``docs/audits/critique-<ISO>-<msgid>.md`` so the operator can sample
+    how often blockers surfaced, what you fixed, and what you acked.
+
+    NOTE: This tool does NOT flip DB state. The coordinator
+    (``scripts/compile_all.py``) programmatically marks messages compiled
+    after your session returns, based on citation + this audit trail. Your
+    job is just to make the check come back clean.
 
     Args:
         file_path: Path to the raw email markdown file
-            (e.g., "raw/2026-04-11_foo_abc12345.md").
+            (e.g., ``"raw/2026-04-11_foo_abc12345.md"``).
+        acknowledge: Optional list of issue IDs from a prior blocked call
+            that you've decided are false positives.
 
     Returns:
-        Dict with "ok" (bool), "remaining_uncompiled" (int count), "path" (str).
+        ``{"ok": "true", "status": "clean", "warnings": N, "audit": path}``
+          when blockers are resolved or acknowledged, OR
+        ``{"ok": "false", "status": "blocked", "issues": [{id, check,
+        page, message}, ...], "audit": path, "hint": ...}`` when action
+        is required.
+    """
+    from src.compile.critique import critique_pages
+    from src.compile.critique import find_touched_pages
+    from src.compile.critique import write_audit
+
+    repo_root = Path.cwd()
+    wiki_dir = repo_root / "wiki"
+    audit_dir = repo_root / "docs" / "audits"
+
+    touched = find_touched_pages(file_path, wiki_dir)
+    result = critique_pages(touched, wiki_dir, repo_root)
+
+    ack_ids = set(acknowledge or [])
+    unresolved = [i for i in result.blockers if i.id not in ack_ids]
+
+    if unresolved:
+        audit_path = write_audit(result, file_path, "blocked", audit_dir, acknowledged_ids=ack_ids)
+        logger.info(
+            "check_my_work blocked",
+            file_path=file_path,
+            blockers=len(unresolved),
+            audit=str(audit_path),
+        )
+        return {
+            "ok": "false",
+            "status": "blocked",
+            "issues": [
+                {
+                    "id": i.id,
+                    "check": i.check,
+                    "page": i.page,
+                    "message": i.message,
+                }
+                for i in unresolved
+            ],
+            "audit": str(audit_path.relative_to(repo_root)),
+            "hint": (
+                "Edit the flagged pages to fix each blocker (usually: "
+                "merge duplicate H2 sections, resolve broken wikilinks, "
+                "remove stray brackets) and call check_my_work again. "
+                "If a blocker is genuinely a false positive, call with "
+                "acknowledge=['issue_id', ...] to proceed."
+            ),
+        }
+
+    audit_path = write_audit(result, file_path, "clean", audit_dir, acknowledged_ids=ack_ids)
+    return {
+        "ok": "true",
+        "status": "clean",
+        "warnings": len(result.warnings),
+        "audit": str(audit_path.relative_to(repo_root)),
+    }
+
+
+@tool
+def mark_as_compiled(file_path: str) -> dict[str, str | int]:
+    """Mark a raw email as compiled in the Postgres catalog. NOT exposed to
+    the agent — kept importable for manual ops. The coordinator
+    (``scripts/compile_all.py``) marks batches deterministically after the
+    agent returns.
     """
     from src.db.messages import find_by_raw_path
     from src.db.messages import finish_message_compile
@@ -1042,6 +1138,12 @@ def create_compiler(
     # and log calls roughly half the time, leaving pages with stale
     # timestamps and gaps in the audit trail). All four functions remain
     # importable for one-off manual use.
+    #
+    # `check_my_work` IS exposed — it runs a quality critique over the
+    # wiki pages sourcing a just-compiled email and returns a punch list
+    # the agent can fix in-session before moving on. It does NOT flip
+    # compile state; it's a self-review gate. The coordinator marks
+    # programmatically post-batch as before.
     return create_deep_agent(
         model=model,
         tools=[
@@ -1052,6 +1154,7 @@ def create_compiler(
             create_entity,
             write_draft_page,
             log_insight,
+            check_my_work,
         ],
         system_prompt=system_prompt,
         backend=backend,
