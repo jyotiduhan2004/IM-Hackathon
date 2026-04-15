@@ -1,0 +1,2359 @@
+# Backlog — "For later" ideas and open questions
+
+Not scheduled, just captured so we don't forget. Promoted to issues when we pick
+them up.
+
+---
+
+## Status dashboard — what landed, what's in flight (2026-04-14 evening)
+
+Snapshot of delivery vs plan. Update this section whenever a PR merges or a
+new worker is dispatched.
+
+### ✅ Shipped in last 24h (retires / progresses backlog items)
+
+| PR / commit | What it delivered | Backlog items it closes or advances |
+|---|---|---|
+| `93802de` + `88069fc` | `resolve_page` tool backed by `wiki_pages` catalog | **Agent tooling audit** — closes the `find_related_pages` gap (#3) |
+| `82dc543` + `f57a3c1` + `c20cad4` | Per-batch stall detection via `--batch-timeout` | **Stuck-run recovery** — the batch-level watchdog half of the plan (I shipped the complementary 120s per-call timeout on `ChatOpenAI`) |
+| `340516f` + `4e2e120` + `aa6aaef` | Hidden `wiki/_drafts/` folder for unresolved page creation | **Auto-stub strategy** — the landed approach is "redirect unresolved `[[links]]` to drafts", a clever alternative to my original "strip brackets" plan. Supersedes that proposal. |
+| `04d9209` + `cca9285` + `e57a7ad` + `3737352` | Per-tool-call telemetry logging | **Agent tooling audit** — observability gap — closes "no tool-call trace" by emitting structured per-call events to Postgres |
+| `9f7c4ec` + `0056a73` | Validator section-template check with `--strict-sections` | **Format consistency** — lead/section enforcement half of the validator side |
+| `d4152e3` + `fdda84e` + `8d70094` | `find_new_sources` tool with filter-aware DB query; `list_uncompiled_emails` deprecated on agent | **Agent tooling audit** — closes the `get_thread_context` gap (#2) AND the `list_uncompiled_emails` 1.3M-token footgun |
+| `23e0a73` + `2eeee82` | `log_insight` tool + `compile_insights` table + batch digest | **Agent tooling audit** — gives the agent an escape hatch for "things the reader should know but don't fit any page"; per-batch digest helps audit drift |
+| `b297a30` + `b93f922` | Per-page metadata header (sources / last-compiled / status) in mkdocs viewer | **North-star** — reader-facing provenance signal |
+| `a88dbe5` | Visible marker for excluded attachments in viewer | Housekeeping |
+| `4dc9796` + `4b14575` + `25cd7b8` | Explicit mkdocs nav with 'Products & Platforms' label; index-page exemption in lint/validator | **North-star** — navigation shape per Phase 1 plan |
+
+### 🚧 Open PRs (human review or awaiting gate)
+
+| PR | Branch | State | Notes |
+|---|---|---|---|
+| #66 | `feat/prompt-taxonomy` (mine) | CLEAN | Bundles publish-gate + glm-5.1 drop + glm-4.6 drop + 120s timeout + all today's backlog entries. Ready to merge. |
+| #65 | `codex/fix-langfuse-setup` | UNKNOWN | Claims to fix Langfuse in worktrees — would retire the "observability gap" around Langfuse-disabled if the OTLP-hang issue (#17) is actually resolved |
+| #64 | `codex/user-personas-followup` | UNKNOWN | "Add personas and knowledge flow audit" — potential overlap with the North-star doc I landed earlier today. Needs review for duplication. |
+
+### 🌙 Overnight workers (just dispatched, in isolated worktrees)
+
+Three independent PRs being prepared right now:
+
+| Worker | Branch | Scope | Backlog items it ships |
+|---|---|---|---|
+| A — Light format | `feat/light-format` | (a) 5-rule light-format prompt section, (b) `scripts/format_wiki.py` idempotent normalizer, (c) validator additions: exactly-2-fences check + lead-paragraph check, (d) unit tests | **Format consistency** — full stack above the partial validator that landed in `9f7c4ec` |
+| B — Evidence gate | `feat/entity-evidence-gate` | Add evidence-strength check inside `src/compile/entities.py::create_entity_page` — refuse CC-only stubs unless `force=True`; tool signature + prompt update + tests | **`create_entity` evidence gate** (entire entry) |
+| C — Auto-stub cleanup | `feat/auto-stub-cleanup` | Gate `create_missing_stubs` behind `--create-stubs` flag (stops the bleed from `make lint-wiki-fix`); new `scripts/cleanup_auto_stubs.py` for the one-shot delete of ~26 existing stub pages; catalog resync | **Auto-stub strategy** — commits 1 and 3 of the 3-commit plan (codex advised against commit 2, silent stripping, so it's deferred/dropped) |
+
+Each worker opens a PR against `main` when done. Landing them separately keeps reviews focused.
+
+### 🔜 What's still NOT shipped (remaining in backlog)
+
+- **Hierarchy + progressive disclosure** (auto-hierarchy inference, auto-merge candidates, auto-split proposals, mkdocs admonition-based progressive reveal)
+- **Glossary seed** — 10-30 acronyms as a one-page reference, links from first-use
+- **Domain hubs** — `wiki/domains/<domain>.md` auto-generated from frontmatter
+- **Second-pass evergreen compilation** (the synthesis prompt that rewrites chronological pages as timeless references)
+- **Ownership / teams pages** — derived from `message_participants` clustering
+- **ADR / decisions category** — new `page_type: decision`
+- **Semantic tags** — `domains:`, `audience:`, `concern:`, `lifecycle:` frontmatter schema
+- **Progress tracker CLI** — `compile_status.py` single-command dashboard (separate backlog entry)
+- **`compile_attempts` instrumentation fix** — column stays at 0, small DB write-path bug
+
+### Where the backlog entries below fit
+
+Every numbered entry below should be readable with this dashboard in mind.
+If an entry has a "**Status:**" header, trust the dashboard — it's the
+authoritative view.
+
+---
+
+## Wiki quality audit snapshot (2026-04-14)
+
+Live sample of 14 pages covering topics / entities / systems at varied sizes.
+Grounds the north-star doc in real examples. Use as an eval set when
+shipping format/validator/stub changes — re-audit these same pages after
+each intervention to see if quality actually moved.
+
+### 🌟 GOOD — aligned with strategy (reference quality bar)
+
+1. **`topics/bl-quality-agent.md`** (5.3KB, 2 sources)
+   - Wikipedia-style lead: *"The BL Quality Agent is an AI-powered system
+     that analyzes IndiaMART BuyLeads to detect quality issues…"* — perfect
+     definition sentence.
+   - Sections: Overview / Model & Architecture / Performance Metrics
+     (accuracy 97.1%, precision 96.7%, recall 99.5%) / Rollout phases /
+     Example Corrections (real Offer IDs) / Prompt engineering iterations /
+     Timeline / Next Steps / Related People.
+   - Captures rationale + iteration history, not just outcomes.
+   - Even surfaces CEO feedback: *"Dinesh Agarwal flagged response speed:
+     'Too late response too slow'"*.
+   - **Violations**: agent-wrote `## Related People` (should be
+     auto-generated).
+
+2. **`topics/visual-moderation-api-launch-obscenity-nudity-regulation.md`**
+   (6.3KB, 1 source)
+   - Dense 4-model benchmarking tables (Gemini 2.5 Pro / Qwen 2.5 32B / 72B /
+     VL Max) across 4 moderation categories.
+   - Per-model accuracy, precision, recall, cost/request.
+   - Ongoing POC with Llama 3.2 90B listed as in-progress.
+   - Contributors grouped by role (Vision / Ideation / Guidance / Deployment /
+     Implementation) — rich ownership info.
+   - **Violations**: `## Key Contributors` is agent-authored.
+
+3. **`topics/lens-mobile-ui-upgrade-ab-test.md`** (2.4KB, 3 sources)
+   - Clean A/B-test writeup: setup, analysis method, impact numbers
+     (+2.81% engagement, +1.04% before/after), note on confounding (API
+     level changes causing dip), decision to scale to 100%.
+   - Captures concern raised later: *"amarinder raised concerns about
+     statistical significance"* — preserves the skeptical voice.
+   - **Violations**: no lead paragraph (opens with `## Overview`);
+     agent-written `## Related`.
+
+4. **`entities/nirbhay-jishtu-indiamart-com.md`** (3.5KB, 10 sources)
+   - Real Senior PM with cross-initiative footprint (GST/KYC blocker logic,
+     Instagram Photos, Mobile Company Varnish, Mobile PDP, MSite PDP HTML).
+   - Multiple "Activity" subsections under real projects.
+   - Inline references to teammates by slug.
+   - **Violations**: `## Related` at end duplicates inline links.
+
+### ⚠️ PARTIAL — good content, format violations
+
+5. **`topics/secondary-number-chat-display-barge-in-weberp.md`** (4.6KB)
+   - Rich: Business Objective, Background, Features Implemented, Testing
+     results (9/9 + 35/35 passed), Functional scenarios, Launch audit score,
+     Feedback (Dinesh + Chittresh quoted).
+   - **Violations**:
+     - Opens with `**Launch Date:** January 7, 2026` bold line, not a
+       definition sentence.
+     - Agent-written `## Related` bullet list at the end.
+
+6. **`topics/buyer-specs-scale-up-phase-2.md`** (1.3KB, 1 source)
+   - Strong metrics: 22,460 MCATs processed, +55.13% Buyer Filled ISQ/BL
+     improvement, 90% total BL coverage.
+   - **Violations**:
+     - No lead paragraph — opens with H2 `## Overview`.
+     - Agent-written `## Related Entities` + `## Related Systems` (two
+       redundant sections).
+
+7. **`topics/buylead-whatsapp-display.md`** (prior audit, 2.6KB)
+   - Covers BuyLead display/consumption on WhatsApp with real customer
+     feedback.
+   - **Violations**: separate `## Related Systems` AND `## Related` —
+     unclear why both; includes a link `[[whatsapp-9696-bot]]` which doesn't
+     resolve at that slug.
+
+8. **`systems/marketplace-launch.md`** (2.8KB, 15 sources)
+   - Documents the mailing list's purpose + recent activity.
+   - **Taxonomy issue**: per `CLAUDE.md`, systems = products/services/URLs/
+     mailing lists, so a mailing list CAN be a system — OK. But the page's
+     role (coordination mechanism) is arguably better as a topic describing
+     the coordination pattern.
+   - **Violations**: agent-written `## Related Topics` bullet list.
+
+### ❌ BAD — stubs, broken, or violate the six-month-new-joiner test
+
+9. **`systems/swagger.md`** (323B)
+   - Literal content: *"Stub page auto-created because [[swagger]] was
+     referenced but no page existed."*
+   - `sources: []`, `related: []`.
+   - Created by `scripts/lint_wiki.py::create_missing_stubs`.
+   - Reader value: zero. Fails six-month test outright.
+   - **Action**: delete in the auto-stub cleanup (see auto-stub strategy
+     backlog entry).
+
+10. **`systems/mesh-pg.md`** (423B, 1 source)
+    - Body is one sentence: *"PostgreSQL database system for Mesh platform,
+      consisting of 4 nodes."*
+    - **Violations**: too thin to justify a page — could fold into
+      `topics/mesh-pg-reindexing-4tb-disk-reclamation.md` as context.
+
+11. **`systems/tech-security-team.md`** (450B) — **CORRUPTED FRONTMATTER**
+    ```
+    sources:
+    - raw/2026-04-06_mplaunchim-informational
+    last_compiled: '...'
+    updated_by: z-ai/glm-4.6
+    update_count: 1
+    ---
+
+    transforming-sonarqube-_3b4ad89f.md
+    related:
+    - '[[sonarqube-quality-profile-transformation]]'
+    last_compiled: '...'
+    ---
+    ```
+    Filename got split across a newline; TWO `---` blocks appear. The page
+    has two frontmatter sections that partially parse. Slipped past the
+    validator because the first block parses as valid YAML.
+    - **Action**: `validate_wiki.py` should count `---` fence occurrences
+      and fail if not exactly 2.
+
+12. **`entities/gauri-mandlik-indiamart-com.md`** (639B, 1 source)
+    - Body: *"Recipient of BiRefNet launch announcement for Seller Manage
+      Product background removal"*.
+    - Being a recipient of ONE mailing-list announcement is not
+      entity-worthy per the evidence-strength rule.
+
+13. **`entities/shikha-prakash-indiamart-com.md`** (563B, 1 source)
+    - Body mentions Server Admin Team contribution with a ticket number,
+      but this person's whole wiki presence is one CC on a security
+      launch. Not entity-worthy.
+
+14. **`entities/saurabh-gupta3-indiamart-com.md`** (981B, presumably thin
+    given size — sampled for comparison)
+    **`entities/sahilpreet-singh-indiamart-com.md`** (915B)
+    **`entities/pramod-purohit-indiamart-com.md`** (886B)
+    **`entities/rameshwar-paryani-indiamart-com.md`** (342B)
+    **`entities/manay-shankar-indiamart-com.md`** (322B)
+
+    Cluster of thin entity pages. Sources vary from 1 to 8 but bodies are
+    ~1-3 lines ("Email: X. ## Contributions. - did Y once."). All fail
+    the evidence-strength test.
+
+### Summary of violations across the 14 samples
+
+| Violation | Count | Strategy rule violated |
+|---|---:|---|
+| Agent-written `## Related` / `## People` / `## Team` | 7 | Light format — inline-only |
+| No lead paragraph (page opens with H2) | 5 | Light format — lead required |
+| First sentence is not a definition | 6 | Light format — definition first |
+| Entity stub fails evidence test | 7 | Entity evidence strength |
+| Auto-stub system page | 1 (+N siblings) | Auto-stub policy |
+| Corrupted frontmatter | 1 | Validator too permissive |
+
+### Signal for planning
+
+- **Format violations are the most common** (7/14 have agent-written
+  Related sections). Ship **light-format prompt + formatter** first —
+  this single change fixes 50%+ of pages.
+- **Stubs dominate the noise** (8/14 or more are stubs or stub-adjacent).
+  Ship **evidence gate + auto-stub deletion** second — reduces the wiki's
+  visible noise by ~50%.
+- **Corrupted pages slip through** (1/14). Ship the **"exactly two `---`
+  fences" check** in validate_wiki.py — one-liner, catches a whole class.
+
+### How to re-use this sample
+
+After each intervention (formatter, evidence gate, validator rule),
+re-read this same 14-page sample and tally violations. If the count
+goes down, the intervention worked. If not, the change missed.
+
+Save subsequent snapshots as `docs/audits/wiki-quality-<ts>.md`.
+
+---
+
+## North-star — what this wiki is FOR (2026-04-14)
+
+This entry is the editorial brief. It answers: *what counts as wiki-worthy
+content, what stays in raw emails, what should a reader actually learn?*
+The compiler prompt, validator, and formatter should all trace their
+specific rules back to this document.
+
+### Purpose
+
+The wiki is a **company knowledge base for IndiaMART, compiled from email
+traffic**. It exists so that:
+
+- A new joiner can understand what IndiaMART builds, the systems involved,
+  and how the pieces connect — without reading 10,000 emails.
+- A PM or engineer scoping new work can check whether something has been
+  tried before, what the results were, and who owns the adjacent areas.
+- A leader can see what's shipped, what's planned, what's stuck.
+- A cross-team collaborator can find the right person to ask.
+
+It is **not** a ticketing system, a project tracker, or a replacement for
+source code / architecture docs. It is the **durable editorial layer**
+over conversational artifacts.
+
+### Reader personas and what they want
+
+| Persona | Primary question | Needs from the wiki |
+|---|---|---|
+| **New joiner** (month 1-3) | "What is `<X>`? Why does it exist? Who owns it?" | Clear definitions, ecosystem map, ownership, current state |
+| **Engineer investigating a regression** | "What changed in `<system>` recently? Known issues?" | Timeline / changelog, decisions, known bugs with context |
+| **PM scoping a feature** | "Has anyone tried `<X>`? What were the results?" | Past experiments, metrics, rationale, superseded ideas |
+| **Leader / exec** | "What shipped this quarter? What's stuck?" | Status / lifecycle rollups, open questions |
+| **Cross-team collaborator** | "Which team owns `<system>`? Who's the point person?" | Ownership pages, `owners:` frontmatter, entity pages |
+| **Auditor / compliance** | "What's our policy on `<thing>`? When did it change?" | Policy pages with supersession chains, timeline of changes |
+
+Every page should primarily serve one persona and **secondarily** the
+others. A topic page on "BL Quality Agent" primarily serves a PM/engineer
+scoping similar work; secondarily helps a new joiner who needs to know
+what BL Quality Agent is.
+
+### Signal vs noise — what belongs in the wiki
+
+**Leave in raw emails, do NOT extract to wiki:**
+
+- Scheduling: "can we meet at 4pm?", "moving this to next week"
+- Acknowledgments: "thanks", "got it", "will review"
+- Routing: "looping in @X", "+CC @Y"
+- Tactical asks without outcome: "please share the dashboard"
+- Status pings with no substance: "any update?"
+- Off-topic banter, birthday wishes
+- Raw metric dumps that are dashboards elsewhere (link to dashboard instead)
+- Information already in code / existing docs (don't duplicate)
+- Repeated questions already answered in the wiki
+- Per-ticket bug chatter (unless the bug has wiki-worthy root cause)
+
+**Extract to wiki, promote to first-class content:**
+
+- **Launches** — new feature, new system, new integration
+- **Decisions with rationale** — "we chose Gemini 2.5 Flash Lite over 2.0
+  because…" (the WHY matters more than the WHAT)
+- **Policy changes** — "we now allow / no longer allow X"
+- **Metrics with interpretation** — "23K buyleads corrected = 3.5% error rate
+  = 7% uplift in fill-rate"
+- **Roadmap / phased plans** — "Phase 1 was 30% rollout, Phase 2 is 100%"
+- **Post-mortems / learnings** — bug root cause + fix + prevention
+- **System architecture / how things work** — durable reference
+- **Ownership** — who owns what, who approves what
+- **Cross-cutting constraints** — SLAs, rate limits, compliance requirements
+- **Known gotchas / workarounds** — "ABC fails on `<edge case>`, use DEF"
+- **Definitions / glossary** — BL = BuyLead, MCAT = Merchandise Category, etc.
+
+**The six-month-new-joiner test** (the acceptance bar):
+
+> *"Will someone starting at IndiaMART six months from now benefit from
+> reading this page?"*
+
+If yes, extract. If no, leave in raw.
+
+This test filters out 80% of email chatter. The remaining 20% is the wiki
+corpus.
+
+### What a reader should learn
+
+#### At the ecosystem level
+
+After spending an hour in the wiki, a new joiner should understand:
+
+- **What business IndiaMART runs** — B2B marketplace
+- **Primary personas** — buyers, sellers, support / ops teams
+- **Core system families** — BuyLead (BL), MCAT taxonomy, PDP (product
+  detail page), PNS (private number service), LEAP CRM, M-site, marketplace
+  launch, WhatsApp integration (9696 bot), visual moderation, recommendation
+  systems, notification / alert pipelines, etc.
+- **How the core systems connect** — e.g. BLs flow through quality agent →
+  routed to sellers → consumed via WhatsApp
+- **Who owns what** — team/function per system family
+- **Cross-cutting concerns** — compliance (visual moderation), cost
+  (Gemini routing), performance (Varnish optimization), security (IP
+  whitelisting)
+
+Navigation aid: a single `wiki/ecosystem.md` or `wiki/domains/` hub giving
+the 10-minute ecosystem map.
+
+#### About a specific topic / system
+
+After reading one topic page, a reader should know:
+
+- **Definition** — one sentence, the first sentence of the lead paragraph
+- **Purpose** — why it exists, what problem it solves
+- **Current state** — live / beta / planned / deprecated
+- **Mechanics** — how it works (at whatever depth the source data supports)
+- **Metrics** — quantitative results, if measured
+- **History / Timeline** — major events, when they happened
+- **Decisions / rationale** — why this design and not something else
+- **Owners** — who to ask
+- **Open questions / planned work** — what's next
+- **Related topics / systems** — the neighborhood in the graph
+
+Not every page will have every bullet. Depth tracks source-material depth.
+
+#### About a specific person (entity)
+
+After reading an entity page, a reader should know:
+
+- **Role / function** — PM, engineer, QA, team lead
+- **What they work on / have worked on** — linked topics
+- **Team affiliation** — implicit via co-mentioned people
+- **How to contact** — email, sometimes ticket system
+- **Recent contributions** — traced via `sources:` and inline mentions
+
+An entity page is NOT an autobiography. It is a short "this is who they
+are in our context" reference. CC-only mentions do not warrant a page.
+
+#### About a policy
+
+After reading a policy page, a reader should know:
+
+- **What the rule is** — current state, in one paragraph
+- **When it was set / changed** — timeline of revisions
+- **Why it exists** — rationale
+- **What it supersedes / is superseded by** — lineage
+- **Scope / applicability** — who / what it applies to
+
+Policies are evergreen; every edit appends to history, never deletes.
+
+#### About a conflict
+
+After reading a conflict page, a reader should see:
+
+- **The two (or more) positions** — clearly attributed
+- **Source emails** — so a human can verify
+- **Current resolution status** — open / resolved / deprecated
+- **Which pages it affects** (linked, shown as `contested`)
+
+### What this implies for the compiler prompt
+
+Concrete prompt clauses that trace back to the above:
+
+1. *"Before creating a page, ask: would a new joiner six months from now
+   benefit from reading this? If not, skip the page and do not extract."*
+2. *"Capture decisions with their rationale — the 'why', not just the
+   'what'. A design that says 'we used X' is incomplete; 'we used X
+   because Y, having considered Z' is right."*
+3. *"Do not create entity pages for CC-only mentions, scheduling chatter,
+   or acknowledgment-only involvement. Strong evidence = From / To /
+   quoted signature / named leadership role."*
+4. *"If the information exists in code, dashboards, or existing wiki
+   pages, link to it rather than duplicating."*
+5. *"The first sentence of every topic page is a definition. If you can't
+   write a definition for the subject in one sentence, the subject
+   probably isn't a topic — revisit."*
+6. *"Every metric must be paired with interpretation. '23K corrected' is
+   noise; '23K corrected (= 3.5% error rate, in line with model
+   precision)' is signal."*
+
+### What this implies for tooling
+
+- **Validator** — enforce: topic pages have a lead paragraph ≥2 sentences
+  starting with a definition; entity pages have `sources:` ≥ 2 OR
+  evidence of From/To participation (from `message_participants` table);
+  policy pages have a `current state` section and a `history` table.
+- **Content-selector** (new, before compile) — a "is this batch
+  wiki-worthy?" gate. Classify the thread by signal markers (launch,
+  decision, policy, post-mortem) OR bail. Saves compile cost on pure-
+  scheduling threads.
+- **Rollup generators** — hub pages per domain, ecosystem map, ownership
+  rollup, weekly digest — all generated from frontmatter, not authored
+  by the compile agent.
+- **Glossary** — seed with ~30 acronyms (BL, MCAT, PDP, PNS, LEAP,
+  ISQ, BLS, PMS, etc.). Agent required to use `[[glossary#BL]]` or link
+  on first use.
+
+### What this implies for measurement
+
+We should be able to answer, from the catalog:
+
+- % of compiled emails that produced a net-new topic page (vs enrichment)
+- Avg sources per topic page (higher = better synthesis)
+- Stub rate by page_type (target: entities <20%, systems <10%, topics <5%)
+- Domain coverage — how many topic pages exist per domain hub
+- Orphan rate — pages with zero inbound links (target: near 0 for topics)
+- Age of `last_compiled` per page (stale pages need re-enrichment)
+
+Add these to `scripts/audit.py` once the concept is stable.
+
+### How this composes with earlier backlog entries
+
+- **Topic format (light, 5 rules)** — the syntactic contract
+- **Auto-stub strategy / create_entity evidence gate** — the noise filter
+  at write time
+- **Agent tooling audit** — the gaps to fill so the agent can execute
+  the above efficiently (e.g. `get_page_summary` supports the
+  "would-a-new-joiner-benefit" check; `resolve_page` supports "link to
+  existing, don't duplicate")
+- **Two-pass compilation / evergreen rewrite** — operationalizes the
+  "synthesis, not chronology" norm from above
+
+This north-star doc is the *why*. The other backlog entries are the *how*.
+
+---
+
+## Agent tooling audit — gaps, token-heavy returns, observability (2026-04-14)
+
+**Context.** Diagnosing why glm-4.6 fails 52% of batches (while minimax-m2.7 and
+glm-5 succeed ~95%) led to a full inventory of what the agent has vs what it
+needs. We have almost no trace-level visibility — `LANGFUSE_ENABLED=false` —
+so everything below is inferred from batch-outcome stats across 105 successful
++ 30 failed batches in the last 24h.
+
+### Tools the agent actually has
+
+Wired in `src/compile/compiler.py::create_compiler`:
+```
+tools=[
+    list_uncompiled_emails,  # custom (DB-backed)
+    list_wiki_pages,         # custom (filesystem scan)
+    create_entity,           # custom (email-deterministic)
+]
+backend=FilesystemBackend(root_dir=cwd, virtual_mode=True)
+```
+
+`FilesystemBackend` injects these 6 via
+`.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py`:
+`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`. `execute` is
+listed but `FilesystemBackend` doesn't implement `SandboxBackendProtocol`,
+so it returns "not supported" (safe).
+
+**Total effective toolbox = 9 tools.** Three custom + six filesystem.
+
+### What each tool gives us (by info-return quality)
+
+| Tool | Returns | Info quality | Notes |
+|---|---|---|---|
+| `list_uncompiled_emails` | list[dict]: path/date/subject/from/thread_id | **GOOD** — enough to plan | But unbounded: 6,400+ rows when called. See token-heavy below. |
+| `list_wiki_pages` | dict[category, list[stem]] | **WEAK** — names only, no page_type / status / sources count / last_compiled | Agent has to read each file to learn anything about it |
+| `create_entity` | `{ok, slug, path, created, email}` | **GOOD** — plus "created: true/false" distinguishes new stub from existing | Missing: whether existing page has body or is a placeholder |
+| `ls` | list of names | **WEAK** — identical to `list_wiki_pages` limits |
+| `read_file` | first 100 lines by default | **MEDIUM** — 100-line default truncates long topic pages silently; agent must re-read with offset |
+| `write_file` | success/failure | OK |
+| `edit_file` | success/failure | OK — no "here's what changed" report |
+| `glob` | list of paths | **GOOD** — fast discovery |
+| `grep` | paths / content / count modes | **GOOD** — the underused search tool |
+
+### Gaps — what we don't have
+
+High-leverage missing capabilities (ordered by expected impact on turn count):
+
+1. **`get_page_summary(path) -> {type, status, sources_count, last_compiled, h2_headings, ~200-char snippet}`**
+   Solves the biggest inefficiency: agent `read_file`s every page it considers
+   touching just to check "does this need updating?" Summary avoids full-page
+   reads in the discovery phase.
+
+2. **`get_thread_context(thread_id) -> {message_count, date_range, subjects, participants, already_cited_pages}`**
+   Current flow: agent reads each raw email individually. We have this data in
+   Postgres (`messages` + `message_participants` + `message_touched_pages`) —
+   a single SQL query replaces N read_file calls.
+
+3. **`find_related_pages(slug_or_email) -> list[path]`**
+   Reverse-index lookup. Agent trying to cross-link often reads 5-10 pages to
+   find which ones are topical kin. Could drive off `related:` frontmatter +
+   `message_touched_pages` join.
+
+4. **`propose_page(frontmatter_dict, body_md) -> {validated: bool, errors: list, preview: str}`**
+   Dry-run validation so the agent sees frontmatter errors BEFORE writing
+   (current: write → silent broken-YAML state → gets caught post-hoc by the
+   cleanup we ran earlier). Also forces a structured contract on the agent's
+   output.
+
+5. **`list_entity_by_email(email)` — already partially exists via `create_entity`'s lookup path.**
+   Exposing "just resolve, don't create" would let the agent query the canonical
+   slug without the side-effect of stub creation.
+
+### Token-heavy tools — cost risk
+
+| Tool | Risk | Why |
+|---|---|---|
+| `list_uncompiled_emails` | **CRITICAL** if the agent calls it | Returns ALL 6,400+ pending rows × 5 fields ≈ 1.2 MB. Each row is ~200 tokens. Full dump = ~1.3M tokens. The COORDINATOR calls this; we should **remove it from the agent's tool list** to prevent accidental invocation. |
+| `list_wiki_pages` | **HIGH** | 587 pages × ~15 chars per stem ≈ 10 KB per call. Called at the start of every batch. Per-batch ~3 KB tokens. Over 50 batches = 150 KB tokens. Could paginate by category or return a count + sample. |
+| `read_file` default | **MEDIUM** | First 100 lines ≈ 3-5 KB per call. Long topic pages (kundan-kishore, shivam-jha before cleanup) were 100-500 lines; agent had to offset-read 2-5x to see the whole thing. |
+| `grep content` mode | **MEDIUM** | Context lines can balloon. Default mode `files_with_matches` is lean; if agent picks content mode unwittingly, cost climbs. |
+| `create_entity` | **LOW** | Tiny in, tiny out (`{ok, slug, path, created, email}`). Ideal shape. |
+
+### Observability gaps — we're not seeing agent's doubts
+
+- **No tool-call trace** — Langfuse disabled (OTLP-hang issue #17). We see cache
+  stats + turn count but not "at step 45, agent called `read_file` on X then
+  `grep`ed for Y". So when glm-4.6 hits the 120-step ceiling, we don't know if
+  it's looping on the same file, retrying failed edits, or burning steps on
+  novel exploration.
+- **`wiki/log.md`** is an outcome log, not a trace log. One line per batch saying
+  "compiled / partial / failed".
+- **`compile_attempts` column is stuck at 0** — the claim logic increments it
+  but the post-batch path doesn't read it; no retry visibility in audits.
+- **Failure reasons are just strings** ("Recursion limit reached") with no
+  classification (loop-on-read vs edit-retry vs tool-error-retry).
+
+### Recommended order of attack
+
+1. **Remove `list_uncompiled_emails` from agent tool list** (5 min). Zero risk —
+   coordinator already handles it; agent never needs this. Eliminates a 1.3M-
+   token footgun.
+2. **Enable Langfuse on a 1-batch scoped run** with glm-4.6 to capture a full
+   trace and see *what* it loops on. ~30 min including the known OTLP-hang
+   review.
+3. **Ship `get_page_summary`** (1-2 hr). Biggest turn-reduction lever. Uses
+   existing `wiki_pages` table.
+4. **Ship `get_thread_context`** (1-2 hr). One SQL query replaces N read_file
+   calls on thread-grouped batches.
+5. **Paginate / summarize `list_wiki_pages`** (30 min). Return `{topics: 119,
+   entities: 354, systems: 59}` counts by default; require explicit category
+   arg for the full list.
+6. **Fix `compile_attempts` instrumentation** (10 min). Small DB write path
+   bug. Makes retry visibility real.
+
+Do NOT do:
+- Invent `search_wiki` — `grep` already is search. Document that in the prompt.
+- Add `execute` / shell — explicitly unsupported by `FilesystemBackend`.
+- Ship middleware before #2 tells us what the loops actually look like — we'd
+  be guessing at the fix.
+
+---
+
+## `create_entity` has no evidence gate (2026-04-14, related to auto-stub)
+
+**Observation** (from live compile audit 2026-04-14): the agent is still
+creating entity stubs for CC-only mentions even though PR #66 landed the
+Phase 1 "entity evidence strength" prompt rules (via `d44d39a` + `b10f52a`).
+Examples from a run launched 30 min after those rules landed:
+
+- `wiki/entities/manay-shankar-indiamart-com.md` — 322 bytes, 1 source (CC-only)
+- `wiki/entities/rameshwar-paryani-indiamart-com.md` — 342 bytes, 1 source (CC-only)
+
+Both bodies are literally one email line and nothing else.
+
+**Root cause.** `src/compile/compiler.py::create_entity` is a deterministic
+tool: given an email it writes a stub page unconditionally, regardless of
+how often that address appears in the wiki or whether the agent plans to
+enrich it in this turn. The prompt rule is an instruction with no
+enforcement mechanism behind it.
+
+**Mitigation options** (pick one, not all):
+
+1. **Evidence gate inside `create_entity`** — before creating, count the
+   appearances of the email in `raw/` (or `message_participants`). Require
+   ≥2 source messages (not CC-only) OR a `force=True` arg the agent must
+   pass explicitly after reading the evidence rule.
+2. **Post-batch stub-pruner** — after each batch, walk new/touched entity
+   pages. If body <500B AND sources ≤ 1 AND no other wiki page links to
+   them, delete. Reuses the existing `_mark_batch_compiled` hook point.
+3. **Quarantine, don't delete** — move thin stubs to `wiki/_quarantine/`
+   (not on mkdocs nav). Preserves data for re-enrichment, hides from
+   readers. Needs mkdocs nav exclusion.
+
+Option 1 is the most structural (prevents the stubs from existing at all).
+Option 2 is the easiest to ship. Option 3 preserves the "this person was
+mentioned once" breadcrumb without inflating the reader surface.
+
+Pair with the auto-stub strategy below — same root cause (lack of
+reader-vs-noise arbitration at write time).
+
+---
+
+## Auto-stub strategy: stop bleeding, then prune (2026-04-14)
+
+**Decision:** stop auto-creating stubs in `scripts/lint_wiki.py`. Leave
+broken wikilinks visible (operator-facing report) instead of silently
+rewriting. Ship as 3 small commits, not a big bang.
+
+**Background**
+Audit on 2026-04-14 found 52% of 587 wiki pages are stubs (<500B);
+the worst offenders are `wiki/systems/*.md` shells like
+`devtron.md` ("Stub page auto-created because [[devtron]] was
+referenced but no page existed."). Phase 1 plan
+(docs/issues/09-internal-wiki-structure.md) explicitly wants
+"entity de-noising" and topic-first navigation — these stubs
+violate the strategy.
+
+Source of the noise: `scripts/lint_wiki.py::create_missing_stubs`
+(line ~218). Triggered by `make lint-wiki-fix`. For every
+unresolved `[[target]]` it splits on hyphens and creates a
+skeleton in entities/ or systems/ depending on a naive
+two-token-alphabetic heuristic.
+
+NOT to be touched: `src/compile/compiler.py::create_entity`
+(line ~351). That's the LLM tool for deterministic email-keyed
+entity creation. Legitimate.
+
+**Codex review findings (2026-04-14)**
+- My initial estimate of 200-280 auto-stub files was wrong.
+  Filesystem scan returned **26**. Cleanup is small.
+- Silent bracket-stripping erases an important failure signal —
+  `src/compile/prompts.py:210-212` already tells the agent
+  "NEVER wikilink a target that doesn't have a file"; a silent
+  rewrite hides that the agent disobeyed.
+- Catalog drift: `wiki_pages` table is upsert-only. Deleting
+  pages without a follow-up sync leaves stale DB rows.
+- Validator behavior: broken wikilinks are advisory in
+  `lint_wiki.py:120-141`, not hard errors in
+  `validate_wiki.py`. So removing auto-stubs won't break
+  the publish-gate.
+
+**3-commit plan when we pick this up**
+
+1. **Stop the bleed** — gate `create_missing_stubs` behind a
+   new `--create-stubs` flag in `scripts/lint_wiki.py`. Update
+   `make lint-wiki-fix` and any cron / overnight loop comments.
+   Zero-risk flag flip.
+2. **Visible report** — new `scripts/report_broken_wikilinks.py`
+   that scans wiki/, lists `[[target]]` with no file, writes to
+   `docs/audits/broken-wikilinks-<ts>.md`. Optional `--strip`
+   for operator-invoked rewrite (NOT silent / automatic).
+3. **One-shot cleanup** — exact-signature match
+   ("*Stub page auto-created...*" body AND `sources: []`),
+   delete the ~26 files, then re-run `backfill_wiki_pages.py`
+   so the catalog stays in sync.
+
+**Skip / explicitly NOT in scope**
+- Post-batch auto-strip in `compile_all.py` (silent rewrites —
+  see codex finding above)
+- Touching `create_entity` tool flow
+- Promoting broken-wikilinks to publish-gate errors (would
+  block deploys without proportional benefit)
+
+**Things to check before picking this up**
+- `mkdocs-roamlinks-plugin` behavior on click of an unresolved
+  `[[foo]]` on the live site. Codex flagged this as untested.
+  Hit https://email-kb-viewer-kntbneg73q-el.a.run.app and click a
+  known broken link first.
+- `scripts/backfill_stubs.py` is built around stubs existing.
+  After this work, decide whether the stub-filler script is
+  still part of the repair path or can be deleted.
+
+---
+
+## Parallel compile — decide the concurrency model (2026-04-13)
+
+**Status: deferred.** User pulled back on shipping parallel compile
+this session — wants more time to think through the concurrency
+design before committing. Capturing the full problem statement here
+so the next session starts from current-state context, not from a
+blank page.
+
+### Why this matters
+
+Current serial compile on glm-5.1: ~4-10 min per email, ~45% of
+multi-message-thread batches hit the recursion limit. At that pace,
+reaching week-1 milestones (500+ emails compiled) takes another
+~2-4 hours of LLM wall time. Doubling throughput via parallelism
+would cut that in half. Tripling matters more as the backlog grows.
+
+But we have a half-finished `scripts/compile_parallel.py` sitting in
+the repo (commit `b6368d6`, marked experimental) AND a clean
+coordinator pattern shipped this session (PR #33, #34, #35). The
+question is: what's the right concurrency model now that the
+coordinator owns state, not the agent?
+
+### The race surface
+
+With coordinator-owned state transitions:
+- `mark_as_compiled` — coordinator only. Can't race.
+- `stamp_page_compiled_at` — coordinator only. Can't race.
+- `append_to_log` — coordinator only. Can't race.
+- `update_wiki_index` — coordinator only. Can't race.
+- `create_entity` — reads wiki, writes stub. Idempotent; two workers
+  writing the same stub overwrite each other's identical content.
+- `write_file` / `edit_file` on wiki pages — CAN race. This is the
+  one real risk.
+
+### Where `write_file` races
+
+Thread-grouping in `compile_parallel.py` guarantees both workers can't
+be processing the same thread simultaneously. So:
+
+| Page type | Race risk | Why |
+|---|---|---|
+| topic | Low | usually thread-scoped |
+| timeline, conflict | Low | scoped to a single concern |
+| system | Medium | shared across threads (e.g. every thread touching `buyermy`) |
+| entity | HIGH | every thread mentioning a person updates that entity's page |
+
+Entity pages are the real problem. In practice, a popular entity
+(`amit-agarwal-indiamart-com`) gets touched by maybe 100+ threads. Two
+workers both writing to that page at once = last-write-wins.
+
+### Options considered
+
+1. **Ship as-is, accept last-write-wins on shared entities.** Cheap.
+   Today's post-batch verification catches content mismatches (the
+   citation check knows if an email's content didn't make it into a
+   page). Entity pages become "most recent enrichment wins" — not
+   data loss, just not-maximally-rich.
+
+2. **Postgres advisory locks per wiki page.** `pg_advisory_xact_lock(
+   hashtext(page_path))` before write. Transaction-scoped, cheap.
+   Needs a hook — either patch the `FilesystemBackend` subclass OR
+   do it in `AgentMiddleware.wrap_tool_call` (requires the middleware
+   migration from the other backlog entry). Cleanest long-term;
+   zero data loss.
+
+3. **Partition work by entity.** Assign threads to workers such that
+   no two workers share any entity. Requires building the
+   `thread_id × entity` bipartite graph, coloring it. Real but
+   overkill for our scale.
+
+4. **Single-writer with a faster model.** Glm-5.1 is already the
+   default. If a further 2-3x speedup materializes (bigger model,
+   prompt caching, tighter prompt), parallel becomes less urgent.
+
+5. **Middleware-based concurrency (the self-healing loop).** Once
+   the `CompileCoordinatorMiddleware` lands (other backlog entry),
+   `interrupt_on` can be used to pause a worker when it's about to
+   touch a locked page, and the coordinator serializes.
+
+### Unknowns to resolve before shipping
+
+- How often do two concurrent batches actually hit the same entity
+  page? Measurable with a small test run (concurrency=2, 20 emails)
+  plus filesystem mtime inspection.
+- What's the LLM-request concurrency limit on the LiteLLM proxy?
+  Running 4 workers at once might saturate the key's RPM (50 RPM
+  today per .env; new key may differ).
+- Does deepagents' `FilesystemBackend` expose write hooks, or would
+  we have to subclass?
+- How do we observe per-worker state? `compile_runs` has one row per
+  invocation; with 3 workers we'd want a `worker_id` column or just
+  enough notes to disambiguate.
+
+### Recommended sequence if/when we pick this up
+
+1. **Measure**: small parallel test run (concurrency=2, limit=20,
+   disjoint thread groups). Log which wiki pages got written by
+   which worker and when. Count collisions.
+2. **If collisions are <5% of writes**: ship option 1 (as-is). Good
+   enough; verification catches content misses.
+3. **If collisions are high**: ship option 2 (advisory locks via
+   `FilesystemBackend` subclass). `src/compile/fs_backend.py` — 30
+   lines wrapping the write path with a Postgres transaction that
+   holds `pg_advisory_xact_lock(hashtext(path))` for the duration
+   of the write.
+4. **Long-term**: fold into the `AgentMiddleware` migration from the
+   other backlog entry. `wrap_tool_call` is the idiomatic hook.
+
+Don't ship before the week-1 milestone — serial is working. Don't
+ship without first measuring the actual collision rate; we've been
+theorizing.
+
+---
+
+## Most-cited topics / entities panel on the index page (2026-04-13)
+
+User request during the index-progress work: surface the top-N most
+cited topics / entities / systems on `wiki/index.md` — e.g. a
+"Top 10 people by mention count" + "Top 10 topics by source count"
+block. Gives visitors a fast way into the hot subjects without
+drilling per-category.
+
+Implementation path: the `message_touched_pages` table (PR3 /
+PR #31) already stores which messages touched which wiki pages. A
+query like `SELECT page_id, count(*) FROM message_touched_pages
+GROUP BY page_id ORDER BY 2 DESC LIMIT 10` joined to `wiki_pages`
+gives the answer cheaply. Until that PR merges, a fallback is "count
+`sources:` list length per wiki page" via a filesystem scan — same
+signal, slower.
+
+Ship after PR #31 merges. Don't ship before the 500-email milestone
+— the current `Compile progress` + `Emails per week` blocks are
+already more surface than the site had.
+
+---
+
+## Migrate hand-rolled coordinator hooks → LangChain AgentMiddleware (2026-04-13)
+
+**Priority: high.** Found during today's guardrails work. LangChain v1 /
+DeepAgents ships a native middleware system that does exactly what
+we've been hand-rolling in `scripts/compile_all.py`. Migrating cuts
+code, colocates verification with execution, and opens the door to
+proper "active self-correction" (coordinator re-invokes the agent with
+evidence-based feedback, not just leaves it pending for the next run).
+
+### What we have today (hand-rolled, scattered across compile_all.py)
+
+| Today | What it does |
+|---|---|
+| `_mark_batch_compiled(batch, wiki_dir)` | post-agent: verify wiki citation, flip messages.compile_state |
+| `_mark_batch_failed(batch, error)` | post-agent exception handler |
+| `_collect_cited_raw_paths(wiki_dir)` | the citation-evidence scan |
+| `_stamp_recently_modified_pages(wiki_dir, since, model)` | post-agent: stamp `last_compiled` on mtime-new wiki pages |
+| `_append_batch_log(batch_idx, batch, result, wiki_dir)` | post-agent: write structured log row |
+| `start_run() / finish_run()` via try/finally wrap | per-run observability |
+| `scripts/reconcile_compile_state.py` (strict mode) | retro-active citation check |
+| Prompt reminders to "not invent entity slugs, call `create_entity`" | pre-model reminder encoded as text |
+
+### What LangChain v1 ships natively
+
+Docs: https://docs.langchain.com/oss/python/langchain/guardrails (the
+whole "After agent guardrails" page is this exact pattern).
+
+- **`AgentMiddleware`**: the idiomatic wrapper. Subclass it, pass to
+  `create_deep_agent(middleware=[...])`.
+- **`wrap_model_call(request, handler)`**: called on every LLM
+  invocation. Can mutate the request (inject system reminders), run
+  the handler, then post-process the response. Perfect for
+  step-count-reminder (the Claude-Code pattern from the other
+  backlog entry), context pruning, enforced exit signalling.
+- **`wrap_tool_call(request, handler)`**: called on every tool
+  invocation. Pre-validate args, run the tool, verify the result,
+  optionally rewrite the `ToolMessage` the agent sees.
+- **`interrupt_on`**: pauses the agent at specified tool calls.
+  Coordinator inspects live state, can send feedback back to the
+  paused run. This is the "active self-correction" primitive.
+- **`response_format` (Pydantic `BaseModel`)**: schema-validated
+  final output. Replaces our prose `append_to_log` instruction with
+  a typed structured summary the coordinator reads directly.
+- **Node-style hooks** (`before_agent`, `after_agent`, etc.): the
+  simplest form when you don't need to intercept individual tool
+  calls.
+
+### Migration sketch
+
+One new module, one class:
+
+```python
+# src/compile/middleware.py
+class CompileCoordinatorMiddleware(AgentMiddleware):
+    def __init__(self, *, batch, wiki_dir, run_id):
+        self.batch = batch
+        self.wiki_dir = wiki_dir
+        self.run_id = run_id
+        self.batch_start = datetime.now(UTC)
+        self.step_count = 0
+
+    def wrap_model_call(self, request, handler):
+        self.step_count += 1
+        if self.step_count % 30 == 0:
+            request.messages.append(SystemMessage(
+                f"{self.step_count} tool calls so far. Wrap up and return."
+            ))
+        return handler(request)
+
+    def wrap_tool_call(self, request, handler):
+        return handler(request)
+
+    def after_agent(self, state):
+        # The current _mark_batch_compiled + _stamp_recently_modified_pages
+        # + _append_batch_log all collapse here. Citation scan scoped to
+        # this batch's wiki deltas (mtime >= self.batch_start).
+        ...
+```
+
+### Why it's worth doing
+
+1. **Active self-correction** — today the 714 entity-only-cited emails
+   just stay pending. With `interrupt_on` + a post-tool hook, the
+   coordinator can re-invoke the agent inline: *"you wrote an entity
+   mention for `raw/foo.md` but no topic page cites it yet. Write
+   the topic page before you return."*
+2. **Single source of truth** for the compile loop's verification
+   rules. Today they're scattered across `compile_all.py` +
+   `reconcile_compile_state.py` + the tests the W4-W6 PRs added.
+3. **Testability** — middleware is testable with fake agent state,
+   no real deep_agent needed.
+4. **The step-count-reminder** backlog entry collapses into a 10-line
+   `wrap_model_call` instead of its own separate design.
+
+### Scope + ordering
+
+- `src/compile/middleware.py` (~200 lines) — one class, 3-4 methods
+- `src/compile/compiler.py` — inject middleware into `create_deep_agent`
+- `scripts/compile_all.py` — drop `_mark_batch_compiled`,
+  `_mark_batch_failed`, `_stamp_recently_modified_pages`,
+  `_append_batch_log` (~150 lines deleted). Keep `_group_by_thread`
+  + the runner shell.
+- Tests move from `tests/test_compile_all_*.py` →
+  `tests/test_compile_middleware.py` (fake agent state, no DB).
+
+Don't ship before PR #26 (`create_entity`) merges — that gives
+`wrap_tool_call` a concrete target. Don't ship before the 500-email
+milestone — current scaffolding works, migrating now trades forward
+motion for cleanup.
+
+---
+
+## Design principle: coordinators verify, LLMs propose (2026-04-13)
+
+**Rule**: every LLM-claimed state transition must be backed by an
+independent external-evidence check. The evidence has to show the agent
+did the WORK, not just that it called the tool or set a flag.
+
+**Why it exists**: we discovered this the hard way today. Over three
+separate incidents in one compile session:
+
+1. `mark_as_compiled` — agent called it on 9/28 batch emails, forgot on
+   19/28. Script reported "28/30 processed", DB disagreed. Coordinator
+   now flips state based on wiki-citation check, not agent tool calls.
+2. Entity slug generation — agent invented `vishakha-indiamart`,
+   `arjun-gaur-clean`, `akash-singh6` when it struggled with display
+   names. Deterministic `email_to_slug` in `src/compile/entities.py`
+   replaced LLM judgment.
+3. Reconcile-by-citation — a naïve "email is cited somewhere in wiki"
+   rule would have falsely flipped 715 of 748 candidates. The agent
+   had name-dropped them into entity `sources:` lists but never wrote
+   topic pages. Strict rule: citation in a CONTENT page (topic, system,
+   policy, timeline, conflict) is required. Entity-only citation gets
+   left pending so the next compile batch re-claims the email —
+   self-healing loop.
+
+**Two patterns to apply going forward**:
+
+- **Passive self-healing**: when the coordinator detects failed
+  verification (e.g., email cited only in entity), leave the state
+  pending so the queue re-claims it. The LLM gets another shot.
+- **Active self-correction (unbuilt)**: after each batch, inspect what
+  the LLM claimed vs. the evidence. If mismatched, inject a
+  system-reminder-style message into the next turn: *"You touched
+  these 3 emails but no topic page cites 2 of them. Go back and
+  finalize them before returning."* This is the Claude-Code-style
+  step-count-reminder pattern from the separate agent-scaffolding
+  investigation backlog entry.
+
+**Rule of thumb for reviewers**: whenever you see a tool that writes
+state the coordinator could compute itself, ask "why isn't the
+coordinator doing this?" If the answer is "because the agent is the
+one with the context," verify the agent's claim externally before
+trusting it.
+
+**Examples already shipped this session**:
+- `src/db/messages.py::find_by_raw_path` + coordinator-owned
+  `finish_message_compile` in `scripts/compile_all.py`
+- `src/compile/entities.py::email_to_slug` (pure function)
+- `scripts/compile_all.py::_collect_cited_raw_paths` (citation check)
+- `scripts/compile_all.py::_stamp_recently_modified_pages` (mtime-based)
+- `scripts/compile_all.py::_append_batch_log` (structured, not
+  LLM-prose)
+- `scripts/reconcile_compile_state.py` with strict-mode default (only
+  content-page citations count as evidence)
+
+---
+
+## Priority index (as of 2026-04-13, synced after `origin/main` model-pool merge)
+
+Working assumptions for prioritization:
+
+- The goal is a **polished internal wiki with references**, not "every email becomes a page."
+- **Compile quality outranks live automation.** If the wiki is noisy, making it faster just makes noise arrive faster.
+- The product is a **topic-first wiki**. Topic/system pages are the primary surface; people pages are supporting context.
+- The company moves fast, so the system must preserve references while remaining browseable and current.
+
+### Working design direction
+
+1. **Move deterministic work out of the agent.**
+   Queue state, provenance joins, duplicate detection, page lookup, entity identity,
+   freshness stamping, and validation should live in tools or the coordinator.
+2. **Shrink the compiler agent's job.**
+   The agent should synthesize and update topic/system/policy/timeline/conflict pages,
+   not act as a bookkeeper or global grep engine.
+3. **Use skills for operator workflows.**
+   Cleanup, audits, publishing, live-ingest ops, and batch repair are reusable workflows,
+   not core compile reasoning.
+
+### 🔥 NOW — highest-value work
+1. **Finish the provenance split** — render references from the catalog / DB layer instead
+   of bloating markdown frontmatter. This is the single biggest step toward making the
+   output feel like a real wiki.
+2. **Make the wiki topic-first and navigable** — glossary, topic rollups, stronger
+   `index.md`, and fewer dead-end categories. Readers should browse by subject, not by slug hunting.
+3. **De-noise entity pages** — drop CC-only noise, cap/compact entity provenance, and stop
+   treating people pages as the center of the wiki.
+4. **Strengthen compile guardrails** — per-batch timeout, YAML/edit validation, corruption
+   detection, and self-healing repair path. Quality first.
+5. **Add a trivial-message filter at ingest** — `+1`, `thanks`, `lgtm`, and other low-signal
+   acknowledgements should not become compile work.
+6. **Keep docs and roadmap honest** — README, phased-delivery, and backlog should describe
+   the actual system and the actual north star.
+
+### 🟡 SOON — important, but after the quality floor
+7. **Agent scaffolding / middleware** — step-count reminders, pre/post hooks, context pruning,
+   and tool-call guardrails after a measurement pass.
+8. **Search over real wiki knowledge** — once the output is curated enough to deserve search.
+9. **Live ingestion (Gmail watch + Pub/Sub)** — after the wiki is good enough that automated
+   updates improve it instead of amplifying poor synthesis.
+10. **Viewer polish** — metadata headers, most-cited panels, and similar browse polish once
+    the information architecture is stable.
+11. **Parallel compile** — only after collision measurement and page-write coordination.
+
+### 🟢 LATER — team-scale or post-quality work
+12. **Local semantic search / QMD-style retrieval** — valuable once topic prose is strong.
+13. **Multiple mailing lists** — after one list produces a clean knowledge surface.
+14. **Agent skills + MCP server for downstream consumers** — after the wiki output itself is worth consuming programmatically.
+15. **Storage tier local→GCS→Cloud SQL** — deployment/ops scale-up, not today's bottleneck.
+
+### ⚪️ Research / reading (not ship)
+16. Reading list — Anthropic engineering posts, LangChain guardrails, LLM Wiki references.
+
+### ✅ Already shipped — historical record, don't re-promote
+- **Quality: date hallucination** — DONE via coordinator-owned stamping
+- **Quality: wikilink casing** — DONE via prompt + lint normalization
+- **Architecture: Postgres queue/catalog base** — DONE via `messages`, `wiki_pages`,
+  `message_touched_pages`, `compile_runs`, and `ingest_cursors`
+- **Prompt-caching verification** — DONE; cache stats are instrumented
+- **Per-batch model A/B base** — DONE via model pool + `compile_model`
+- **Langfuse self-hosted integration** — DONE as optional, bounded-timeout tracing
+- **Thread-aware compilation** — DONE (basic)
+- **Entity identity by email** — DONE for canonical creation path; cleanup/migration remains
+
+### Open PRs worth noting
+- **#50 batch-timeout** matters to compile health.
+- **#48, #49, #52** are useful viewer/content polish, but they are not the main bottleneck.
+
+### 🧹 Governance debt (visible right now)
+- **CHANGELOG discipline has slipped** — enforce going forward with PR guardrails, do not keep backfilling history forever.
+- **No CI workflow for tests/lint** — a minimal `ci.yml` running `uv run ruff check` + `uv run pytest`
+  would catch regressions and keep roadmap claims honest.
+
+---
+
+## Per-batch random model A/B with stats tracking (2026-04-13)
+
+**Why**: `z-ai/glm-4.6` is the current default, but the proxy exposes several
+cheaper / faster / smarter candidates. We want to learn which model actually
+performs best on OUR compile workload (not benchmarks), measured by wiki
+quality, not just cost per batch.
+
+### Proxy inventory — what's actually available
+
+Key `email-kb-wiki` explicitly lists these in `/key/info`:
+- `minimax/minimax-m2.7` — **callable ✓** (proxy responds 200 on POST
+  /v1/chat/completions, even though `/v1/models` doesn't advertise it)
+- `minimax/minimax-m2.5` — **callable ✓**
+- `z-ai/glm-5` — **callable ✓**
+- `z-ai/glm-5.1` — **callable ✓**
+- `all-team-models` — wildcard; callable below are provisioned on the
+  team: `z-ai/glm-4.6` (default), `minimax/minimax-m2`, `minimax-m2.1`,
+  `z-ai/glm-4.5-air`, `deepseek/*`, `qwen/*`, etc.
+
+**Note on `/v1/models`**: it returns a filtered list that excludes the
+four above, so any tool enumerating the catalog misses them. Tests rely
+on a direct call (verified 2026-04-13 11:30Z). If a future tool
+auto-discovers models, whitelist these four explicitly.
+
+### Design — random-per-batch with stats
+
+1. **Model pool config** — list of candidate model IDs + weights (maybe
+   uniform to start) in `src/config.py` or a YAML file. Operator flag:
+   `--model-pool random` vs current `--model <id>`.
+2. **Seed per batch** — `compile_all.py::run_batch()` picks a random model
+   from the pool at the start of each batch. Sticky for the whole batch
+   (all emails in a thread-group use the same model) so results are
+   comparable.
+3. **Stamp the model on every compiled row** — already partly there:
+   `scripts/compile_all.py` passes `model_name` to `create_compiler`;
+   `stamp_page_compiled_at` writes `updated_by` on the wiki page. Extend
+   `messages.compile_model` column (needs migration) so we can join model
+   → outcome in SQL.
+4. **Stats rollup** — new `scripts/model_stats.py` (or extend
+   `scripts/stats.py`):
+   - cost per batch by model (from LiteLLM `usage.cost` or `key/info` delta)
+   - avg time per email
+   - recursion-limit hits / failures per model
+   - wiki-quality proxy metrics: avg `update_count`, avg page size, stub
+     rate on pages touched by each model
+   - source-dedup ratio, wikilink breakage rate (advisory validator output)
+5. **Backstop**: don't randomize in production until we've burned a small
+   exploration budget (~$10) in shadow mode on a subset of uncompiled
+   emails. First pass: 50-email batch each from the candidate set, same
+   thread grouping, then manual inspection + stats diff.
+
+### What this does NOT need to be
+- Not a full multi-armed-bandit scheduler. Uniform random is enough for v0.
+- Not model routing by content signal. Pick-per-batch is simpler and
+  comparable.
+- Not an eval harness — stats-driven, not rubric-scored (that's a separate
+  BACKLOG item: reading list → "demystifying evals for ai agents").
+
+### Prerequisites / cross-deps
+- Issue #17 (Langfuse server hang) — useful for per-model latency traces,
+  not blocking. Can start without tracing.
+- Catalog PR cascade (#21/#22/#23/#24) finishing — `messages.compile_model`
+  lives naturally next to `compile_state`, `compile_attempts`.
+
+### Smallest-shippable slice
+Add `--model <id>` to `compile_all.py` (probably already there), plus a
+`--model-pool a,b,c` that picks random per batch. Stamp model to a new
+`messages.compile_model` column in a tiny migration. Leave stats rollup
+for a second PR.
+
+---
+
+## Agent scaffolding investigation — step-count reminders, hooks, context pruning (2026-04-13)
+
+**Problem observed today**: 1-email compile batches take 8-14 minutes at
+z-ai/glm-4.6. Pathological threads (e.g. 16-email Tender Audit Automation,
+`thread_id=19b10ae9d236af98`) hit the default 150-step LangGraph
+recursion limit and crash after ~14 min burning ~$0.20 per failure. The
+workaround landed — `--recursion-limit 60` (see `scripts/compile_all.py`) —
+which at least fails fast instead of bleeding budget, but it does NOT
+attack the root cause: the agent loops because it has no "you've done
+enough" signal beyond `mark_as_compiled`, context bloat confuses the
+model about what it already did, and the agent can't self-notice
+repetition on the same entity page.
+
+**The right fix is agent-level scaffolding, not a harder recursion cap.**
+This is a discrete research task and should be picked up by a separate
+agent (don't interleave with the forward compile push).
+
+What to deeply investigate:
+
+1. **Step-count reminder middleware** (the Claude Code pattern).
+   Wrap `create_deep_agent` with a pre-model hook that counts turns and
+   injects a `system` message every N steps:
+   _"You have used N of your ~40 expected tool calls for this email. If
+   the core pages are updated, call `mark_as_compiled` and stop."_
+   Likely surface: `src/compile/compiler.py:create_compiler`. LangGraph
+   supports this via `pre_model_hook` or a compiled-graph wrapper.
+   References: https://langchain-ai.github.io/langgraph/,
+   https://github.com/langchain-ai/deepagents.
+
+2. **Hooks for tool-call de-duplication.** If the agent has called
+   `edit_file` on `entities/ruchi-gupta.md` three times in one batch,
+   that's thrash. A hook can detect it and reply "you already edited
+   that file twice, move on."
+
+3. **Context pruning.** After N steps, summarize the earlier turns or
+   drop the raw file bodies from the running message history. The agent
+   doesn't need the raw markdown re-shown every turn.
+
+4. **Stronger exit discipline in the prompt** (`src/compile/prompts.py`).
+   Tool-audit review at `docs/reviews/tool-audit-20260413T050000Z.md`
+   already noted exit conditions are vague. Codex's priority review
+   (`docs/reviews/codex-priority-review-20260413T090000Z.md`) flagged
+   the prompt as actively fighting the Postgres migration.
+
+5. **Parallel compile with safety.** `scripts/compile_parallel.py`
+   already exists but is marked experimental. Shared-entity-page races
+   are the blocker. Once per-page locking is on the catalog
+   (Codex priority review PR3), parallel becomes safe.
+
+6. **Measure before optimizing.** Instrument the agent to emit per-step
+   metrics: tool name, duration, cumulative context size, cumulative
+   cost. Persist to `compile_runs` (Codex priority review PR5). Then we
+   can tell which of the four root causes above actually dominates for
+   a real batch — right now we're guessing.
+
+Success criteria for this investigation:
+- Median per-email compile time under 3 minutes at z-ai/glm-4.6
+- <10% batch failure rate on backlog of 6,500+ emails
+- No repeated `edit_file` on the same page within a single batch
+
+Do NOT implement before running a measurement pass. A wrong hook
+design wastes more time than the loops it replaces.
+
+---
+
+## Langfuse callback stalls compile when proxy is slow (2026-04-13)
+
+**Symptom**: `compile_all.py` hangs after the first "running compilation"
+log line, no further output for 8+ minutes. Log shows:
+`Failed to export span batch code: None, reason: HTTPSConnectionPool(host='langfuse.intermesh.net', port=443): Read timed out.`
+Killing the process and re-running with `LANGFUSE_ENABLED=false` lets the
+exact same batch finish in ~30s per email.
+
+**Root cause hypothesis**: the langchain `CallbackHandler` from langfuse
+v3 emits per-step events to a Langfuse client whose default flush
+interval (0.5s) and httpx timeout (5s) compound when the langfuse proxy
+is slow. Each agent tool call blocks waiting on a span flush.
+
+**Workaround in use**: `LANGFUSE_ENABLED=false` for compile runs.
+**Real fix**: in `src/compile/compiler.py:get_langfuse_handler`, pass
+`flush_at=100` and a short `httpx_client` timeout (~2s) to `Langfuse(...)`
+so flushes batch and fail fast. Confirm against
+https://langfuse.com/docs/sdk/python/sdk-v3 once we have time.
+
+---
+
+## Entity pages compile to stubs (2026-04-13)
+
+**Observation** (audit `docs/audits/audit-20260413T081547Z.md`): 72% of
+entity pages are <500B (221/307). Compare topic pages: 0 stubs, avg 2.7KB.
+Spot-checks (`csd-tester.md` at 124B with 1 source; `ruchi-gupta.md` at
+152B with 10 sources) show the agent extracts an `Email:` line and a
+`Related` list but no role context.
+
+**Why it matters**: Codex's priority review flagged "team-ready browse"
+as a non-goal for week 1 partially because of this. A 152B Ruchi Gupta
+page is a hyperlink target, not knowledge.
+
+**Probable fix surface**: prompt instruction. The agent is told to
+create entity pages but not to enrich them on subsequent mentions. Add
+a "for each entity touched, append a one-line role-in-this-thread note
+to their page" rule in `src/compile/prompts.py`. Run a small batch and
+re-audit. Trade-off: longer agent steps per email = higher cost.
+
+---
+
+## QMD (Tobi Lütke) — local semantic search for the wiki (2026-04-13)
+
+https://github.com/tobi/qmd — TypeScript CLI, local-first, three-stage
+retrieval: BM25 → vector embeddings → local LLM rerank. ~2 GB of GGUF
+models, no cloud APIs.
+
+Why it's useful for this project (complementary to #8, not overlapping):
+
+1. **Agent tool during compile** — replaces the `list_wiki_pages` +
+   slug-guess loop. Agent calls `qmd search "voice eval automated"` and
+   gets top-3 existing pages ranked by semantic relevance. This is the
+   right fix for the duplicate-page problem (compiler keeps making
+   `foo-new.md` because it can't tell there's already a `foo.md`).
+2. **Replaces mkdocs built-in search** — lunr is weak on a 463-page wiki,
+   QMD rerank is substantially better. Ship once the wiki is prose-heavy
+   (after issue #8 Phase 4 strips the source bloat).
+3. **Chat-with-wiki** — future mobile UX, "what's the latest on iOS fix?"
+   QMD is the retrieval layer.
+
+**Tactical ordering**: don't adopt before #8 Phase 2 ships — indexing 95%
+frontmatter is wasted. After strip-sources, the wiki is real knowledge
+and QMD's rerank has signal to work with.
+
+Pair with the Anthropic "writing tools for agents" reading below — QMD
+exposed as a compile-time tool is the first candidate for our next tool
+improvement.
+
+---
+
+## Verify prompt caching is actually working (2026-04-13)
+
+https://openrouter.ai/docs/guides/best-practices/prompt-caching#provider-sticky-routing
+
+**Why it matters**: every compile batch sends the same ~6 KB system prompt
++ accumulating tool-call history. If prompt caching isn't hitting, we're
+paying for hot tokens on every turn. Overnight we burned $15.69 on 187
+messages — plausibly ~half of that is uncached repeat context.
+
+**Our stack**: LiteLLM proxy → OpenRouter → `z-ai/glm-4.6`. Two open
+questions:
+
+1. Does `z-ai/glm-4.6` even support prompt caching on any of its OpenRouter
+   providers? (Not all do; Anthropic/OpenAI models do by default, Chinese
+   models often don't.)
+2. Does LiteLLM pass through the OpenRouter provider-sticky-routing hint
+   needed for cache hits? The hint usually goes via
+   `extra_body={"provider": {"order": [...], "allow_fallbacks": false}}` or
+   a request header like `X-Title`.
+
+**How to test cheaply** (~$2–5):
+- Run a compile batch with `litellm --detailed_debug`; capture the raw
+  OpenRouter response for each turn. Look for
+  `usage.prompt_tokens_details.cached_tokens > 0`.
+- Compare the same batch with and without provider-sticky-routing
+  configured via `extra_body`.
+- If cached_tokens is 0 either way, the model doesn't support caching
+  through this route.
+
+**If caching doesn't work**: move to a Claude model (Haiku 4.5 or Sonnet
+4.6) — both cache natively via LiteLLM, 90% discount on hot context. Cost
+comparison on our workload: a 4× token savings on cached reads should pay
+for Claude's higher per-token price at our mix.
+
+---
+
+## Reading list — Anthropic engineering posts (2026-04-13)
+
+User flagged these to digest "eventually, not right away." Once read, pull out
+concrete improvements to our agent loop and drop them in this file as their
+own items:
+
+- https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+- https://www.anthropic.com/engineering/advanced-tool-use
+- https://www.anthropic.com/engineering/code-execution-with-mcp
+- https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+- https://www.anthropic.com/engineering/writing-tools-for-agents
+
+Likely relevance to us:
+- **Evals for agents** → our compile quality is eyeballed, not measured. A real
+  eval suite (recall of facts from source, wikilink correctness, supersession
+  accuracy) would let us A/B model changes.
+- **Advanced tool use** + **Writing tools for agents** → our current tools (read_file,
+  write_file, edit_file, grep, list_wiki_pages, stamp_page_compiled_at) are thin.
+  Probably missing `execute_shell` / subagents / better filter primitives.
+- **Code execution with MCP** → whether our compiler should be an MCP server
+  exposing tools (wiki query, raw grep, catalog lookup once it exists) so any
+  Claude/Codex/Cursor session can drive it.
+- **Context engineering** → entity page bloat, thread grouping, what goes into
+  the LLM's prompt window at each compile step. Directly tied to the
+  knowledge-vs-index work already planned.
+
+---
+
+## Phase 0 review — first full compile observations (2026-04-13)
+
+**Test input**: 22 emails, 1 day of `marketplacelaunch@indiamart.com`
+**Model**: `z-ai/glm-4.6` via Intermesh LiteLLM proxy
+**Result**: 15/22 emails fully compiled, 72 wiki pages (14 topic + 56 entity + index + log),
+elapsed ~12 min before process stalled. Compile was killed before finishing the last 7.
+
+### What works beautifully
+
+- **Multi-email topic merge**: `wiki/topics/dynamic-smart-rfq-form.md` correctly
+  merged 2 emails (April 11 + April 12), adding a "Version 2 Requirements" section
+  from the newer email while preserving V1 context. This is the hardest thing the
+  system does and it's genuinely good.
+- **Concrete data extraction**: iOS page extracted `326.1 → 165.7 sec/hour, 49%
+  improvement`, `30% adoption`, `Apple target 1 sec/hour p95`. Not hallucinated,
+  all from the source email.
+- **Role identification**: Compiler correctly labels "Lead Engineer — iOS", "Product
+  Owner", "Stakeholder", "Testing and reporting issues" — useful context.
+- **Cross-batch continuity**: The same topic getting a V2 update in a later batch
+  properly appends, not overwrites.
+- **Structured sections**: Overview, Metrics, Issues, Team, Related — the LLM
+  follows the Karpathy prompt well.
+
+### What's broken — quality issues
+
+**P0 (fix before next full compile)** — ALL SHIPPED (see CHANGELOG for details):
+
+1. ~~Wikilink casing~~ → **DONE** (235dc74, b95f7da): prompt + lint normalizer
+2. ~~Date hallucination~~ → **DONE** (ddd0c5a): `stamp_page_compiled_at` tool
+3. ~~Non-person "entities"~~ → **DONE** (ae5f0e1): `wiki/systems/` category added
+4. Orphan entity back-links → still open: not blocking compile, low value
+5. ~~Index.md stale~~ → **DONE** (compile_all.py post-batch regen)
+
+**P1 (do next)**:
+
+6. **Entity identity should be email, not name** — 56 entity pages have
+   `title: "Lucky Agarwal"` + body line `Email: agarwal.lucky@indiamart.com` but
+   no `email:` frontmatter field. Name-based filenames risk collisions (two
+   "Amit Sharma"s). Email is always present in headers, globally unique,
+   stable. See separate section below.
+
+7. **Batch stall at 15/22** — compile process hung on batch 6+ with 0% CPU but
+   live TCP connection. Seems LLM call was slow/stuck. No retry logic. Output
+   file also had 0 bytes (buffering issue with `2>&1 | tail`).
+   - **Fix**: add per-batch timeout, retry with backoff, don't pipe to tail for
+     background runs.
+
+8. **Topic count (14) > email count for V2** — some emails generated 2+ topics.
+   Correct for multi-topic emails ("API Knowledge Agent AND Data Lineage
+   Agent") but worth watching — could lead to too many thin pages.
+
+9. **No policies / timelines / conflicts created** — expected for
+   feature-announcement emails, but verify the compiler wouldn't miss these
+   when they exist. Needs policy-email test case.
+
+### What's genuinely fine and needs no change
+
+- Raw markdown format, YAML frontmatter
+- Gmail OAuth + fetch pipeline
+- Filesystem backend wiring
+- LiteLLM proxy routing
+- Git-ignored content, committed structure
+
+---
+
+## Performance: parallelize compilation (DRAFTED — `scripts/compile_parallel.py`)
+
+**Status**: Script shipped (commit b6368d6). Not yet benchmarked at scale.
+Overnight plan (`docs/reviews/overnight-plan-*.md`) recommends `--concurrency 4`
+for the main backlog compile. Still TBD: per-batch retry/timeout, Makefile
+wire-up.
+
+---
+
+## [original content below]
+
+**Why**: Sequentially compiling 22 emails via `z-ai/glm-4.6` on LiteLLM takes ~4
+min in our first test (batches of 3, ~30-90s each). For 30-day backlog (~3000
+emails) or multiple mailing lists, this gets slow.
+
+**Options, easiest first**:
+1. **Async batch parallelism** — use `agent.ainvoke()` + `asyncio.gather()` to
+   run N batches concurrently. Safe because each batch processes distinct raw
+   files. Expected 3-5× speedup.
+2. **Deep Agents sub-agents** — use `create_deep_agent(subagents=[...])` to
+   spawn per-topic or per-thread sub-agents that run in parallel.
+3. **Async tool calls within a batch** — Deep Agents already batches internally,
+   low-value.
+
+**Gotchas to handle**:
+- Race condition on shared entity pages (two batches both writing
+  `wiki/entities/amit-agarwal.md`)
+- Cross-reference staleness (topic A links to entity B that's still being written
+  by another batch)
+- Index regeneration MUST wait for all batches to finish
+- Partial-batch failure recovery (one batch crashes, others commit — how to
+  resume?)
+
+**When**: After we're confident compilation quality is good. Phase 1 candidate.
+
+---
+
+## Schema: switch entity identity from name to email
+
+**Why**: Using human names as entity IDs (`wiki/entities/amit-agarwal.md`) is
+fragile:
+- Two "Amit Sharma"s at the same org collapse into one page
+- Name casing/spelling variations create broken wikilinks (we already see
+  `[[Amit Agarwal]]` vs `[[amit-agarwal]]` inconsistency in our first run)
+- Missing or mangled `From` name fields produce bad slugs
+
+Emails are globally unique, stable, and always present in headers.
+
+**Proposed scheme**:
+
+```yaml
+# wiki/entities/agarwal-lucky-at-indiamart-com.md
+---
+title: "Lucky Agarwal"                  # human display
+email: agarwal.lucky@indiamart.com      # canonical ID
+aliases:
+  - "Lucky Agarwal"
+  - "lucky@indiamart.com"
+---
+```
+
+- Filename: slugify email → `agarwal-lucky-at-indiamart-com.md`
+- Page title: human display name
+- Cross-references: always use email-slug `[[agarwal-lucky-at-indiamart-com]]`
+- Index.md: renders display name with email-slug as link target
+
+**Side benefit**: fixes the wikilink casing inconsistency bug we already see.
+
+**When**: Before running the 30-day backlog. Need to update CLAUDE.md prompt
++ compiler prompt + lint checker.
+
+---
+
+## LLM API: Chat Completions vs Responses API vs OpenResponses
+
+**Question**: Should we switch from OpenAI-compatible Chat Completions API to
+the newer Responses API (or the open-source OpenResponses spec)?
+
+**Potential benefits**:
+- Stateful server-side conversations → less token overhead per turn
+- Richer built-in tools (file search, web search, computer use)
+- OpenAI says Chat Completions won't be extended much going forward
+- Better structured output handling
+
+**Blockers to investigate**:
+1. Does our LiteLLM proxy (`imllm.intermesh.net`) support Responses API yet?
+2. Does `langchain-openai` / `ChatOpenAI` support Responses API? (As of Feb 2026
+   there's a separate `ChatOpenAI` Responses variant — confirm)
+3. Does Deep Agents work on top of Responses? (It uses LangChain chat models
+   underneath, so should work if the chat model supports it)
+4. Are all models we care about (`z-ai/glm-4.6`, `anthropic/claude-sonnet-4`,
+   `google/gemini-2.5-pro`) addressable via Responses, or only OpenAI models?
+
+**When**: Evaluate after Phase 1 (live ingestion) is stable. Don't churn APIs
+while iterating on prompts.
+
+**Reference**:
+- OpenAI Responses API docs
+- OpenResponses (community spec for provider-agnostic Responses) — need to verify
+  if this actually exists as a shipped thing
+
+---
+
+## Quality: date hallucination in wiki pages ✅ SHIPPED
+
+**Was observed**: Agent writes `last_compiled: "2025-01-10T00:00:00Z"` instead
+of real time. Training cutoff bleed.
+
+**Shipped via** the `stamp_page_compiled_at` tool (`src/compile/compiler.py:82-116`,
+commit `ddd0c5a`) — the LLM never writes `last_compiled` directly; it calls
+the tool which stamps real UTC. Prompt rules added to back it up.
+
+---
+
+## Quality: wikilink casing inconsistency ✅ SHIPPED
+
+**Was observed**: Index had `[[api-knowledge-agent]]` but topic pages had
+`[[API Knowledge Agent]]`. Lots of broken links.
+
+**Shipped via** prompt rules + `scripts/lint_wiki.py` auto-fix that normalizes
+all wikilinks to kebab-case (commit `235dc74` and follow-ups). Email-based
+entity identity (in-flight PR #26) will further harden this.
+
+---
+
+## Quality: batch-boundary duplication / fragmentation
+
+**Risk**: Each batch invocation spawns a fresh agent that doesn't see what
+previous batches did in its context window. It may:
+- Create `topic-x.md` in batch 1, then in batch 4 create `topic-X.md` (different
+  case) because it didn't find the earlier file
+- Miss cross-references to entities created in earlier batches
+
+**Fix options**:
+1. Before each batch, `ls wiki/topics/ wiki/entities/` and include the list in
+   the agent's initial message so it knows what already exists
+2. Use Deep Agents `subagents=` with a parent agent that tracks state across
+   batches
+3. Smaller chunks + better context re-injection
+
+**When**: Watch for this in the full 30-day backlog run. May not be an issue at
+small scale.
+
+---
+
+## Architecture: move to a real datastore
+
+**Current**: Raw emails + wiki pages are markdown files on disk. Works great
+locally, but:
+- Hard to query at scale (grep is fine for <1000 pages; gets slow beyond)
+- No history browsing except via git
+- Attachments pile up (Phase 0 skips them)
+- Multi-user access requires shared filesystem
+
+**Options for later**:
+- Postgres + PGroonga for structured + full-text search
+- Supabase (what `lucasastorian/llmwiki` uses) — similar, with auth baked in
+- GCS/S3 for attachments, Postgres for metadata
+- Keep markdown as the "render layer" but back it with a DB
+
+**When**: Phase 4 or when grep/read file ops become the bottleneck.
+
+---
+
+## Phase 1: live ingestion (Gmail watch + Pub/Sub)
+
+See `docs/issues/08-phase1-live-ingestion.md` for full design.
+
+---
+
+## Phase 2: wiki UI
+
+BookStack or MkDocs Material serving the compiled `wiki/`. Enables sharing with
+team, nice browsing UX.
+
+---
+
+## Phase 3: chatbot over the knowledge base
+
+The original goal. Much easier to build well once the wiki is solid.
+
+---
+
+## Quality: review all tools against Anthropic's tool-writing guide
+
+**Source**: https://www.anthropic.com/engineering/writing-tools-for-agents
+
+Review every tool (`list_uncompiled_emails`, `mark_as_compiled`,
+`update_wiki_index`, `append_to_log`, plus Deep Agents built-ins we rely on)
+against the rubric in that post. Key checks:
+
+- **Docstring quality**: agent-facing description, not human-facing. Is it clear
+  when the agent should call vs skip?
+- **Parameter clarity**: names self-documenting? Types constrained enough?
+- **Return values**: structured + stable + useful for the agent's next step?
+- **Error signaling**: agent can tell "retry", "skip", "human-help" apart?
+- **Namespace**: tools grouped logically, no ambiguous "do X" helpers?
+- **Side effects documented**: agent knows what the tool actually modifies?
+
+Specific suspects in our code:
+- `mark_as_compiled` returns `"marked compiled: {path}"` — low info density, could
+  return `{"ok": true, "remaining_uncompiled": N}`
+- `list_uncompiled_emails` returns a flat list — should include date, thread_id,
+  subject so the agent can plan without re-reading every file
+- `update_wiki_index` has no arguments but silently scans all of `wiki/` — agent
+  might not realize it's expensive
+
+**When**: After Phase 0 stabilizes. Good low-risk quality pass.
+
+---
+
+## Attachments and inline images — currently disabled
+
+**Status**: Code exists in `src/ingest/attachments.py`:
+- `save_attachments()` downloads every attachment to `raw/attachments/{msg-id-short}/`
+- `caption_image()` generates a caption via LiteLLM vision model (gpt-4o default)
+
+**But**: Phase 0 runs with `--skip-attachments`, so attachments/images are NOT
+being pulled. The raw .md files end up with `has_attachments: true`,
+`attachment_files: []`, `inline_images: []`.
+
+**Gaps to close**:
+1. Run ingestion WITHOUT `--skip-attachments` on a small batch, verify downloads
+   + captions work end-to-end
+2. Populate `inline_images[].caption` with vision model output so the compiler
+   can use image content (right now images exist as filename references only,
+   no content)
+3. PDFs / DOCX / XLSX attachments: markitdown already supports these
+   (`markitdown[all]` is installed). Pipeline would need a step to convert each
+   attachment to markdown and inject/reference from the raw email's body
+4. Decide how compiler uses attachment content — summarize into source email's
+   body? Treat each attachment as an additional raw source?
+5. Storage: attachments can be huge. Currently `raw/attachments/` is gitignored
+   (good). For 30-day backlog, measure size.
+
+**When**: After Phase 0 quality fixes. Then run a batch WITH attachments and
+see how compilation changes.
+
+---
+
+## Observability: evaluate LiteLLM UI logs vs Langfuse
+
+**Source**: https://docs.litellm.ai/docs/proxy/ui_logs_sessions
+
+We already saw the LiteLLM UI logs when the user shared them — per-call cost,
+token counts, model, latency, user. That's actually a lot of the observability
+we'd want.
+
+**Tradeoff**:
+| Feature | LiteLLM UI | Langfuse |
+|---|---|---|
+| Per-call cost/tokens | yes | yes |
+| Session/trace grouping | sessions (newer) | traces |
+| Agent step visualization | no | yes (native for LangChain/LangGraph) |
+| LLM-as-judge eval | no | yes |
+| Prompt versioning | no | yes |
+| Already running | yes (imllm.intermesh.net) | no |
+
+**Recommendation for later**:
+- LiteLLM UI is sufficient for cost/latency/error monitoring. Zero extra infra.
+- Add Langfuse ONLY when we need trace visualization, eval suite, or prompt
+  A/B testing.
+- For Phase 0-1: LiteLLM UI is enough. Revisit for Phase 2 quality work.
+
+**When**: Before Phase 3 chatbot (evals matter more there).
+
+---
+
+## Schema versioning, migration, and changelog for future agents
+
+**Why**: As we iterate on page structure, relations, and frontmatter fields, older
+pages will fall out of spec. We need a way to:
+1. Version the schema (e.g., `schema_version: 2` on every page)
+2. Migrate pages between versions without losing data
+3. Leave a changelog that explains WHY a decision was made (so a future LLM agent
+   compiling against v5 understands why a v2 page did something differently)
+
+**Pieces to build (Phase 2+)**:
+- `docs/SCHEMA.md` with versioned spec (v1, v2, ...) and changelog entries
+- `scripts/migrate_wiki.py migrate --to v2` that rewrites pages to match new
+  schema; must be idempotent and resumable
+- Every wiki page gets `schema_version` in frontmatter
+- `docs/DECISIONS.md` or ADRs for "why we did X" (e.g., "switched entity IDs
+  from name-slug to email-slug on 2026-05-01 because...")
+- Snapshot before migrating so you can roll back
+
+**Notes**:
+- Even v0→v1 will be a migration (our current pages have inconsistent `last_compiled`
+  hallucinations — a migration could stamp them all to a fresh known-bad marker
+  like `"unknown"`)
+- This also helps when comparing compiler prompt changes: snapshot v1, iterate
+  prompt, run on same raw emails, diff outputs
+
+**When**: Before Phase 3 chatbot. Essential for a multi-month evolving system.
+
+---
+
+## Thread-aware compilation ✅ SHIPPED (basic)
+
+**Shipped**: `scripts/compile_all.py:128-160` and `scripts/compile_parallel.py:55-85`
+now batch uncompiled emails by `thread_id` chronologically within thread,
+earliest-first across threads (commit `b7334b6`). `list_uncompiled_emails`
+returns `thread_id` so agent sees thread context.
+
+**Still open** (the design below captures the remaining gaps):
+- No `thread_state` field on wiki pages (open / decided / amended / closed)
+- No "quiet period" for live mode (Phase 1) — would prevent mid-conversation recompile
+- Agent can still split one thread across batches if the thread spans many emails
+
+**Original design notes kept for reference:**
+
+**Current state** (when entry was written — some now shipped):
+- Gmail API gives us `thread_id` (string like `19d431cd45e0b512`) on every
+  message — fully authoritative, no piecing together needed
+- We DO capture it in `raw/*.md` frontmatter
+- `list_uncompiled_emails` tool returns `thread_id`
+- Compiler prompt says "Group by thread_id when possible"
+
+**What's missing**:
+- No `list_uncompiled_threads` tool to let agent batch a whole thread
+- No thread state model (open / decision_pending / decided / amended / closed /
+  reopened)
+- Agent might compile the reply first (because it's chronologically later) and
+  miss context from the original
+- Multi-email threads show up as separate compile steps
+
+**Why it matters**:
+- A reply can reverse a decision ("Actually, let's go with option B instead")
+- Discussion threads need to compile as a unit for proper synthesis
+- Supersession detection is harder without thread context
+
+**Proposed design**:
+1. Add `list_uncompiled_threads` tool: groups uncompiled emails by `thread_id`,
+   returns `[{thread_id, emails: [{path, date, ...}], participants, subject}]`.
+2. Compile-all CLI batches by thread, not by email, so one agent invocation
+   sees all emails in one thread at once.
+3. Add `thread_state` field on relevant wiki pages: open / decided / etc.
+4. For live mode (Phase 1): "quiet period" — wait 30 min after last thread
+   activity before compiling. Prevents mid-conversation compilation.
+
+**When**: Phase 1 or Phase 2. Critical before full backlog (30 days, 3000+
+emails).
+
+---
+
+## Ordering guarantees — current behavior and known gaps
+
+**Sequential `compile_all.py`**:
+- `list_uncompiled_emails` sorts by filename (filenames start with `YYYY-MM-DD`)
+- Batches handed to agent strictly oldest → newest
+- Within a batch (3 emails): also chronological
+- **Supersession works naturally**: agent sees old policy first, then the email
+  that supersedes it
+
+**Parallel `compile_parallel.py`**:
+- Groups by `thread_id`, sorts WITHIN thread chronologically
+- Threads themselves processed CONCURRENTLY (no order between threads)
+- Supersession within a thread: fine
+- Cross-thread supersession (rare but real: "that reimbursement policy we
+  discussed in [thread A]? we're changing it, see [new thread B]"): agent
+  won't see thread A context while processing thread B if they're processing
+  concurrently
+
+**Mitigation for 30-day default run**:
+- Stick with sequential `compile_all.py` for the first full pass
+- Use parallel only for incremental updates (newly-arrived emails) where
+  cross-thread supersession is less common
+
+**Long-term fix** (Phase 2+):
+- Two-pass compile: pass 1 creates pages per email (parallel, fast); pass 2
+  runs a linter-agent that reads the whole wiki and detects cross-thread
+  supersession + conflicts
+- Or: serialize the "supersession detection" sub-task even while other steps
+  parallelize
+
+---
+
+## Thread quiet-period — avoid incremental thread recompiles (user insight)
+
+User's observation: "if I've processed message 1 and then replies 2, 3, 4
+arrive, I shouldn't send [1,2], then [1,2,3], then [1,2,3,4]. Just send
+[1,2,3,4] once."
+
+**For backfill**: already handled by `_group_by_thread` in `compile_all.py`.
+One LLM call per thread, full context. No redundant re-reads within a run.
+
+**Across separate backfill runs**: mild overhead. When run N+1 adds replies
+to a thread already compiled in run N, the agent re-reads the existing
+wiki page (which is a compressed summary of the earlier messages) before
+merging the new replies. Cost is lower than re-reading the original raws
+but non-zero. Mitigation: batch similar-date compile runs so most threads
+finish in one run.
+
+**Live mode (Phase 1)**: this is where the user's insight is critical.
+Naive live compile-on-every-arrival would recompile the same thread page 4
+times for a 4-reply conversation. Solution: **thread quiet period**
+(already in `docs/issues/08-phase1-live-ingestion.md`):
+- New message arrives → note thread_id, start 30-min timer
+- Additional message to same thread → reset timer
+- Timer fires → compile the whole thread as one batch
+- Saves ~3× on active threads
+
+**Edge**: hot threads that never go quiet — need a max-wait-time fallback
+(e.g., "compile anyway after 2h even if replies keep coming") to avoid
+starving important long-running discussions.
+
+**When**: implement with Phase 1 live ingestion.
+
+---
+
+## Topic hierarchy + tags (user observation from wiki UX)
+
+**Problem**: Currently `wiki/topics/*.md` is flat. `whatsapp-messaging-
+enhancement`, `whatsapp-smarter-seller-recommendations`, `whatsapp-context-
+aware-pricing-framework`, `whatsapp-launch-audit-as-skill`, `whatsapp9696`
+are all siblings at the same level. User asks: "WhatsApp has multiple
+different topics here. Should they be like tags?"
+
+**Proposed**:
+
+1. **Tags** (cheap, immediate): Add `tags:` frontmatter field populated by
+   the compiler. MkDocs Material's `tags` plugin renders a tag cloud +
+   per-tag page automatically. E.g., `tags: [whatsapp, buyer-side,
+   launch-2026-03]`. No file reorg needed.
+
+2. **Nested topics** (medium effort): split `wiki/topics/` into
+   `wiki/topics/whatsapp/{messaging,pricing,recommendations}.md` etc.
+   MkDocs nav auto-picks up the hierarchy. Requires:
+   - Compiler prompt update: "When creating a topic page that's clearly a
+     subtopic of an existing parent, put it under `wiki/topics/{parent}/`"
+   - Lint: parent page should list subtopics
+   - Index regeneration: show tree, not flat list
+
+3. **Cross-reference parent-child via `parent_topic:` frontmatter**:
+   `wiki/topics/whatsapp-messaging.md` has `parent_topic: whatsapp`. Hook
+   renders a "Part of [[whatsapp]]" banner. Less restructuring needed.
+
+**Recommendation**: ship tags first (zero migration cost, immediate
+benefit), revisit nested topics after compiling more of the backlog when
+we can see the shape of the hierarchy. Tag examples the compiler could
+emit: product (whatsapp, buyermy, msite), team (launch, tech, qa), phase
+(launch-audit, rollout, post-launch), entity-type (launch, bug-fix,
+infra).
+
+**When**: next iteration after current Tier 1 (stub-filler, tables).
+
+---
+
+## Wiki page metadata visible to users
+
+**Shipped in this session (mkdocs_hooks.py)**:
+- Metadata banner under h1: `**Last updated:** YYYY-MM-DD · **Sources:** N ·
+  **Status:** current`
+- Fix: blank line inserted before any list whose predecessor is a
+  paragraph (MkDocs was rendering `text\n- item` as a single paragraph)
+
+**Still missing** (user requested):
+- Number of updates (count of commits / recompiles per page) — needs
+  tracking in frontmatter or git log
+- Inline reference links to raw emails per section (currently all at
+  bottom in collapsible blocks)
+- Per-section update dates when a page's history spans weeks/months
+- Tags rendered in banner (blocked on tag implementation above)
+
+---
+
+## Advanced tools: filtering, sub-agents, RLM optimization
+
+Extensions once the basic KB and MCP are stable:
+
+1. **Complex filtering tools** for consumers: search by
+   `sender+date+entity+keyword` combo, Gmail-style operators (`from:X
+   before:Y has:table`). The MCP server surfaces these as structured
+   query tools rather than requiring the consumer agent to do multi-hop
+   filtering itself.
+
+2. **Sub-agent tools**: expose Deep Agents' subagent pattern to MCP
+   consumers so Claude Code / other clients can spawn bounded sub-agents
+   for specific KB tasks — e.g., "summarize everything related to X in
+   the last 30 days", "find all unresolved conflicts for this team".
+   The KB runs the sub-agent on behalf of the consumer, returns just
+   the distilled answer.
+
+3. **RLM-style optimization**: continually improve the compilation
+   prompt based on signal from Langfuse/Arize traces + user feedback on
+   wiki pages (a simple "was this helpful?" button). Use Langfuse's
+   prompt management / dataset features, or lean on something like
+   DSPy's COPRO/MIPRO to auto-tune the system prompt against a held-out
+   set of compilations.
+   - Phase: after 500+ compiled pages and at least two weeks of trace
+     data
+   - Requires: eval set of known-good compilations, a metric (fidelity?
+     concision? citation density?), a held-out corpus
+
+**When**: Phase 3+ — after MCP ships and we have real consumer usage.
+
+---
+
+## Agent skills + MCP server + tools for downstream consumers
+
+Once the KB is stable, expose it to other agents and tools:
+
+1. **Claude Agent Skill** — package the KB as a skill bundle so Claude Code
+   users can ask questions like "what's the current reimbursement policy"
+   and get cited answers from their org's compiled wiki without manual
+   setup.
+
+2. **MCP server** — standardized read interface. Tools:
+   - `list_topics(category?)` / `list_entities()` / `list_systems()`
+   - `read_page(slug)` with structured metadata
+   - `search(query, filters?)` — full-text + metadata filters
+   - `find_sources(person_email)` — return raw mails referencing a person
+   - `timeline(topic)` — chronological events on a topic
+   - `conflicts()` — surfaces unresolved contradictions
+   - `summarize_thread(thread_id)` — on-demand rollup
+   MCP makes the KB usable from any MCP-speaking client (Claude, Gemini,
+   Cursor, Windsurf, etc.).
+
+3. **Python library** — `pip install email-kb` exposing the same surface
+   programmatically for scripts and notebooks.
+
+4. **REST API** — thin FastAPI wrapper around the library for non-MCP
+   consumers (Slack bot, internal tools).
+
+**When**: after the wiki has enough content (500+ pages) and quality is
+stable. The MCP + skill bundle are each ~1-2 days. The library + API come
+free once the data model is versioned (schema_version frontmatter
+already in BACKLOG).
+
+**Why this matters**: the KB isn't just for browsing — it should be the
+authoritative source for any agent answering org-specific questions. A
+Slack bot, a "new hire onboarding" agent, a project-status dashboard —
+all should query this KB rather than re-deriving.
+
+---
+
+## Compile stall detection
+
+Overnight run hit a stuck batch — compile_all stayed in "running
+compilation" for 28+ min with no TCP activity, no budget movement, no
+file writes. I killed it manually and the loop resumed.
+
+For unattended runs, the overnight script should:
+1. Timeout each compile_all invocation (e.g., 15 min max per batch of 20)
+2. When hung, kill and resume next iteration
+3. Log the stall as a data point in .logs/ so we can see frequency
+
+Implementation: `timeout 900 uv run python scripts/compile_all.py ...`
+in scripts/compile_overnight.sh. Or `gtimeout` via coreutils on macOS.
+
+Also: per-batch `asyncio.wait_for` inside compile_parallel (already
+queued in the Tier 2 plan from overnight-plan).
+
+**When**: before next multi-hour run.
+
+---
+
+## Entity page bloat + context management
+
+**Cause diagnosed**: hot entity pages accumulate 100+ sources and 20-26KB
+of body text. When compiler reads them to merge new info, context fills
+up, LLM call hangs silently.
+
+**Fixes (Phase 2)**:
+1. **Size cap on entity pages**: summary of role + recent 20 sources +
+   link to "older sources" list. No unbounded growth.
+2. **Summarize tool**: `summarize_entity(slug) → ≤500 tokens` so the
+   compiler never loads full bloated pages. Only `read_file` the full
+   page if the summary isn't sufficient.
+3. **Auto-compact pass**: scheduled job that walks entity pages, merges
+   overlapping sources, rewrites into canonical summary. Ideally
+   triggered by RLM / DSPy prompt optimization (see below).
+
+**RLM-based quality loop** (extending earlier BACKLOG entry):
+User asked: "later we should set up RLM or something to solve these
+kinds of issues" — meaning auto-detect and auto-fix recurring failure
+modes via reinforcement learning on compile trajectories.
+
+Concrete shape:
+- Log every compile as a trace (Langfuse or Arize Phoenix)
+- Label traces that stalled, hit recursion limit, created duplicates, or
+  produced broken wikilinks
+- Use DSPy COPRO/MIPRO to tune the system prompt against these negative
+  examples
+- Iterative loop: bad behavior → label → retrain prompt → redeploy
+- Cost: the eval compute (probably 10× a normal compile run once)
+- Payoff: each prompt iteration fixes a class of failure (e.g., never
+  again create `foo-new.md` when `foo.md` exists)
+
+Prereqs: persistent trace storage, golden eval set of ~30 hand-compiled
+reference pages, a metric (fidelity / dupe rate / broken-link rate /
+context usage).
+
+**When**: after Phase 3 chatbot — need real user feedback to label
+failures that aren't just structural.
+
+---
+
+## Inline citations instead of long Sources section
+
+User: "Endless list of email threads at the bottom doesn't seem the best.
+Move to citation format."
+
+**Current** (messy):
+```
+## Main content
+The API launched on April 11 with 87% uptime and improved latency.
+
+## Sources
+📧 Email 1 subject (collapsible with full body)
+📧 Email 2 subject (collapsible)
+... (50 more)
+```
+
+**Proposed** (clean, academic-style):
+```
+## Main content
+The API launched on April 11 [^api-launch] with 87% uptime [^perf-audit].
+Metrics aligned with the Q1 target [^q1-review].
+
+## References
+[^api-launch]: [API Launch] (2026-04-11, from Amit) — launch@im thread
+[^perf-audit]: [Performance Audit] (2026-04-12, from QA) — perf-test thread
+[^q1-review]: [Q1 Review] (2026-03-28, from Yashwant)
+```
+
+MkDocs Material already renders pymdownx footnotes nicely — clickable,
+pops up on hover, can have back-refs.
+
+**Compiler prompt change**:
+- For every factual claim, emit `[^short-slug]` citation
+- Define footnotes at the bottom, each pointing to the right raw email
+- Keep `sources:` in frontmatter for machine use, but don't render raw
+  email bodies in the page anymore
+
+**What to preserve vs drop**:
+- Keep: source lineage, click-through to raw email
+- Drop: 50 collapsible email body blocks taking up 10KB of HTML per page
+- Add: inline citation markers at the exact claim they support
+
+**Migration path**:
+1. Compile new pages with new citation prompt going forward
+2. Old pages stay old until touched
+3. Per-page migration script that runs a compile pass in "reformat mode"
+   — re-read the sources, rewrite body with inline citations, don't change
+   facts
+
+**Expected visual improvement**:
+- No 20KB of collapsible `<details>` at the bottom of every page
+- Reader sees claim+citation together, not bolted-on-bottom
+- Aligns with how the MkDocs Material community publishes docs
+
+**When**: after source-dedup + CC-filter land; this is the "polish"
+layer. Probably after 500+ pages compiled.
+
+---
+
+## De-noise entity pages: drop CC-only sources
+
+**User insight**: "Does CC'd on this email really matter?" — no, usually
+not. CC-only means informational, not active. Including these on an
+entity page creates 3× noise vs real "work this person did."
+
+**Proposed filter rules** (multi-level — not just header position):
+
+Tier 1 — STRONG signal, always include:
+- Person is From **AND** email body from them is >30 words / has numbers /
+  URLs / code / decisions
+
+Tier 2 — MEDIUM signal, include with caveat:
+- Person is To (expected to act)
+- Person is From but message is short (<30 words) AND not an ack phrase
+
+Tier 3 — WEAK signal, exclude from main sources but keep searchable:
+- CC-only
+- From but message is just acknowledgement ("thanks", "+1", "lgtm",
+  "adding X to thread", emoji-only)
+- Body-mention only without header presence
+
+Classification:
+- Deterministic for CC-only and word-count heuristic (free)
+- Cheap classifier (gpt-4.1-nano ~\$0.001) for borderline cases:
+  ack vs substantive
+
+**Expected impact**: Entity pages drop from 50 sources to 10-15 sources
+of MEANINGFUL contribution. Page becomes "what did this person actually
+do" instead of "every thread they were CC'd on."
+
+**Expected impact**: Bharat Agarwal 48 sources → ~18. Himanshu-Jain 47 →
+maybe ~25. Page size and render noise both drop significantly.
+
+**Where to implement**:
+1. **Compile prompt**: tell the agent "Do not include an email as a source
+   on an entity page if the person is only in CC. From or To only."
+2. **backfill_stubs.py**: exclude CC-only matches from the hits list
+3. **One-off migration script**: walk existing entity pages, re-classify
+   each source as From/To/CC/body, drop the CC-only ones, update
+   frontmatter
+
+**Risk**: we lose some context. "Bharat was informed of X" is gone.
+Mitigation: keep a low-priority `also_mentioned_in:` frontmatter list
+with CC-only raws, not rendered by default but searchable.
+
+**When**: after current backfill stabilizes. One prompt change + migration.
+
+---
+
+## Multiple mailing lists
+
+**The dedup story is already fine** — we key off `Message-ID` (global, set by
+mail server), not Gmail's `thread_id`. Same email delivered to two lists
+produces one file because the hash collides to the same filename.
+
+**Changes needed to support `list A + list B`**:
+
+1. `.env`: `MAILING_LIST_ADDRESSES=list-a@company.com,list-b@company.com`
+   (current key `MAILING_LIST_ADDRESS` stays for single-list mode).
+2. `src/config.py`: expose `mailing_list_addresses: list[str]`.
+3. `scripts/ingest_backlog.py`: either loop the list, or build one Gmail query
+   `list:A OR list:B after:...`.
+4. `src/ingest/parser.py`: add `mailing_lists: [A, B]` to raw frontmatter when
+   we can detect which list delivered it (look at `Delivered-To` or
+   `List-Id` header).
+5. Compiler prompt: unchanged. It processes raw files regardless of list. The
+   `list:` provenance field is available if the compiler wants to label pages.
+
+**Edge cases**:
+- Same email sent to both lists → one raw file (dedup wins), `mailing_lists` has both.
+- Separate threads on same topic in two lists → two separate thread_ids, two
+  timelines. Compiler may create separate pages; cross-reference via the topic.
+- Budget: ~2× emails = ~2× compile cost. Use `compile_all --limit N` to
+  stagger.
+
+**Authentication**:
+- Current OAuth pulls `me` mailbox. If you're on all the lists, no changes.
+- If not: need domain-wide delegation (service account impersonating users) —
+  memory note already captures this.
+
+**When to build**: after live mode is proven on one list. Probably Phase 2.
+
+---
+
+## Agent meta-commentary (lessons-learnt from each compile batch)
+
+**Idea**: Each compile batch is a test. The LLM already forms judgments
+about what was easy/hard/ambiguous. Capture that structured commentary to
+compound improvement over runs.
+
+**Design**:
+- New tool `log_insight(category, message, suggested_action="")` — action
+  is optional. User explicitly said: it's fine to emit raw doubts like
+  "this is conflicting and confusing, not sure which is right" without
+  proposing any fix. Just the signal is valuable.
+- Categories: `missing_page` | `prompt_ambiguity` | `tool_gap` |
+  `supersession_doubt` | `conflict_candidate` | `pattern_noticed` |
+  `improvement_suggestion` | `question_for_human` | `structure_suggestion`
+- **`structure_suggestion`**: LLM can propose directory/schema/naming
+  changes. E.g., "All these 12 WhatsApp-* topics should probably live
+  under `wiki/topics/whatsapp/` with a parent page" or "We should add a
+  `wiki/bugs/` category separate from `topics/`". These get reviewed
+  weekly; good ideas become migrations.
+- **`question_for_human`**: LLM can ask outright questions it can't answer
+  from context — e.g., "What does BL mean here? Is it 'buyer lead' or
+  'back log' or something else?" or "Why does this policy differ from
+  the Feb 2026 one?" — queued for async human answer. Answers get fed
+  back into compiler context (via CLAUDE.md or a glossary file) so the
+  LLM doesn't have to ask again. Compounds system knowledge over time.
+- Writes a structured entry to `docs/insights/YYYY-MM-DD.md` with:
+  - ISO timestamp
+  - batch_id / thread_id (if available)
+  - category, severity (low/medium/high), message, suggested_action
+- Prompt: "After completing a batch, if anything was genuinely ambiguous
+  or would have benefited from a missing tool/page, call log_insight
+  once. Otherwise skip."
+
+**Value**:
+- Missing-page flags → auto-seed stubs in a nightly job
+- Ambiguity patterns → tighten prompt
+- Tool gaps → build the tools they ask for
+- Weekly human review of `docs/insights/*.md` in <10 min
+
+**Cost**: a few tokens per batch at most. Compounding benefit.
+
+**When**: After this thread-batching test validates. Probably before the
+next prompt iteration.
+
+---
+
+## Langfuse integration (self-hosted)
+
+**Instance**: `https://langfuse.intermesh.net`
+
+**Code status**: hooks already exist. `src/compile/compiler.py::
+get_langfuse_handler()` reads `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`,
+`LANGFUSE_HOST`, `LANGFUSE_ENABLED` from `.env` and attaches as a callback
+to every compile run. Today it's disabled (`LANGFUSE_ENABLED=false`).
+
+**To turn on**:
+1. Get credentials from Langfuse admin UI at langfuse.intermesh.net
+2. Set .env:
+```
+LANGFUSE_PUBLIC_KEY=...
+LANGFUSE_SECRET_KEY=...
+LANGFUSE_HOST=https://langfuse.intermesh.net
+LANGFUSE_ENABLED=true
+```
+3. Subsequent compile runs will stream traces to the Langfuse instance
+
+**What it adds beyond LiteLLM UI**:
+- Trace graphs — every tool call visible per batch (not just LLM cost)
+- Prompt A/B testing — version prompts, compare on same inputs
+- LLM-as-judge eval — automated scoring of compile quality
+- Sessions view — journey across batches
+- Free tier is self-hosted; no per-request fee
+
+**When**: After Phase 0 stabilizes (probably after thread-batching proves out
+over a full overnight run) and when we want to start tuning prompts
+systematically.
+
+---
+
+## Trivial-message filter (skip "+1", "thanks", "lgtm" replies)
+
+**Idea**: 40-60% of replies in corporate mailing lists are acknowledgement
+noise that pays full compile cost but adds zero to the wiki.
+
+**Two levels**:
+
+**Level 1 — deterministic** (no LLM, cheap):
+- Body < 20 words AND has `in_reply_to` (i.e., not thread-starter)
+- No URLs, no numbers, no code blocks, no attachments
+- Body matches regex blocklist: `^(thanks|thank you|\+1|👍|great|amazing|
+  lgtm|ship it|congrats|nice|sweet|awesome|\w+\+\+)\.?\s*$`
+- Mark with `skip_compile: true` at ingest time
+
+**Level 2 — cheap classifier** (optional, ~$0.001/call):
+- For messages 20-60 words, gpt-4.1-nano classifies: "substantive" or "ack"
+- Runs during ingest, zero impact on compile
+
+**Compile step**:
+- Skips any email with `skip_compile: true` — marks it compiled
+  immediately (bookkeeping) without LLM call
+- Summary of acknowledgements per thread added to thread's wiki page:
+  "Additional +1s from: [list of names]"
+
+**Expected savings**: 40-60% fewer LLM calls on mailing-list corpora.
+Probably bigger than thread-batching alone.
+
+**When**: After thread-batching proves out. Can be layered on top.
+
+---
+
+## Storage tier: local → GCS → Cloud SQL
+
+**Current (Phase 0)**: local disk only. raw/, wiki/, .snapshots/ all
+gitignored. GitHub holds code + docs + audit reports only.
+
+**Why not GitHub for content**:
+- Compliance risk — internal emails contain names, customer data, ticket IDs,
+  roadmaps. Even private GitHub has AI-training caches.
+- 100MB per-file limit; attachments will break this.
+- Git remembers forever — awkward for retention policies.
+- Can't do per-folder IAM.
+
+**Phase 1 target (when pipeline stable)**: GCS in voice-eval-stack-im.
+
+### Bucket layout
+
+```
+gs://voice-eval-stack-im-email-kb/
+  raw/                    # immutable .md, one per email (source of truth)
+  attachments/{msg_id}/   # blobs (PDFs, images) keyed by message_id short hash
+  wiki/                   # compiled markdown pages (regenerable)
+  snapshots/{label}/      # pre-compile backups (cleanup after 30d)
+  site/                   # optional: prebuilt static wiki HTML for hosting
+```
+
+### Sync mechanism
+
+- `scripts/sync_to_gcs.py` uses `gsutil rsync -d -r <local> gs://...`
+- Trigger: after every successful compile OR on a cron (10-min interval)
+- Can also pull: `gsutil rsync gs://... <local>` on a second machine
+- State: keep `.gcs_last_sync` with ISO timestamp
+
+### Cost (projected for 1 year at current rate)
+
+| Tier | Size | Monthly |
+|---|---|---|
+| Raw (hot, 6 months) | ~500MB × 2 = 1GB | $0.02 |
+| Raw (cold, 6-12 months) | 1GB | $0.004 |
+| Attachments (when enabled) | 5-50GB | $0.10-1.00 |
+| Wiki | 100-500MB | $0.01 |
+| Snapshots (rolling 7d) | ~500MB | $0.01 |
+| **Total** | — | **<$2/month** at full scale |
+
+Egress (if we serve publicly): $0.12/GB. If 10 viewers × 10MB/visit/day =
+100MB/day = 3GB/month = $0.36. Inconsequential.
+
+### Serving the wiki
+
+Three options, cheapest first:
+
+1. **Local MkDocs dev server + phone on LAN** (current): free
+2. **Static build → GCS static website hosting**: $0.01/month plus egress.
+   Not HTTPS by default (need Cloud CDN or custom domain+LB).
+3. **Static build → Cloud Run**: $free under free tier, HTTPS automatic,
+   can add Google IAP (Identity-Aware Proxy) for org-only access. **This
+   is what we'd pick for team access.**
+
+### Speed
+
+- Build time: MkDocs Material builds 10k pages in ~30s. Not a concern.
+- Read time: served as static HTML from Cloud Run or GCS — <100ms cold, <10ms warm.
+- GCS-to-build: rsync every 10 min is ~5s for incremental changes.
+- No per-request GCS reads = no per-request cost.
+
+### Rollout sequence (when we promote)
+
+1. Create bucket with uniform bucket-level IAM
+2. Grant voice-eval-stack-im service account read/write
+3. Initial `gsutil rsync` uploads current raw/ + wiki/
+4. Modify `scripts/watch_and_compile.py` to rsync at end of each tick
+5. Deploy static site to Cloud Run with IAP: `gcloud run deploy
+   --source site/ --allow-unauthenticated=false` + IAP binding
+6. Add `.env`: `GCS_BUCKET`, `WIKI_URL` for the deployed site
+7. README section: "Accessing the wiki"
+
+**Do this when**: (a) compile pipeline is stable for a week, OR (b) you
+want to access the wiki from another machine, OR (c) another team member
+wants read-only access.
+
+**Phase 3 target (search at scale, >5k pages)**: Cloud SQL Postgres (already
+running in the GCP project). PGroonga for full-text, pgvector for semantic.
+
+**Phase 4 target (team access to wiki)**: MkDocs static build → GCS static
+website → Cloud Run + IAP. Google sign-in gated to the org.
+
+**When to promote Phase 0 → 1**: second machine needs access, or we add
+automated ingestion (watch_and_compile.py running 24/7).
+
+---
+
+## Future: multi-list ingestion via Google Groups
+
+See memory: `email_kb_multi_list.md`. Instead of per-user OAuth, use Google
+Workspace domain-wide delegation + Admin SDK to enumerate groups and watch each.
+Would let us ingest all authorized mailing lists without new credential flows.
