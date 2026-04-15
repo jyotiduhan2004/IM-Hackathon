@@ -101,14 +101,13 @@ class Settings(BaseSettings):
     #   past 120 tool-calls without converging — the 24h guard window
     #   doesn't retain week-old failures, so it won't preemptively drop
     #   glm-4.6 if naively re-added.
-    # - deepseek/deepseek-v3.2, xiaomi/mimo-v2-pro, x-ai/grok-4.1-fast
-    #   (2026-04-15): added for wider A/B coverage. Team-key access is
-    #   not provisioned for deepseek/* or xiaomi/* yet — the guard will
-    #   drop them after their first ~10 401s.
-    llm_model_pool: str = (
-        "minimax/minimax-m2.7,z-ai/glm-5,"
-        "deepseek/deepseek-v3.2,xiaomi/mimo-v2-pro,x-ai/grok-4.1-fast"
-    )
+    # - deepseek/deepseek-v3.2, xiaomi/mimo-v2-pro (2026-04-16): removed
+    #   because team-key access isn't provisioned on the LiteLLM proxy
+    #   (every call 401s). Re-add only after proxy-team provisioning is
+    #   confirmed. x-ai/grok-4.1-fast stays in the pool — it was added
+    #   alongside these two on 2026-04-15 for wider A/B coverage and its
+    #   team-key access is working.
+    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5,x-ai/grok-4.1-fast"
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
