@@ -34,6 +34,11 @@ from scripts.validate_wiki import Error as ValidationError  # noqa: E402
 from scripts.validate_wiki import validate_page  # noqa: E402
 from src.budget import fetch_budget  # noqa: E402
 from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
+from src.compile.compiler import _generate_changes  # noqa: E402
+from src.compile.compiler import _generate_glossary  # noqa: E402
+from src.compile.compiler import _generate_home  # noqa: E402
+from src.compile.compiler import _regenerate_decision_stubs  # noqa: E402
+from src.compile.compiler import _regenerate_domain_hubs  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
@@ -68,6 +73,37 @@ structlog.configure(
     ],
 )
 logger = structlog.get_logger(__name__)
+
+
+def _regenerate_landing_surfaces(wiki_dir: str) -> None:
+    """Run the North-Star landing-page generators after the index rebuild.
+
+    Always invoked after `update_wiki_index` so the index-level stamping
+    pass has already settled `last_compiled`. Each generator is idempotent;
+    failures are logged but never abort the compile run — landing surfaces
+    are derived, not authoritative.
+    """
+    wiki_path = Path(wiki_dir)
+    jobs: tuple[tuple[str, Callable[[Path], Any], Callable[[Any], str]], ...] = (
+        (
+            "domain-hubs",
+            _regenerate_domain_hubs,
+            lambda r: f"Regenerated {len(r)} domain hubs.",
+        ),
+        ("glossary", _generate_glossary, lambda _r: "Regenerated glossary.md."),
+        ("home", _generate_home, lambda _r: "Regenerated home.md."),
+        ("changes", _generate_changes, lambda _r: "Regenerated changes.md."),
+        (
+            "decisions",
+            _regenerate_decision_stubs,
+            lambda r: f"Regenerated {len(r)} decision stubs.",
+        ),
+    )
+    for name, fn, fmt in jobs:
+        try:
+            click.echo(fmt(fn(wiki_path)))
+        except Exception as exc:  # noqa: BLE001 — landing gen must never abort a run
+            logger.warning("landing-failed", generator=name, error=str(exc))
 
 
 def _stamp_recently_modified_pages(
@@ -923,10 +959,13 @@ def main(
     if pool and available_models is not None:
         pool, unavailable = _filter_pool_to_available_models(pool, available_models)
         if unavailable:
-            click.echo(
-                "Provider catalog dropped " + ", ".join(unavailable) + " (not in /models)"
-            )
-    if not pool and available_models is not None and base_url and resolved_model not in available_models:
+            click.echo("Provider catalog dropped " + ", ".join(unavailable) + " (not in /models)")
+    if (
+        not pool
+        and available_models is not None
+        and base_url
+        and resolved_model not in available_models
+    ):
         click.echo(
             f"WARNING: selected model {resolved_model} is not advertised by "
             f"{base_url.rstrip('/')}/models"
@@ -963,6 +1002,7 @@ def main(
         # Still regenerate index in case wiki changed
         click.echo("Regenerating wiki index...")
         click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
+        _regenerate_landing_surfaces(wiki_dir)
         return
 
     # Auto-snapshot before compiling so we can roll back if the run corrupts
@@ -1270,6 +1310,7 @@ def main(
     # Regenerate index once after all batches complete — authoritative, not stale
     click.echo("\nRegenerating wiki index (post-compile)...")
     click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
+    _regenerate_landing_surfaces(wiki_dir)
 
     # Run validator and warn (but don't fail) if integrity is broken. Pre-compile
     # snapshot is already captured above for rollback.
