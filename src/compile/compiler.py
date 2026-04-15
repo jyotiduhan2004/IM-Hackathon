@@ -703,14 +703,10 @@ def _write_section_index(
     )
 
 
-def _write_home(
-    wiki_path: Path, sections: dict[str, list[dict[str, Any]]], now_iso: str
-) -> None:
+def _write_home(wiki_path: Path, sections: dict[str, list[dict[str, Any]]], now_iso: str) -> None:
     """Write `home.md` as a summary + recent-activity rollup."""
     counts = {k: len(v) for k, v in sections.items()}
-    all_pages = [
-        {**p, "category": cat} for cat, pages in sections.items() for p in pages
-    ]
+    all_pages = [{**p, "category": cat} for cat, pages in sections.items() for p in pages]
     all_pages.sort(key=lambda p: (p["last_compiled"], p["title"]), reverse=True)
     recent = all_pages[:15]
 
@@ -738,13 +734,8 @@ def _write_home(
     if recent:
         for page in recent:
             cat = page["category"]
-            status_suffix = (
-                "" if page["status"] == "current" else f" *({page['status']})*"
-            )
-            lines.append(
-                f"- [[{page['slug']}]] — {page['title']}"
-                f"{status_suffix} · *{cat}*"
-            )
+            status_suffix = "" if page["status"] == "current" else f" *({page['status']})*"
+            lines.append(f"- [[{page['slug']}]] — {page['title']}{status_suffix} · *{cat}*")
     else:
         lines.append("*No pages compiled yet.*")
     lines.append("")
@@ -1101,6 +1092,302 @@ def create_entities(raw_paths: list[str], entities: list[dict[str, Any]]) -> dic
     return create_entity_pages(raw_paths, entities)
 
 
+# === Browse / patch / validate tools (north-star recovery) ===
+
+
+_WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
+
+
+def _find_page_by_slug(slug: str, wiki_dir: str = "wiki") -> Path | None:
+    """Locate `wiki/<category>/<slug>.md` across known category dirs.
+
+    Returns the first match or None. Keep this private — the public tools
+    only expose the summary/patch result, never the filesystem path, so
+    callers can't treat the path as an agent-visible identifier.
+    """
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return None
+    for category in _WIKI_CATEGORIES:
+        candidate = wiki_path / category / f"{slug}.md"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _first_paragraph_capped(body: str, cap: int = 200) -> str:
+    """Return the first non-heading paragraph from `body`, hard-capped at `cap` chars.
+
+    Mirrors the convention in `_first_paragraph` above but with a tighter
+    cap so `get_page_summary` never floods the agent context. Headings
+    (`#`), blank lines, and blockquotes are skipped when they lead.
+    """
+    current: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current:
+                break
+            continue
+        if not stripped:
+            if current:
+                break
+            continue
+        current.append(stripped)
+    if not current:
+        return ""
+    para = " ".join(current)
+    if len(para) > cap:
+        return para[: cap - 3].rstrip() + "..."
+    return para
+
+
+def _extract_h2_headings(body: str) -> list[str]:
+    """Return the text of every `## H2` heading in document order."""
+    headings: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            headings.append(line[3:].strip())
+    return headings
+
+
+@tool
+def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
+    """Return a summary for a wiki page. Prefer this over `read_file` when
+    you only need to know what a page is about.
+
+    Scans `wiki/<category>/<slug>.md` across every wiki category, parses
+    the frontmatter, and returns the fields an agent actually needs to
+    decide "merge here or make a new page": title, page_type, status,
+    first paragraph (≤200 chars), list of H2 headings, source count, and
+    last_compiled. Does NOT return the filesystem path — callers should
+    treat the slug as the stable identifier.
+
+    Args:
+        slug: kebab-case page identifier (without `.md`).
+        wiki_dir: Root wiki directory. Default "wiki".
+
+    Returns:
+        On hit: ``{"found": True, "slug": str, "title": str, "page_type": str,
+        "status": str, "first_paragraph": str, "headings": list[str],
+        "source_count": int, "last_compiled": str}``.
+        On miss: ``{"found": False, "slug": str, "reason": "not_found"}``.
+    """
+    path = _find_page_by_slug(slug, wiki_dir)
+    if path is None:
+        return {"found": False, "slug": slug, "reason": "not_found"}
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"found": False, "slug": slug, "reason": f"read_error: {exc}"}
+
+    fm = _extract_frontmatter(content)
+    body = _extract_body(content)
+    sources = fm.get("sources") or []
+    source_count = len(sources) if isinstance(sources, list) else 0
+
+    return {
+        "found": True,
+        "slug": slug,
+        "title": str(fm.get("title") or slug),
+        "page_type": str(fm.get("page_type") or ""),
+        "status": str(fm.get("status") or "current"),
+        "first_paragraph": _first_paragraph_capped(body, cap=200),
+        "headings": _extract_h2_headings(body),
+        "source_count": source_count,
+        "last_compiled": str(fm.get("last_compiled") or ""),
+    }
+
+
+@tool
+def get_thread_context(thread_id: str) -> dict[str, Any]:
+    """Return all messages in a thread in chronological order with short previews.
+    Use when merging a new email into an existing topic page that spans multiple
+    emails.
+
+    Queries the Postgres `messages` table for every row matching `thread_id`,
+    ordered by `date` ASC, and attaches a 200-char body preview pulled from
+    the raw markdown. Missing raw files degrade gracefully — the preview
+    is an empty string rather than an exception.
+
+    Args:
+        thread_id: Gmail thread identifier.
+
+    Returns:
+        ``{"thread_id": str, "messages": [{"message_id", "subject", "from_addr",
+        "date", "raw_path", "first_200_chars", "compile_state"}, ...]}``.
+        Empty list when the thread is unknown.
+    """
+    from typing import cast
+
+    from src.db import connect
+
+    with connect() as conn:
+        raw_rows = conn.execute(
+            """
+            SELECT message_id, raw_path, subject, from_address, date, compile_state
+              FROM messages
+             WHERE thread_id = %s
+             ORDER BY date ASC NULLS LAST, message_id ASC
+            """,
+            (thread_id,),
+        ).fetchall()
+    rows = cast(list[dict[str, Any]], raw_rows)
+
+    messages: list[dict[str, Any]] = []
+    for row in rows:
+        raw_path = str(row["raw_path"] or "")
+        preview = ""
+        if raw_path:
+            try:
+                text = Path(raw_path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                text = ""
+            if text:
+                body = _extract_body(text)
+                preview = body[:200]
+        date_val = row["date"]
+        messages.append(
+            {
+                "message_id": str(row["message_id"] or ""),
+                "subject": str(row["subject"] or ""),
+                "from_addr": str(row["from_address"] or ""),
+                "date": date_val.isoformat() if date_val else "",
+                "raw_path": raw_path,
+                "first_200_chars": preview,
+                "compile_state": str(row["compile_state"] or ""),
+            }
+        )
+
+    return {"thread_id": thread_id, "messages": messages}
+
+
+@tool
+def patch_page(
+    slug: str,
+    section: str,
+    new_content: str,
+    wiki_dir: str = "wiki",
+) -> dict[str, Any]:
+    """Section-aware mutation. Use this for targeted updates instead of
+    read_file + edit_file loops. Creates the section if missing.
+
+    Loads `wiki/<category>/<slug>.md`, finds the H2 whose text matches
+    `section` (case-insensitive, trimmed), and replaces everything under
+    it up to the next H2 or EOF. If no matching H2 exists, a new section
+    is appended at the bottom of the page. Other sections and frontmatter
+    are left untouched. Writes atomically.
+
+    Args:
+        slug: kebab-case page identifier (without `.md`).
+        section: H2 heading text (e.g. "Current Policy"). Compared
+            case-insensitively after trimming.
+        new_content: Markdown for the section body. Do NOT include the
+            `## <section>` line — the tool writes that itself.
+        wiki_dir: Root wiki directory. Default "wiki".
+
+    Returns:
+        ``{"ok": bool, "slug": str, "section": str, "action": "replaced"|"created",
+        "bytes_written": int}`` on success.
+        ``{"ok": False, "slug": str, "error": str}`` on failure (page missing,
+        unreadable, or write error).
+    """
+    from src.compile.patch import replace_section
+
+    path = _find_page_by_slug(slug, wiki_dir)
+    if path is None:
+        return {"ok": False, "slug": slug, "error": f"page not found: {slug}"}
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"ok": False, "slug": slug, "error": f"read_error: {exc}"}
+
+    fm = _extract_frontmatter(content)
+    body = _extract_body(content)
+    new_body, action = replace_section(body, section, new_content)
+    rendered = _render_with_frontmatter(fm, new_body)
+
+    try:
+        _atomic_write_text(path, rendered)
+    except OSError as exc:
+        return {"ok": False, "slug": slug, "error": f"write_error: {exc}"}
+
+    return {
+        "ok": True,
+        "slug": slug,
+        "section": section.strip(),
+        "action": action,
+        "bytes_written": len(rendered.encode("utf-8")),
+    }
+
+
+@tool
+def validate_page_draft(
+    slug: str,
+    body: str,
+    title: str | None = None,
+    page_type: str | None = None,
+    wiki_dir: str = "wiki",
+) -> dict[str, Any]:
+    """Sanity-check a draft BEFORE writing it. Use when you're about to
+    `write_file` a new page but your confidence is low.
+
+    Applies four cheap checks that catch the compiler's most frequent
+    failure modes:
+
+    - `missing_tldr`: the first H2 is not `## TL;DR` AND the first 500
+      characters don't mention TL;DR anywhere.
+    - `over_quoting`: more than 30% of non-empty body lines are
+      blockquotes (`> ` prefix) — a sign the page is email paste-in,
+      not synthesis.
+    - `person_page_heuristic`: when `page_type` is ``person`` or
+      ``entity``, the body must contain ≥2 substantive sentences of
+      prose (not just headings, wikilinks, or CC-list mentions).
+    - `likely_duplicate`: another wiki page already has the same
+      (case-insensitive) `title`.
+
+    Args:
+        slug: kebab-case identifier for the draft (used to exclude
+            self-duplication in the likely-duplicate check).
+        body: Markdown body being considered.
+        title: Draft title. Without it, the duplicate check is skipped.
+        page_type: Draft page type (e.g. ``topic``, ``entity``, ``person``).
+            Without it, the person-page heuristic cannot fire.
+        wiki_dir: Root wiki directory for duplicate-title scanning.
+
+    Returns:
+        ``{"ok": bool, "warnings": [{"rule": str, "severity":
+        "warning"|"blocker", "message": str}, ...]}``. ``ok`` is False
+        when any warning has severity ``blocker``; warning-level items
+        are advisory only.
+    """
+    from src.compile.validation import check_likely_duplicate
+    from src.compile.validation import check_missing_tldr
+    from src.compile.validation import check_over_quoting
+    from src.compile.validation import check_person_page_heuristic
+
+    fm: dict[str, Any] = {}
+    if title is not None:
+        fm["title"] = title
+    if page_type is not None:
+        fm["page_type"] = page_type
+
+    warnings = [
+        w
+        for w in (
+            check_missing_tldr(body),
+            check_over_quoting(body),
+            check_person_page_heuristic(body, fm),
+            check_likely_duplicate(slug, fm, wiki_dir),
+        )
+        if w is not None
+    ]
+    has_blocker = any(w.get("severity") == "blocker" for w in warnings)
+    return {"ok": not has_blocker, "warnings": warnings}
+
+
 # === Frontmatter helpers ===
 
 
@@ -1232,6 +1519,10 @@ def create_compiler(
             write_draft_page,
             log_insight,
             check_my_work,
+            get_page_summary,
+            get_thread_context,
+            patch_page,
+            validate_page_draft,
         ],
         system_prompt=system_prompt,
         backend=backend,
