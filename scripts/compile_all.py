@@ -52,6 +52,8 @@ from src.db.messages import model_health_stats  # noqa: E402
 from src.db.tool_call_log import fallback_to_jsonl as tool_log_fallback_to_jsonl  # noqa: E402
 from src.db.tool_call_log import insert_many as tool_log_insert_many  # noqa: E402
 from src.db.tool_call_log import summarize as tool_log_summarize  # noqa: E402
+from src.db.users import upsert_user  # noqa: E402
+from src.db.wiki_pages import upsert_wiki_page  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
@@ -211,15 +213,29 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
     the wiki_pages→users FK (the stub tool already does this; this
     mirror-call keeps the post-batch hook self-contained).
 
-    Failures per-page are logged but never raised — catalog staleness is
+    Per-page errors are isolated via SAVEPOINT so one failing row doesn't
+    cascade. Without the savepoint, psycopg3 leaves the connection in an
+    aborted-transaction state after any constraint violation, and every
+    subsequent upsert on the same connection raises InFailedSqlTransaction
+    — silently zeroing out the rest of the batch's sync. Claude review
+    on PR #80 caught this; the `test_sync_does_not_cascade_on_bad_row`
+    test pins it.
+
+    Paths are stored repo-relative (matching `scripts/backfill_wiki_pages.py`)
+    so the two code paths don't fight over the `wiki_pages.path` column on
+    ON-CONFLICT updates.
+
+    Failures are logged but never re-raised — catalog staleness is
     strictly less bad than a crashed compile coordinator.
 
     Returns the count of pages successfully upserted.
     """
+    # `connect` is lazy-imported so the test suite's conftest
+    # monkeypatch on `src.db.connect` (which pins search_path to the
+    # per-test schema) is picked up here. A top-level `from src.db
+    # import connect` would bind the original unpatched function and
+    # tests would write to the production schema.
     from src.db import connect as _connect
-    from src.db.users import upsert_user as _upsert_user
-    from src.db.wiki_pages import upsert_wiki_page as _upsert_wiki_page
-    from src.utils import extract_frontmatter as _extract_fm
 
     wiki_dir_abs = wiki_dir.resolve()
     synced = 0
@@ -240,7 +256,7 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("catalog_sync_read_failed", path=str(page_abs), error=str(exc))
                 continue
-            fm = _extract_fm(content)
+            fm = extract_frontmatter(content)
             title_raw = fm.get("title")
             title = title_raw.strip() if isinstance(title_raw, str) and title_raw.strip() else None
             if not title:
@@ -256,31 +272,38 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
                 email_raw = fm.get("email")
                 if isinstance(email_raw, str) and email_raw.strip():
                     canonical_email = email_raw.strip()
-                    # Keep FK satisfied even if the person hasn't shown up as a
-                    # participant yet (new entity, not-yet-compiled emails).
-                    try:
-                        _upsert_user(conn, email=canonical_email, display_name=title)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "catalog_sync_user_upsert_failed",
-                            email=canonical_email,
-                            error=str(exc),
-                        )
-                        canonical_email = None  # drop to NULL rather than violate FK
+
+            # Match backfill_wiki_pages.py: prefer repo-relative, fall back
+            # to absolute if the page lives outside the repo tree. Without
+            # this, on-conflict updates overwrite backfilled relative paths
+            # with absolute ones and downstream consumers break.
             try:
-                _upsert_wiki_page(
+                path_to_store = str(page_abs.relative_to(REPO_ROOT))
+            except ValueError:
+                path_to_store = str(page_abs)
+
+            # Per-page SAVEPOINT: a bad row rolls back its own sub-txn and
+            # the outer loop keeps going. Otherwise a single constraint
+            # violation aborts the whole batch's sync silently.
+            try:
+                conn.execute("SAVEPOINT sync_page")
+                if canonical_email:
+                    upsert_user(conn, email=canonical_email, display_name=title)
+                upsert_wiki_page(
                     conn,
                     slug=page_abs.stem,
-                    path=str(page_abs),
+                    path=path_to_store,
                     title=title,
                     page_type=page_type,
                     status=status,
                     canonical_user_email=canonical_email,
                 )
+                conn.execute("RELEASE SAVEPOINT sync_page")
                 synced += 1
             except Exception as exc:  # noqa: BLE001
+                conn.execute("ROLLBACK TO SAVEPOINT sync_page")
                 logger.warning(
-                    "catalog_sync_upsert_failed",
+                    "catalog_sync_page_failed",
                     path=str(page_abs),
                     error=str(exc),
                 )

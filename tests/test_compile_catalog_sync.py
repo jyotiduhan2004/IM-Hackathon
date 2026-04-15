@@ -19,8 +19,10 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 
 import psycopg
+import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -115,6 +117,83 @@ def test_sync_falls_back_to_stem_when_title_missing(
     row = find_by_slug("sync-test-no-title")
     assert row is not None
     assert "Sync Test No Title" in row["title"]
+
+
+def test_sync_does_not_cascade_on_bad_row(
+    tmp_path: Path, db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Locks in the SAVEPOINT fix: a DB error on one page must not abort
+    the whole batch's sync. Without per-page savepoints, psycopg3 leaves
+    the connection in an aborted-transaction state after any constraint
+    violation, and every subsequent `conn.execute()` raises
+    `InFailedSqlTransaction` — which the broad `except Exception` in
+    this helper would silently swallow, zeroing the entire batch's sync.
+
+    Setup: three pages. The middle one triggers a constraint violation
+    by stubbing `upsert_wiki_page` to raise on a specific slug. The
+    other two must still sync.
+    """
+    wiki = tmp_path / "wiki"
+    good_a = wiki / "topics" / "cascade-test-good-a.md"
+    bad = wiki / "topics" / "cascade-test-bad.md"
+    good_b = wiki / "topics" / "cascade-test-good-b.md"
+    _write_page(good_a, {"title": "Good A", "page_type": "topic"}, "body")
+    _write_page(bad, {"title": "Bad", "page_type": "topic"}, "body")
+    _write_page(good_b, {"title": "Good B", "page_type": "topic"}, "body")
+
+    import src.db.wiki_pages as repo
+
+    real_upsert = repo.upsert_wiki_page
+
+    def flaky_upsert(conn: psycopg.Connection, *, slug: str, **kw: Any) -> int:
+        if slug == "cascade-test-bad":
+            # Simulate a constraint violation from inside the DB.
+            conn.execute("SELECT 1 / 0")
+            return 0
+        return real_upsert(conn, slug=slug, **kw)
+
+    monkeypatch.setattr(compile_all, "upsert_wiki_page", flaky_upsert)
+
+    synced = compile_all._sync_wiki_catalog([good_a, bad, good_b], wiki)
+
+    # 2 of 3 must have synced (the good ones), not 0 or 1.
+    assert synced == 2
+
+    from src.db.wiki_pages import find_by_slug
+
+    assert find_by_slug("cascade-test-good-a") is not None
+    assert find_by_slug("cascade-test-bad") is None
+    assert find_by_slug("cascade-test-good-b") is not None
+
+
+def test_sync_stores_repo_relative_paths(
+    tmp_path: Path, db_conn: psycopg.Connection
+) -> None:
+    """Locks in Claude review Bug 2: touched pages under REPO_ROOT must
+    store repo-relative paths, matching scripts/backfill_wiki_pages.py.
+    Otherwise the next compile overwrites backfilled relatives with
+    absolutes via ON-CONFLICT UPDATE."""
+    # Put a page under REPO_ROOT so the relative-path branch fires.
+    wiki = compile_all.REPO_ROOT / "tests" / "fixtures" / "tmp_sync_rel"
+    page = wiki / "topics" / "sync-test-rel-path.md"
+    try:
+        _write_page(page, {"title": "Rel Path", "page_type": "topic"}, "body")
+        compile_all._sync_wiki_catalog([page], wiki)
+
+        from src.db.wiki_pages import find_by_slug
+
+        row = find_by_slug("sync-test-rel-path")
+        assert row is not None
+        assert not row["path"].startswith("/"), (
+            f"expected repo-relative, got absolute: {row['path']}"
+        )
+        assert "tests/fixtures/tmp_sync_rel" in row["path"]
+    finally:
+        # Clean up the fixture even if the assertion fails.
+        import shutil
+
+        if wiki.exists():
+            shutil.rmtree(wiki)
 
 
 def test_sync_is_idempotent(tmp_path: Path, db_conn: psycopg.Connection) -> None:
