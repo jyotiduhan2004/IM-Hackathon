@@ -600,13 +600,10 @@ def main(
                 f"earliest={earliest}, model={batch_model}) ==="
             )
             cache_cb = BatchStatsCallback(model=batch_model)
-<<<<<<< HEAD
             tool_cb = ToolCallLogHandler()
-=======
             # Snapshot the insight-id cursor BEFORE the batch so we can show
             # only the insights logged during this batch in the digest.
             insights_cursor = _max_insight_id_safe(run_id)
->>>>>>> 7154b89 (fix(compile): address log_insight review — batch-scoped digest + uuid FK + real test)
             try:
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it

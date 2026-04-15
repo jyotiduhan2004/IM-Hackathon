@@ -1,0 +1,15 @@
+# Pre-commit hooks — run locally via `pre-commit install` and on every PR
+# via `.github/workflows/pre-commit.yml`.
+#
+# Scope kept intentionally small: just the two hooks that would have
+# caught the 2026-04-15 incident (unresolved `<<<<<<< HEAD` shipped to main
+# in `scripts/compile_all.py`). Broader hygiene hooks (whitespace, EOF,
+# YAML strict parsing) are deferred — they'd churn the corpus on a first
+# pass and aren't directly tied to any incident we've hit yet.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-ast
