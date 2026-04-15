@@ -92,8 +92,9 @@ class Settings(BaseSettings):
     # Pool history (the guard handles short-term flap; these comments
     # capture the "don't re-add yet" judgment calls the guard can't):
     # - z-ai/glm-5.1 (2026-04-13): LiteLLM proxy returned 400 on every
-    #   call. Re-added 2026-04-15; guard will drop it again if the
-    #   proxy still rejects it.
+    #   call. Re-added 2026-04-15 — proxy still returned "Invalid model
+    #   name" on every attempt, so dropped again. Do NOT re-add until
+    #   someone confirms the upstream model ID on the LiteLLM side.
     # - z-ai/glm-4.6 (2026-04-14): 52% recursion-limit fail rate across
     #   44 batches (minimax-m2.7 and glm-5 ran ~5% on the same prompt).
     #   Kept OUT of the pool until someone investigates why it loops
@@ -105,7 +106,7 @@ class Settings(BaseSettings):
     #   not provisioned for deepseek/* or xiaomi/* yet — the guard will
     #   drop them after their first ~10 401s.
     llm_model_pool: str = (
-        "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-5.1,"
+        "minimax/minimax-m2.7,z-ai/glm-5,"
         "deepseek/deepseek-v3.2,xiaomi/mimo-v2-pro,x-ai/grok-4.1-fast"
     )
 

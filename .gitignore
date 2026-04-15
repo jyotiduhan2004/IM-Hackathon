@@ -68,3 +68,6 @@ logs/
 
 # Claude Code local settings / worktrees
 .claude/
+
+# Playwright MCP debug logs
+.playwright-mcp/

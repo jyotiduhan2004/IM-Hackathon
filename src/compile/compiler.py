@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from datetime import UTC
 from datetime import date
 from datetime import datetime
@@ -409,10 +410,258 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
     index_path = wiki_path / "index.md"
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    # Rebuild reader-facing landing pages (home.md + section indexes) so the
+    # deployed site shows real page listings instead of the hand-written
+    # "(Placeholder — comes in a later PR)" stubs. Deterministic — no LLM in
+    # this path — so it's safe to run every compile cycle.
+    landing_summary = rebuild_landing_pages(wiki_dir)
+
     return (
         f"updated index: {total} pages across "
         f"{sum(1 for v in categories.values() if v)} categories; "
-        f"auto-stamped {stamped} pages with last_compiled"
+        f"auto-stamped {stamped} pages with last_compiled; "
+        f"{landing_summary}"
+    )
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write `content` to `path` atomically (temp file + Path.replace).
+
+    Prevents truncated/partial landing pages if the process dies mid-write
+    or two coordinator entrypoints race (e.g. compile_all + watch_and_compile
+    running at the same time). `Path.replace` is atomic on POSIX and Windows
+    when src and dst are on the same filesystem — tempfile creates in the
+    same directory, so the guarantee holds.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
+
+
+def _page_summary(md_file: Path) -> dict[str, Any] | None:
+    """Extract reader-facing summary fields from a wiki page.
+
+    Returns None for pages with broken frontmatter so the caller can skip
+    them. The `is_stub` flag is True when the page has no sources cited —
+    used to hide ghost entity/system pages from the landing listings.
+    """
+    try:
+        content = md_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    fm = _extract_frontmatter(content)
+    if not fm or "title" not in fm:
+        return None
+    body = _extract_body(content)
+    sources = fm.get("sources") or []
+    last_compiled = str(fm.get("last_compiled", "") or "")
+    # `last_compiled: stub` and `stub-backfilled` are the canonical stub
+    # markers used by `scripts/backfill_stubs.py` — keep this rule in sync
+    # with `scripts/backfill_stubs.py::_is_stub`.
+    is_stub_marker = last_compiled in ("stub", "stub-backfilled")
+    return {
+        "slug": md_file.stem,
+        "title": str(fm.get("title", md_file.stem)),
+        "status": str(fm.get("status", "current")),
+        "last_compiled": last_compiled,
+        "summary": _first_paragraph(body),
+        "sources_count": len(sources) if isinstance(sources, list) else 0,
+        "is_stub": not sources or is_stub_marker,
+    }
+
+
+def _first_paragraph(body: str) -> str:
+    """Return the first non-empty, non-heading paragraph from a page body.
+
+    Used as the one-line summary next to each listing entry. Truncated to
+    a single line (280 chars) so long intros don't blow up the listing.
+    """
+    current: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current:
+                break
+            continue
+        if not stripped:
+            if current:
+                break
+            continue
+        current.append(stripped)
+    if not current:
+        return ""
+    para = " ".join(current)
+    return para[:277] + "..." if len(para) > 280 else para
+
+
+_SECTION_BLURBS = {
+    "topics": (
+        "Projects, initiatives, rollouts, incidents, decisions, and "
+        "migrations being discussed on the mailing list. If a page is "
+        "mostly about **status and change**, it lives here."
+    ),
+    "systems": (
+        "Durable products, platforms, tools, services, and mailing lists. "
+        "If a page is mostly about **the thing itself**, it lives here."
+    ),
+    "entities": (
+        "Contributors and owners named on the mailing list. Stub pages "
+        "with no cited sources are hidden from this view."
+    ),
+    "policies": (
+        "Current rules, approval flows, guidelines, and procedures — "
+        "including the supersession history when a policy has been replaced."
+    ),
+}
+
+_SECTION_TITLES = {
+    "topics": "Topics",
+    "systems": "Products & Platforms",
+    "entities": "People",
+    "policies": "Policies",
+}
+
+
+def rebuild_landing_pages(wiki_dir: str = "wiki") -> str:
+    """Regenerate home.md + 4 section index pages as real listings.
+
+    Replaces the hardcoded "(Placeholder — comes in a later PR)" stubs
+    with full page listings sorted by `last_compiled` desc. Entity and
+    system pages with `sources: []` are hidden (they're ghost pages left
+    over from the create_entity evidence-gate workflow).
+
+    This is a pure coordinator function — no LLM — so it runs on every
+    compile cycle via `update_wiki_index` (the shared entrypoint used
+    by compile_all, compile_parallel, and watch_and_compile).
+
+    Returns a one-line summary for the CLI log.
+    """
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return f"landing rebuild skipped: wiki dir not found ({wiki_dir})"
+
+    now_iso = datetime.now(UTC).isoformat()
+    sections: dict[str, list[dict[str, Any]]] = {}
+    for category in _SECTION_TITLES:
+        cat_dir = wiki_path / category
+        pages: list[dict[str, Any]] = []
+        if cat_dir.exists():
+            for md_file in cat_dir.glob("*.md"):
+                if md_file.name == "index.md":
+                    continue
+                summary = _page_summary(md_file)
+                if summary is None:
+                    continue
+                if category in ("entities", "systems") and summary["is_stub"]:
+                    continue
+                pages.append(summary)
+        pages.sort(key=lambda p: (p["last_compiled"], p["title"]), reverse=True)
+        sections[category] = pages
+
+    for category, pages in sections.items():
+        _write_section_index(wiki_path, category, pages, now_iso)
+
+    _write_home(wiki_path, sections, now_iso)
+
+    totals = ", ".join(f"{k}={len(v)}" for k, v in sections.items())
+    return f"rebuilt landing pages ({totals})"
+
+
+def _write_section_index(
+    wiki_path: Path, category: str, pages: list[dict[str, Any]], now_iso: str
+) -> None:
+    """Write `<category>/index.md` as a real listing."""
+    title = _SECTION_TITLES[category]
+    blurb = _SECTION_BLURBS[category]
+    lines = [f"# {title}", "", blurb, ""]
+    if pages:
+        lines.extend([f"**{len(pages)} pages**, most recently compiled first.", ""])
+        for page in pages:
+            status_suffix = "" if page["status"] == "current" else f" *({page['status']})*"
+            entry = f"- [[{page['slug']}]] — {page['title']}{status_suffix}"
+            lines.append(entry)
+            if page["summary"]:
+                lines.append(f"  <br>{page['summary']}")
+    else:
+        lines.append("*No pages compiled yet.*")
+    lines.append("")
+
+    fm = {
+        "title": title,
+        "page_type": "index",
+        "status": "current",
+        "last_compiled": now_iso,
+    }
+    _atomic_write_text(
+        wiki_path / category / "index.md",
+        _render_with_frontmatter(fm, "\n".join(lines)),
+    )
+
+
+def _write_home(
+    wiki_path: Path, sections: dict[str, list[dict[str, Any]]], now_iso: str
+) -> None:
+    """Write `home.md` as a summary + recent-activity rollup."""
+    counts = {k: len(v) for k, v in sections.items()}
+    all_pages = [
+        {**p, "category": cat} for cat, pages in sections.items() for p in pages
+    ]
+    all_pages.sort(key=lambda p: (p["last_compiled"], p["title"]), reverse=True)
+    recent = all_pages[:15]
+
+    lines = [
+        "# Home",
+        "",
+        "Internal knowledge base compiled from our mailing lists.",
+        "",
+        "## What's here",
+        "",
+        f"- [Topics](topics/) — **{counts['topics']}** pages on rollouts, "
+        "decisions, incidents, and experiments.",
+        f"- [Products & Platforms](systems/) — **{counts['systems']}** pages on "
+        "durable tools, services, and mailing lists.",
+        f"- [Policies](policies/) — **{counts['policies']}** pages on current "
+        "rules, approval flows, and guidelines.",
+        f"- [People](entities/) — **{counts['entities']}** pages on "
+        "contributors and owners (stubs hidden).",
+        "- [Changes](log/) — chronological compile log.",
+        "- [About](about/) — how this wiki is built.",
+        "",
+        "## Most recently updated",
+        "",
+    ]
+    if recent:
+        for page in recent:
+            cat = page["category"]
+            status_suffix = (
+                "" if page["status"] == "current" else f" *({page['status']})*"
+            )
+            lines.append(
+                f"- [[{page['slug']}]] — {page['title']}"
+                f"{status_suffix} · *{cat}*"
+            )
+    else:
+        lines.append("*No pages compiled yet.*")
+    lines.append("")
+
+    fm = {
+        "title": "Home",
+        "page_type": "index",
+        "status": "current",
+        "last_compiled": now_iso,
+    }
+    _atomic_write_text(
+        wiki_path / "home.md",
+        _render_with_frontmatter(fm, "\n".join(lines)),
     )
 
 
