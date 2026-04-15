@@ -1557,7 +1557,8 @@ class EntityRequest(BaseModel):
             "Case-insensitive. Must appear literally in one of the batch's "
             "raw email files or the tool will refuse."
         ),
-        min_length=1,
+        min_length=5,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+",
     )
     display_name: str = Field(
         default="",
