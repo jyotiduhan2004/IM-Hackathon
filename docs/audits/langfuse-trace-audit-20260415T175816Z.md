@@ -2,6 +2,9 @@
 
 Generated: `2026-04-15T17:58:16Z`
 
+Updated: `2026-04-16` with a second expert review focused on Anthropic tool
+design and context-engineering guidance.
+
 ## Scope
 
 This pass audits the most recent 50 Langfuse traces visible on 2026-04-15.
@@ -66,6 +69,179 @@ taxonomy.
 - `resolve_page` is not doing enough work for the agent. It both under-recalls on fuzzy/domain-like queries and returns absolute wiki paths on hits, which reinforces the wrong path habit.
 - Reflection is mostly absent. The prompt names `log_insight` as the channel for tool gaps, prompt ambiguity, and structure suggestions, yet 20 traces showed visible friction with no corresponding insight log.
 - Entity discipline is still porous. Three traces wrote entity pages directly instead of treating `create_entity` as the only slug-minting boundary.
+
+## Second review synthesis
+
+A second expert review reached the same directional conclusion but added a more
+explicit roadmap:
+
+- Prompt alignment to the ratified north star is only about 50%.
+- Tooling is closer, around 60%, but still has overlap and stale contracts.
+- The coordinator is furthest ahead, around 80%, because it already owns most
+  deterministic state transitions.
+
+That diagnosis matches the trace sample and the DB telemetry:
+
+- `compile_insights` still has 0 rows, so the reflection channel exists but is
+  not being activated.
+- `create_entity` has 271 calls versus `write_draft_page` at 1, which is the
+  opposite of the intended "people are lazy/reference-only" posture.
+- `resolve_page` has 143 calls with 113 misses, so the lookup surface is still
+  too weak to anchor the model.
+- 290 of 1120 file-operation calls in `compile_tool_calls` were absolute-like,
+  which confirms the path-shape problem is systemic rather than anecdotal.
+
+## Anthropic rubric applied here
+
+The second review grounded the roadmap in two Anthropic essays:
+
+- "Writing effective tools for AI agents"
+- "Effective context engineering for AI agents"
+
+The highest-value rules for this codebase are:
+
+- High-impact workflows over thin API wrappers.
+- Fewer tools with less overlap.
+- Unambiguous parameters and strict schemas.
+- Tool docstrings written as if for a new teammate.
+- Just-in-time context loading instead of preloading large catalogs.
+- Structured prompts with clear sections and only the minimum rules that still
+  explain the job.
+
+## Prompt audit additions
+
+### Keep
+
+- The hard-rule block is strong and specific.
+- The wikilink rules are concrete and testable.
+- The light topic-page guidance is good: lead paragraph first, sentence 1 is a
+  definition, no hand-written `## Related`.
+- The "preserve technical depth" and "preserve structured tables verbatim"
+  sections are directionally right.
+- The `log_insight` taxonomy is well-scoped once the model actually uses it.
+
+### Rewrite
+
+- The prompt still teaches the old six-page-type world. It references
+  `timelines/` and `conflicts/`, while the north star explicitly drops both and
+  replaces the center of gravity with topics, systems, domain hubs, glossary,
+  and lazy decisions/people.
+- The workflow is still "process each email, decide what pages it touches" when
+  the north star is "maintain concept pages that happen to grow from email."
+- The prompt is still entity-first. It says to always call `create_entity` for
+  people, which conflicts with the new "people are reference-only and hidden
+  from primary nav" model.
+- There is no synthesis self-review. `check_my_work` currently asks "is the
+  markdown clean?" but not "does this read like an encyclopedia entry instead of
+  a filing cabinet?"
+- There is no trivial-message filter. Acks and short reply-only emails are not
+  being explicitly skipped even though the north star expects that filter.
+- There is no domain/tag guidance, no lazy decision-page guidance, and no
+  canonical examples of a good topic page in the new shape.
+- At 400+ lines, the prompt has grown by patching rather than by a deliberate
+  rewrite. The next change should be a Phase-1 rewrite, not another local edit.
+
+## Tool audit additions
+
+### Strong tools
+
+- `find_new_sources`: good bounded shape and actionable errors.
+- `resolve_page`: good intent, but current behavior under-delivers.
+- `write_draft_page`: good concept, underused.
+- `log_insight`: good concept, unused.
+
+### Tools that need contract changes
+
+- `list_wiki_pages`: too thin. It returns bare names, forcing the agent into
+  unnecessary `read_file` calls just to preview state. It should grow a
+  `response_format` and expose page type, status, last compiled, section
+  headings, and source count.
+- `check_my_work`: the docstring needs a hard "call this after writing, never
+  before" anchor. It also needs to evolve from lint-only critique into
+  synthesis critique.
+- `create_entity` and `create_entities`: the implementations are better than the
+  surrounding workflow, but they are still fighting the north star. People
+  should no longer be the compiler's default expansion surface.
+- `create_entities` specifically should lose `raw_paths` from the model-facing
+  contract. That is coordinator-owned context and should be injected, not
+  restated.
+
+### Coordinator-only cleanup
+
+The second review also reinforced an earlier point: several old `@tool`
+functions should stay out of the model-facing toolbox entirely because they are
+coordinator work or dead-state helpers.
+
+- `list_uncompiled_emails`
+- `stamp_page_compiled_at`
+- `mark_as_compiled`
+- `update_wiki_index`
+- `append_to_log`
+
+### Missing tools
+
+The highest-value additions named in the second review are:
+
+- `get_page_summary(slug)`: structured preview without a full page read.
+- `get_thread_context(thread_id)`: one call instead of multiple raw-file reads.
+- `patch_page(slug, section, new_content)`: a higher-level write tool than
+  repeated `edit_file`.
+- `propose_page(frontmatter, body)`: validate new-page structure before writing.
+- `list_domain_topics(domain)`: needed once domain hubs are generated.
+- `merge_topics(slug_a, slug_b)`: explicitly deferred to a later dedupe phase.
+
+## Ordered roadmap
+
+### Phase A - stop the bleeding
+
+- Remove coordinator-only tools from the agent-facing surface and convert the
+  dead `@tool` wrappers to plain functions.
+- Upgrade `list_wiki_pages` with a concise/detailed response shape.
+- Tighten the `check_my_work` and `resolve_page` docstrings so they explicitly
+  steer away from the two most common trace failures:
+  `check_my_work` at the start, and `resolve_page` loops on the same concept.
+- Trim the model pool to known-good options rather than keeping obviously weak
+  or noisy choices around.
+
+### Phase B - rewrite the compiler prompt to the north-star shape
+
+- Replace the current six-page-type/event-archive prompt with a shorter
+  structured prompt organized around concept pages, lazy people pages, domain
+  tagging, lazy decisions, and synthesis self-review.
+- Drop `timelines/` and `conflicts/` from the main workflow.
+- Add the trivial-message filter.
+- Add domain and tag guidance.
+- Move `create_entity` out of the default workflow and into an exceptional path.
+
+### Phase C - add the missing high-leverage tools
+
+- Ship `get_page_summary`.
+- Ship `get_thread_context`.
+- Ship a higher-level page patch/update tool so the model stops doing repeated
+  low-level markdown surgery.
+
+### Phase D - land north-star structures
+
+- Compiler-generated domain hubs.
+- Lazy decision pages.
+- Auto-generated glossary.
+- Viewer/nav changes that hide people from primary navigation and show the new
+  status model.
+
+### Phase E - formalize evaluation
+
+- Keep a small golden set of representative compile tasks.
+- Add a trace-driven optimization loop so prompt and tool changes are judged on
+  real transcripts, not just local intuition.
+
+## Explicit non-goals from the second review
+
+- Do not mix viewer work into the same PR as the prompt rewrite.
+- Do not add sub-agents yet.
+- Do not pull `wiki_merge_pages` forward into Phase 1 just to paper over
+  duplicate-generation problems.
+- Do not keep incrementally patching the current prompt forever; the next big
+  step should be a clean rewrite.
 
 ## Per-trace notes
 
