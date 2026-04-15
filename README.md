@@ -116,10 +116,10 @@ uv run python scripts/ingest_backlog.py --days 30
 uv run python scripts/compile_all.py
 
 # 3. Browse the result
-ls wiki/topics/     # project/product pages
-ls wiki/entities/   # people and team pages
+ls wiki/topics/     # project/product concept pages
+ls wiki/people/     # people pages (reference-only)
 ls wiki/policies/   # current policies with history
-cat wiki/index.md   # master catalog
+cat wiki/home.md    # curated front door
 
 # 4. Lint the wiki for issues
 uv run python scripts/lint_wiki.py
@@ -146,7 +146,7 @@ Gmail mailing list
 - Postgres owns compile state and run bookkeeping.
 - The compiler agent writes wiki content only.
 - The coordinator script verifies outcomes, stamps modified pages,
-  appends to `wiki/log.md`, and rebuilds `wiki/index.md`.
+  appends to `wiki/log.md`, and rebuilds `wiki/home.md`.
 
 ### Post-batch auto-format and validate
 
@@ -164,12 +164,14 @@ flags something actionable.
 
 ### Current information architecture
 
-- `wiki/topics/` is the most important surface. This is where project and
-  decision knowledge should concentrate.
-- `wiki/systems/` is for products, services, tools, URLs, and mailing lists.
-- `wiki/entities/` is for humans only.
-- `wiki/policies/`, `wiki/timelines/`, and `wiki/conflicts/` exist, but are
-  still underused compared to topics and systems.
+- `wiki/topics/` is the primary surface — concept pages (not per-thread). One page per
+  project/initiative/thing; it grows as new emails arrive.
+- `wiki/systems/` is for products, services, tools, and platforms.
+- `wiki/decisions/` is lazy-created — only when a topic wikilinks to a decision.
+- `wiki/policies/` is for org-wide rules/procedures. Rare.
+- `wiki/people/` is reference-only and hidden from primary nav.
+- `wiki/domains/` holds 8 compiler-generated hub pages (rollups by domain tag).
+- `timelines/` and `conflicts/` were dropped (zero pages after 2 weeks).
 - Query APIs and chatbot-style retrieval are not shipped yet.
 
 ## Tech stack
@@ -214,10 +216,10 @@ email-knowledge-base/
 ├── raw/                           # Immutable email storage
 ├── wiki/                          # Compiled knowledge base
 ├── docs/
+│   ├── NORTH-STAR.md              # Canonical direction
 │   ├── BACKLOG.md
-│   ├── issues/
-│   ├── reviews/
-│   └── runs/
+│   ├── proposal/                  # Active design drafts + decisions log
+│   └── archive/                   # Superseded strategy docs
 ├── mkdocs.yml
 ├── mkdocs_hooks.py
 ├── CHANGELOG.md
@@ -283,13 +285,12 @@ improvements are mostly structural:
   context, and make page state legible at a glance.
 - **Less provenance noise**: preserve trust, but render sources in a way that
   supports the prose instead of swallowing it.
-- **Cleaner category boundaries**: entities are humans, systems are products and
-  tools, timelines/policies/conflicts appear when they add navigational value.
+- **Cleaner category boundaries**: topics/systems are primary; decisions and people
+  pages are lazy (created only when linked); domains provide rollup navigation.
 
-The detailed target structure is captured in
-[`docs/issues/09-internal-wiki-structure.md`](docs/issues/09-internal-wiki-structure.md).
-The execution plan for getting there lives in
-[`docs/issues/10-phase1-implementation-plan.md`](docs/issues/10-phase1-implementation-plan.md).
+The detailed target structure and execution plan are captured in
+[`docs/NORTH-STAR.md`](docs/NORTH-STAR.md) and the Phase 1 PRs in
+[`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## Deploying to GCP
 

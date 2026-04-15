@@ -15,7 +15,7 @@ Delivers the North Star's structure, 8 domain hubs, page templates, status badge
 - ✓ Introduce `docs/NORTH-STAR.md`
 - ✓ Rewrite `CLAUDE.md` for new 4+2 page taxonomy
 - ✓ Rewrite `README.md` to match direction
-- Ratify `docs/proposal/NORTH-STAR-DRAFT.md` → promote to canonical (this file becomes the single spec)
+- ✓ Ratify `docs/proposal/NORTH-STAR-DRAFT.md` — merging this PR locks the 21 decisions; `NORTH-STAR-DRAFT.md` remains as the decisions log, `docs/NORTH-STAR.md` is the canonical spec
 
 ### PR-B: Structural compiler changes
 Deliver "concept pages, not filing cabinet".
