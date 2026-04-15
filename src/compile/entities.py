@@ -21,10 +21,14 @@ import re
 from pathlib import Path
 from typing import Any
 
+import psycopg
+import structlog
 import yaml
 
 from src.config import settings
 from src.utils import extract_frontmatter
+
+logger = structlog.get_logger(__name__)
 
 _EMAIL_RE = re.compile(r"^[a-z0-9._+\-]+@[a-z0-9.\-]+\.[a-z]+$")
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -149,23 +153,31 @@ def _classify_evidence(counts: dict[str, int]) -> str:
     return "weak"
 
 
+_ZERO_COUNTS = {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads": 0}
+
+
 def _evidence_counts(email: str) -> dict[str, int]:
-    """Best-effort participants query; returns all-zeros if the DB is down.
+    """Best-effort participants query; returns all-zeros if Postgres is down.
 
     A missing DB would otherwise turn every create_entity call into a hard
     failure — the compile pipeline treats the DB as optional infra for most
     operations, so we degrade to "weak" (no appearances found) rather than
-    crashing. Import is deferred so the tests in tests/test_entities.py that
-    never touch participants can still run without a Postgres schema.
+    crashing. Import is deferred so tests that never touch participants can
+    still run without a Postgres schema.
+
+    Only `psycopg.Error` and connection-level OS errors are swallowed —
+    application bugs (KeyError, AttributeError) propagate so they don't get
+    silently masked as `weak_evidence` and quietly drop people from coverage.
     """
     try:
         from src.db.participants import count_appearances_by_role
     except ImportError:
-        return {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads": 0}
+        return dict(_ZERO_COUNTS)
     try:
         return count_appearances_by_role(email)
-    except Exception:  # noqa: BLE001 — DB is best-effort for the evidence gate
-        return {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads": 0}
+    except (psycopg.Error, OSError) as exc:
+        logger.warning("evidence_counts DB unavailable", email=email, error=str(exc))
+        return dict(_ZERO_COUNTS)
 
 
 def create_entity_page(
@@ -253,6 +265,17 @@ def create_entity_page(
                 "for them in this turn."
             ),
         }
+
+    if force and level == "weak":
+        # Surface every forced override in app logs so production audits can
+        # spot agents (or future humans) over-using the escape hatch without
+        # needing Langfuse traces to be available.
+        logger.info(
+            "create_entity_forced",
+            email=email_lc,
+            slug=slug,
+            evidence_summary=counts,
+        )
 
     path.write_text(_stub_markdown(email_lc, display_name), encoding="utf-8")
     return {

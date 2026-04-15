@@ -337,6 +337,47 @@ class TestCreateEntityEvidenceGate:
         assert result["evidence_level"] == "strong"
         assert Path(result["path"]).exists()
 
+    def test_strong_via_to_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Strong = `from_count > 0 OR to_count > 0`. Cover the to-only branch."""
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 0, "to_count": 1, "cc_count": 0, "distinct_threads": 1},
+        )
+        result = create_entity_page(
+            "to-only@indiamart.com", display_name="To Only", entities_dir=tmp_path
+        )
+        assert result["ok"] is True
+        assert result["evidence_level"] == "strong"
+
+    def test_db_failure_falls_through_to_zero_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """psycopg.Error degrades to zero counts instead of raising.
+
+        Re-import the module so the autouse fixture's stub of
+        `_evidence_counts` is not in the way — we want to exercise the
+        real function's narrow except clause.
+        """
+        import importlib
+
+        import psycopg
+        from src.compile import entities as entities_module
+
+        def boom(_email: str) -> dict[str, int]:
+            raise psycopg.OperationalError("connection lost")
+
+        monkeypatch.setattr(
+            "src.db.participants.count_appearances_by_role", boom, raising=False
+        )
+        fresh = importlib.reload(entities_module)
+        counts = fresh._evidence_counts("anyone@nowhere.com")
+        assert counts == {
+            "from_count": 0,
+            "to_count": 0,
+            "cc_count": 0,
+            "distinct_threads": 0,
+        }
+
     def test_existing_page_bypasses_evidence_check(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
