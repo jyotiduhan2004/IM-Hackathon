@@ -145,6 +145,30 @@ def _render_external_badge(fm: dict) -> str:
     return '<span class="ext-badge" title="External contact (not @indiamart.com)">external</span>'
 
 
+# Status → (label, css key). North Star values are active/superseded/archived;
+# legacy `current` maps to the active pill, legacy `contested` keeps its own
+# color until Week-2 backfill replaces it.
+_STATUS_LABELS: dict[str, tuple[str, str]] = {
+    "active": ("Active", "active"),
+    "superseded": ("Superseded", "superseded"),
+    "archived": ("Archived", "archived"),
+    "current": ("Active", "active"),
+    "contested": ("Contested", "contested"),
+}
+
+
+def _render_status_badge(fm: dict) -> str:
+    """Return the status pill HTML, or empty string if status is missing/unknown."""
+    raw_status = fm.get("status")
+    if not isinstance(raw_status, str):
+        return ""
+    entry = _STATUS_LABELS.get(raw_status)
+    if entry is None:
+        return ""
+    label, css_key = entry
+    return f'<span class="ns-status ns-status-{css_key}">{label}</span>'
+
+
 # Three ref shapes we rewrite — each captures the filename in group 1. The
 # link pattern uses a `(?<!!)` lookbehind so it doesn't double-match the
 # markdown image form, which shares the `[…](…)` tail.
@@ -292,6 +316,24 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
             body = "\n".join(body_lines)
         else:
             body = banner + body
+
+    # Inject a colored status pill immediately under the h1 — must run AFTER
+    # the banner so the pill sits closest to the title (visual precedence:
+    # H1 → pill → banner → body). Idempotency mirrors the banner's.
+    status_html = _render_status_badge(fm)
+    if status_html and "ns-status-" not in "\n".join(body.splitlines()[:10]):
+        body_lines = body.splitlines(keepends=False)
+        h1_idx = -1
+        for i, line in enumerate(body_lines):
+            if line.startswith("# "):
+                h1_idx = i
+                break
+        if h1_idx >= 0:
+            body_lines.insert(h1_idx + 1, "")
+            body_lines.insert(h1_idx + 2, status_html)
+            body = "\n".join(body_lines)
+        else:
+            body = status_html + "\n\n" + body
 
     sources = fm.get("sources") or []
     if not sources or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):

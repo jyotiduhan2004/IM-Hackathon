@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from mkdocs_hooks import _page_metadata_banner  # noqa: E402
+from mkdocs_hooks import _render_status_badge  # noqa: E402
 from mkdocs_hooks import on_page_markdown  # noqa: E402
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "wiki_mini"
@@ -129,8 +130,9 @@ def test_hook_splices_banner_after_h1_on_topic_pages() -> None:
     lines = out.splitlines()
     h1_idx = next(i for i, line in enumerate(lines) if line.startswith("# "))
     banner_text = "3 sources · last compiled 2026-04-13 · status: current"
-    # Banner sits on a line after the h1, separated by a blank line.
-    assert banner_text in "\n".join(lines[h1_idx + 1 : h1_idx + 4])
+    # Layout is H1 → status pill → banner → body, so the banner sits a few
+    # lines further down than under the older header-only flow.
+    assert banner_text in "\n".join(lines[h1_idx + 1 : h1_idx + 6])
 
 
 def test_hook_prepends_banner_on_entity_page_without_h1() -> None:
@@ -170,9 +172,7 @@ def test_singular_source_uses_singular_noun() -> None:
         "last_compiled": "2026-04-13",
         "sources": ["raw/a.md"],
     }
-    out = on_page_markdown(
-        "# Topic\n", page=_page("topics/t.md", meta), config={}, files=[]
-    )
+    out = on_page_markdown("# Topic\n", page=_page("topics/t.md", meta), config={}, files=[])
     assert "1 source · last compiled" in out
     assert "1 sources · " not in out
 
@@ -186,9 +186,7 @@ def test_zero_and_many_sources_use_plural_noun() -> None:
             "last_compiled": "2026-04-13",
             "sources": [f"raw/{i}.md" for i in range(count)],
         }
-        out = on_page_markdown(
-            "# Topic\n", page=_page("topics/t.md", meta), config={}, files=[]
-        )
+        out = on_page_markdown("# Topic\n", page=_page("topics/t.md", meta), config={}, files=[])
         assert f"{count} sources · last compiled" in out
 
 
@@ -234,3 +232,61 @@ def test_fixture_system_page_renders_superseded_status() -> None:
     fm, body = _split_fixture(FIXTURE_ROOT / "systems" / "legacy-system.md")
     out = on_page_markdown(body, page=_page("systems/legacy-system.md", fm), config={}, files=[])
     assert "1 source · last compiled unknown · status: superseded" in out
+
+
+# --- status pill tests ---------------------------------------------------
+
+
+def test_status_badge_renders_for_each_north_star_value() -> None:
+    assert 'class="ns-status ns-status-active">Active<' in _render_status_badge(
+        {"status": "active"}
+    )
+    assert 'class="ns-status ns-status-superseded">Superseded<' in _render_status_badge(
+        {"status": "superseded"}
+    )
+    assert 'class="ns-status ns-status-archived">Archived<' in _render_status_badge(
+        {"status": "archived"}
+    )
+
+
+def test_status_badge_maps_legacy_current_to_active_pill() -> None:
+    # On-disk pages still carry `status: current` during migration; the
+    # viewer should show the same green "Active" pill the north-star values do.
+    html = _render_status_badge({"status": "current"})
+    assert 'class="ns-status ns-status-active">Active<' in html
+
+
+def test_status_badge_keeps_contested_distinct() -> None:
+    # Legacy `contested` has a red palette of its own until Week-2 backfill
+    # collapses it into the new model — confirm it doesn't fold into active.
+    html = _render_status_badge({"status": "contested"})
+    assert 'class="ns-status ns-status-contested">Contested<' in html
+
+
+def test_status_badge_empty_for_missing_or_unknown_status() -> None:
+    assert _render_status_badge({}) == ""
+    assert _render_status_badge({"status": None}) == ""
+    assert _render_status_badge({"status": "bogus"}) == ""
+
+
+def test_hook_splices_status_pill_under_h1() -> None:
+    meta = {"title": "T", "page_type": "topic", "status": "active"}
+    out = on_page_markdown("# T\n\nBody.\n", page=_page("topics/t.md", meta), config={}, files=[])
+    lines = out.splitlines()
+    h1_idx = next(i for i, line in enumerate(lines) if line.startswith("# "))
+    pill_window = "\n".join(lines[h1_idx + 1 : h1_idx + 4])
+    assert "ns-status-active" in pill_window
+
+
+def test_hook_is_idempotent_for_status_pill() -> None:
+    meta = {"title": "T", "page_type": "topic", "status": "active"}
+    body = "# T\n\nBody.\n"
+    once = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    twice = on_page_markdown(once, page=_page("topics/t.md", meta), config={}, files=[])
+    assert twice.count("ns-status-active") == 1
+
+
+def test_hook_omits_pill_when_status_missing() -> None:
+    meta = {"title": "T", "page_type": "topic"}
+    out = on_page_markdown("# T\n\nBody.\n", page=_page("topics/t.md", meta), config={}, files=[])
+    assert "ns-status" not in out
