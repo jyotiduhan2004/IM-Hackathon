@@ -1,4 +1,4 @@
-.PHONY: setup sync ingest compile langfuse-smoke lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish publish-gate publish-force help
+.PHONY: setup sync ingest compile audit-nightly langfuse-smoke lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish publish-gate publish-force help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -24,6 +24,9 @@ ingest-all: ## Ingest all available email (no date filter)
 
 compile: ## Compile all unprocessed raw emails into wiki
 	uv run python scripts/compile_all.py
+
+audit-nightly: ## Sample last 20 Langfuse traces + grade → docs/audits/nightly-*.json
+	uv run python scripts/nightly_trace_audit.py
 
 langfuse-smoke: ## Verify Langfuse health + trace export with current env
 	uv run python scripts/check_langfuse.py
