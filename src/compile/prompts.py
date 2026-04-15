@@ -36,20 +36,28 @@ base by compiling raw emails into interlinked wiki pages.
    a. Read the raw file with `read_file`.
    b. Determine what topics/people/systems/policies it mentions.
    c. For each affected wiki page:
-      - **People (entities)**: ALWAYS call `create_entity(email, display_name)` —
-        do NOT invent the slug yourself, do NOT `write_file` a new entity page
-        directly. The tool returns the canonical slug; use it in wikilinks.
-        If `created: true`, enrich the stub the tool wrote with
-        `read_file` + `edit_file`. If `created: false`, merge new info into
-        the existing page with `read_file` + `edit_file`.
-        `create_entity` now enforces the evidence rule in code: it returns
-        `{"ok": False, "reason": "weak_evidence", ...}` for CC-only mentions
-        or one-off tangential appearances. If the tool refuses, DO NOT create
-        the entity page — the person was mentioned only tangentially and
-        doesn't warrant a page. Only pass `force=True` when you are in the
+      - **People (entities)**: ALWAYS call `create_entities(raw_paths, entities)`
+        to resolve/create entity pages — ONE call for all the people in this
+        batch, not one call per person. Do NOT invent slugs yourself, do NOT
+        `write_file` a new entity page directly.
+        Each item in `entities` MUST be an object like
+        `{"email": "amit@indiamart.com", "display_name": "Amit Jain"}`.
+        `email` is required — the schema rejects empty objects. If you don't
+        know someone's email, leave them out of the call entirely; do not
+        emit a placeholder `{}`.
+        The tool returns a `results` array; `results[i].slug` is the canonical
+        slug for `entities[i]`. Use it in wikilinks. If `created: true`,
+        enrich the stub the tool wrote with `read_file` + `edit_file`. If
+        `created: false`, merge new info into the existing page with
+        `read_file` + `edit_file`.
+        The tool enforces an evidence rule: it returns per-entity
+        `{"ok": false, "reason": "weak_evidence", ...}` for CC-only mentions
+        or one-off tangential appearances. If the tool refuses an entity,
+        DO NOT create that page — they were mentioned only tangentially.
+        Only set `force: true` on an individual entity when you are in the
         SAME TURN writing substantive content (multi-sentence contributions,
-        decisions, quotes) about this person. Just quoting their CC'd name
-        in a recipient list is not enough.
+        decisions, quotes) about that person. Just quoting a CC'd name in
+        a recipient list is not enough.
       - **Topics / systems / policies / timelines / conflicts**: if a page
         exists (per step 1), `read_file` + `edit_file` to merge; otherwise
         `write_file` a new page in the correct subdirectory.
@@ -105,12 +113,12 @@ a "Current Policy" section, and a "History" table with dates + source links.
   discussion theme. e.g., `dynamic-smart-rfq-form`, `ios-performance-fix`.
 - **entity** (`wiki/entities/{slug}.md`): A HUMAN PERSON ONLY. You MUST NOT
   invent the slug — email is identity, display names collide. Call
-  `create_entity(email, display_name)` to get the canonical slug and (if
-  the page didn't exist) a pre-written stub. The slug will look like
-  `amit-indiamart-com` or `akash-singh6-indiamart-com` — use it in
-  wikilinks exactly as returned. Legacy pages with display-name slugs
-  (`amit-agarwal`, `ruchi-gupta`) still work; the tool finds them by
-  their `email:` frontmatter and returns their existing slug.
+  `create_entities(raw_paths, entities)` with one entry per person to
+  get canonical slugs and (for new pages) pre-written stubs. Slugs will
+  look like `amit-indiamart-com` or `akash-singh6-indiamart-com` — use
+  them in wikilinks exactly as returned. Legacy pages with display-name
+  slugs (`amit-agarwal`, `ruchi-gupta`) still work; the tool finds them
+  by their `email:` frontmatter and returns the existing slug.
 - **system** (`wiki/systems/{slug}.md`): A product, platform, service, tool,
   URL, or mailing list. e.g., `buyermy`, `whatsapp`, `m-site`,
   `marketplace-launch-mailing-list`, `ai-intermesh-net`. Do NOT put these in
@@ -213,7 +221,7 @@ Good draft cases:
 
 Bad draft cases (make a real page instead):
 - The email clearly names a single new topic with sections to fill in.
-- The person is a new entity — use `create_entity`, not drafts.
+- The person is a new entity — use `create_entities`, not drafts.
 
 ## When to log_insight
 
@@ -258,8 +266,8 @@ Wikilinks are lowercase-hyphenated (kebab-case). Examples:
 
 ✅ CORRECT:
 - `[[dynamic-smart-rfq-form]]` (links to `wiki/topics/dynamic-smart-rfq-form.md`)
-- `[[amit-indiamart-com]]` (entity slug returned by `create_entity`)
-- `[[lucky-agarwal]]` (legacy display-name slug, still valid — `create_entity`
+- `[[amit-indiamart-com]]` (entity slug returned by `create_entities`)
+- `[[lucky-agarwal]]` (legacy display-name slug, still valid — `create_entities`
   found it via `email:` frontmatter and returned this slug)
 - `[[buyermy]]` (links to `wiki/systems/buyermy.md`)
 

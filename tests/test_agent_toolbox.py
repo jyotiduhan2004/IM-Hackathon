@@ -11,7 +11,6 @@ EXPECTED_CUSTOM_TOOLS = frozenset(
         "list_wiki_pages",
         "resolve_page",
         "create_entities",
-        "create_entity",
         "write_draft_page",
         "log_insight",
         "check_my_work",
@@ -25,6 +24,11 @@ FORBIDDEN_TOOLS = frozenset(
         "update_wiki_index",
         "stamp_page_compiled_at",
         "append_to_log",
+        # `create_entity` (singular) was removed 2026-04-15 after Langfuse
+        # traces showed models emitting empty-dict arrays into `create_entities`
+        # because both tools had overlapping semantics. Batch-only surface
+        # forces the model to be explicit about who it's creating.
+        "create_entity",
     }
 )
 

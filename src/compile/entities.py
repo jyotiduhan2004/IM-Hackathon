@@ -135,7 +135,7 @@ def _stub_markdown(email: str, display_name: str | None) -> str:
 def _classify_evidence(counts: dict[str, int]) -> str:
     """Bucket per-role appearance counts into strong/medium/weak.
 
-    Rules (mirrored in the `create_entity` tool docstring + prompt):
+    Rules (mirrored in the `create_entities` tool docstring + prompt):
 
     - **Strong**: the email appears at least once as From or To — a direct
       author or addressee.
@@ -159,7 +159,7 @@ _ZERO_COUNTS = {"from_count": 0, "to_count": 0, "cc_count": 0, "distinct_threads
 def _evidence_counts(email: str) -> dict[str, int]:
     """Best-effort participants query; returns all-zeros if Postgres is down.
 
-    A missing DB would otherwise turn every create_entity call into a hard
+    A missing DB would otherwise turn every create_entities call into a hard
     failure — the compile pipeline treats the DB as optional infra for most
     operations, so we degrade to "weak" (no appearances found) rather than
     crashing. Import is deferred so tests that never touch participants can

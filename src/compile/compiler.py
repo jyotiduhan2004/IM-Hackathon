@@ -15,6 +15,8 @@ from typing import cast
 import structlog
 import yaml
 from langchain_core.tools import tool
+from pydantic import BaseModel
+from pydantic import Field
 
 from src.compile.prompts import COMPILER_SYSTEM_PROMPT
 from src.config import settings
@@ -1540,87 +1542,97 @@ def write_draft_page(
     return {"ok": True, "path": str(path), "error": None}
 
 
-@tool
-def create_entity(email: str, display_name: str = "", force: bool = False) -> dict[str, Any]:
-    """Resolve or create an entity page by EMAIL. Call this INSTEAD of
-    inventing entity slugs yourself.
+class EntityRequest(BaseModel):
+    """One person to resolve/create as an entity page.
 
-    The returned `slug` is deterministic — identical email always gives
-    the identical slug. Use it in every `[[wikilink]]` that references
-    this person. Never hand-craft entity slugs.
-
-    - If an entity page already exists for this email (by canonical slug
-      OR by legacy display-name slug with `email:` frontmatter), the
-      existing slug is returned. `created: false`. The evidence gate is
-      SKIPPED for existing pages — we don't revoke people who already have
-      wiki coverage.
-    - If no page exists, the tool first checks the messages catalog for
-      how this email actually appears (From/To/Cc, across how many
-      threads) and buckets the result:
-        * **strong** — appears in From or To at least once.
-        * **medium** — not in From/To, but shows up across 2+ distinct
-          threads as CC/referenced.
-        * **weak** — 0-1 mentions, or CC-only on a single thread.
-      Weak evidence causes the tool to REFUSE and return
-      ``{"ok": False, "reason": "weak_evidence", "evidence_summary": {...}}``.
-      This is the anti-stub gate: CC-only mentions don't warrant an
-      entity page unless you are also writing substantive prose about
-      the person in the same turn. In that case, and only then, pass
-      ``force=True`` to bypass.
-    - On successful creation, a minimal stub page is written with
-      `title`, `page_type: entity`, `status: current`, `email:`, empty
-      `sources` and `related`. `created: true`. Enrich it with
-      `read_file` + `edit_file` afterward as you do today.
-
-    Args:
-        email: Required. The person's email address, e.g.
-            "amit@indiamart.com". Case-insensitive.
-        display_name: Optional. Used as the stub page title only when a
-            new page is created. Ignored for existing pages. Examples:
-            "Amit Jain", "Ruchi Gupta".
-        force: Bypass the weak-evidence gate. Default False. Only set
-            True when the same turn will write multi-sentence content
-            about the person; merely linking their CC'd name is not
-            enough.
-
-    Returns:
-        On success: {"ok": True, "slug": "amit-indiamart-com",
-        "path": "wiki/entities/amit-indiamart-com.md",
-        "created": True|False, "email": "amit@indiamart.com",
-        "evidence_level": "strong"|"medium"|"forced"}.
-        On weak-evidence refusal: {"ok": False, "reason": "weak_evidence",
-        "email": ..., "would_be_slug": ..., "evidence_summary": {...},
-        "guidance": "..."}.
-        On invalid email: {"ok": False, "error": "..."}.
+    `email` is REQUIRED and is the identity — slugs are derived from it
+    deterministically. An empty or missing `email` is a schema violation
+    and will be rejected before the tool body runs.
     """
-    from src.compile.entities import create_entity_page
 
-    return create_entity_page(email, display_name or None, force=force)
+    email: str = Field(
+        ...,
+        description=(
+            "The person's email address, e.g. 'amit@indiamart.com'. "
+            "Case-insensitive. Must appear literally in one of the batch's "
+            "raw email files or the tool will refuse."
+        ),
+        min_length=3,
+    )
+    display_name: str = Field(
+        default="",
+        description=(
+            "Stub page title for NEW pages. Ignored when the page already "
+            "exists. Leave blank if unknown; the tool falls back to the "
+            "email as title."
+        ),
+    )
+    force: bool = Field(
+        default=False,
+        description=(
+            "Bypass the weak-evidence gate. Only set true when THIS TURN "
+            "is also writing multi-sentence content about the person. "
+            "Merely linking a CC'd name is not enough."
+        ),
+    )
 
 
 @tool
-def create_entities(raw_paths: list[str], entities: list[dict[str, Any]]) -> dict[str, Any]:
-    """Resolve or create MULTIPLE entity pages in one call.
+def create_entities(
+    raw_paths: list[str], entities: list[EntityRequest]
+) -> dict[str, Any]:
+    """Resolve or create entity pages for the people mentioned in this batch.
 
-    Prefer this over repeated `create_entity(...)` calls whenever the same
-    email or thread mentions 2+ people. The tool validates each requested
-    email address against the provided raw files and refuses any address
-    that does not literally appear in those emails.
+    Always use this tool for entity pages — do NOT invent slugs or
+    `write_file` a new entity markdown directly. The tool derives the
+    canonical slug from each email deterministically, checks for existing
+    pages (by canonical slug OR by legacy display-name slug with
+    `email:` frontmatter), and gates new-page creation on evidence
+    strength.
+
+    Each requested email MUST appear literally in at least one raw file
+    from ``raw_paths``. Addresses that don't match are refused with
+    `reason: "email_not_in_raw"`.
+
+    Per-entity outcomes:
+
+    - **Existing page** (by canonical or legacy slug): returns
+      `{"ok": True, "slug": ..., "created": False, ...}`. Use the
+      returned slug in wikilinks. Enrich via `read_file` + `edit_file`.
+    - **New page, strong/medium evidence**: writes a stub and returns
+      `{"ok": True, "slug": ..., "created": True, "evidence_level": ...}`.
+      Strong = email appears in From/To somewhere; medium = CC'd across
+      ≥2 distinct threads.
+    - **New page, weak evidence** (`force=false`): refuses with
+      `reason: "weak_evidence"`. CC-only on one thread doesn't warrant a
+      page. Only set `force=true` if you're writing substantive content
+      about this person in the same turn.
+    - **Invalid email**: refuses with `reason: "invalid_email"` /
+      `"email_not_in_raw"`. Do NOT retry with a guessed variant —
+      re-read the raw file if you're unsure of the address.
 
     Args:
         raw_paths: Relative raw email paths for the current batch, e.g.
-            ["raw/2026-04-11_subject_a.md", "raw/2026-04-11_subject_b.md"].
-        entities: List of objects shaped like
-            {"email": "amit@indiamart.com", "display_name": "Amit Jain", "force": false}.
+            ["raw/2026-04-11_subject_a.md"]. The tool reads these to
+            validate that each requested email actually appears.
+        entities: List of `EntityRequest` objects. **Each item MUST have
+            a non-empty `email`.** Do not emit empty objects — the
+            schema requires `email`. One entry per person; batching 5-30
+            people in a single call is normal.
 
     Returns:
-        {"ok": bool, "validated_raw_paths": [...], "results": [...]}
-        where each `results` item mirrors `create_entity(...)` success/error
-        output and adds `matched_raw_paths` on success.
+        {"ok": bool, "validated_raw_paths": [...], "results": [...]}.
+        `results[i]` has `ok`/`slug`/`created`/`evidence_level` on
+        success, or `ok: false` + `reason` + `guidance` on refusal.
     """
     from src.compile.entities import create_entity_pages
 
-    return create_entity_pages(raw_paths, entities)
+    # LangChain validates & coerces each list item into an EntityRequest
+    # (Pydantic model). Unwrap to plain dicts so the repo-layer helper
+    # keeps its simple signature and stays usable from scripts and tests
+    # that don't import the tool layer.
+    entity_dicts = [e.model_dump() for e in entities]
+    return create_entity_pages(raw_paths, entity_dicts)
 
 
 # === Browse / patch / validate tools (north-star recovery) ===
@@ -2065,7 +2077,6 @@ def create_compiler(
             list_wiki_pages,
             resolve_page,
             create_entities,
-            create_entity,
             write_draft_page,
             log_insight,
             check_my_work,
