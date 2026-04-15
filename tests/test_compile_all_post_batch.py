@@ -2,15 +2,18 @@
 
 Context: the compile agent still writes pages that fail validators (duplicate
 ``## Related`` headings, broken wikilinks, malformed frontmatter) despite a
-prompt rule against it. ``_normalize_touched_pages`` runs the idempotent
-formatter in-process over any wiki page whose mtime advanced during a batch,
-catching the most common format drift before the next batch sees it.
-``_validate_touched_pages`` then surfaces anything the formatter couldn't
-auto-fix so operators notice immediately instead of hours later.
+prompt rule against it. ``_iter_touched_pages`` collects every wiki page whose
+mtime advanced during a batch; ``_normalize_touched_pages`` runs the
+idempotent formatter over them to catch the most common format drift before
+the next batch sees it; ``_validate_touched_pages`` surfaces anything the
+formatter couldn't auto-fix so operators notice immediately. The validator
+runs on the full touched-page set (not just the formatter-normalized subset)
+so corruption on pages the formatter skips or leaves alone still gets
+reported.
 
-These tests cover the `mtime >= batch_start` filter, the formatter actually
-firing on touched pages, and the "validator failure doesn't crash the batch"
-guarantee.
+These tests cover the ``mtime >= batch_start`` filter, the formatter firing
+on touched pages, the "validator sees every touched page" contract, and the
+"validator failure doesn't crash the batch" guarantee.
 """
 
 from __future__ import annotations
@@ -67,16 +70,23 @@ def _backdate(path: Path, seconds: int) -> None:
     os.utime(path, (target, target))
 
 
-def test_normalize_touched_pages_skips_untouched(compile_all_module, wiki_dir: Path) -> None:
-    """Pages whose mtime predates ``batch_start`` must be left alone.
+def _set_mtime(path: Path, mtime: float) -> None:
+    """Pin a file's mtime (and atime) to a specific epoch value.
 
-    Guards the contract: the hook should only normalize pages touched DURING
-    the batch, not every page in the wiki. A page with agent-written ``##
-    Related`` from a previous batch would get re-written if we didn't filter.
+    Replaces the sleep-then-touch pattern: explicit mtime is both faster
+    and robust against loaded-CI clock jitter where a 50ms sleep can
+    fail to advance the mtime past ``batch_start``.
+    """
+    os.utime(path, (mtime, mtime))
+
+
+def test_iter_touched_pages_skips_untouched(compile_all_module, wiki_dir: Path) -> None:
+    """Pages whose mtime predates ``batch_start`` must be filtered out.
+
+    Guards the contract that upstream helpers (formatter, validator) see
+    only pages touched DURING the batch, not every page in the wiki.
     """
     mod = compile_all_module
-    # A pre-existing page with an agent-written ## Related that the formatter
-    # would strip if given the chance.
     stale = wiki_dir / "topics" / "stale.md"
     _write_page(
         stale,
@@ -85,18 +95,54 @@ def test_normalize_touched_pages_skips_untouched(compile_all_module, wiki_dir: P
         body=("Stale is an old topic. Two sentences required.\n\n## Related\n\n- [[nowhere]]\n"),
     )
     _backdate(stale, 60)
-    original = stale.read_text(encoding="utf-8")
 
-    # batch_start is after the file's mtime — hook should skip it.
     batch_start = time.time() - 1
-    normalized = mod._normalize_touched_pages(batch_start, wiki_dir)
+    touched = mod._iter_touched_pages(batch_start, wiki_dir)
 
-    assert normalized == []
-    assert stale.read_text(encoding="utf-8") == original
+    assert touched == []
+
+
+def test_iter_touched_pages_includes_new(compile_all_module, wiki_dir: Path) -> None:
+    """Pages whose mtime advanced at/after ``batch_start`` are returned."""
+    mod = compile_all_module
+    page = wiki_dir / "topics" / "fresh.md"
+    _write_page(page, title="Fresh", page_type="topic", body="Body\n")
+
+    batch_start = time.time()
+    _set_mtime(page, batch_start + 1)
+
+    touched = mod._iter_touched_pages(batch_start, wiki_dir)
+    assert page in touched
+
+
+def test_iter_touched_pages_ignores_policies(compile_all_module, wiki_dir: Path) -> None:
+    """Iter scope is topics/entities/systems only; policies/timelines/conflicts
+    keep their own templates and must not be scanned."""
+    mod = compile_all_module
+    policy = wiki_dir / "policies" / "p.md"
+    _write_page(
+        policy,
+        title="P",
+        page_type="policy",
+        body="Policy P covers a rule. Two sentences.\n",
+    )
+
+    batch_start = time.time() - 60  # policy is newer than batch_start
+    touched = mod._iter_touched_pages(batch_start, wiki_dir)
+    assert policy not in touched
+
+
+def test_iter_touched_pages_returns_empty_when_wiki_missing(
+    compile_all_module, tmp_path: Path
+) -> None:
+    """Missing wiki dir → empty list, no exception (matches stamp helper)."""
+    mod = compile_all_module
+    result = mod._iter_touched_pages(time.time(), tmp_path / "does-not-exist")
+    assert result == []
 
 
 def test_normalize_touched_pages_processes_new(compile_all_module, wiki_dir: Path) -> None:
-    """A page whose mtime advanced after ``batch_start`` gets formatted."""
+    """The formatter rewrites an agent-written page with nav-section drift."""
     mod = compile_all_module
     page = wiki_dir / "topics" / "fresh.md"
     _write_page(
@@ -109,46 +155,26 @@ def test_normalize_touched_pages_processes_new(compile_all_module, wiki_dir: Pat
             "## People\n\n- [[jane-doe]]\n"
         ),
     )
-    _backdate(page, 60)
 
-    # Capture batch_start BEFORE touching the file so it qualifies as "new".
-    batch_start = time.time()
-    time.sleep(0.05)
-    page.touch()
+    normalized = mod._normalize_touched_pages([page], wiki_dir)
 
-    normalized = mod._normalize_touched_pages(batch_start, wiki_dir)
-
-    # The formatter stripped the agent-written nav sections (and the
-    # regenerated Related block has no valid targets to emit because the
-    # referenced pages don't exist). So the page changed.
+    # The formatter stripped the agent-written nav sections.
     assert page in normalized
     content = page.read_text(encoding="utf-8")
     assert "## People" not in content
 
 
-def test_normalize_ignores_policies_category(compile_all_module, wiki_dir: Path) -> None:
-    """The formatter scope is topics/entities/systems only; policies keep
-    their own template (History, Supersedes, etc.) and must not be touched."""
+def test_normalize_touched_pages_noop_on_clean_page(compile_all_module, wiki_dir: Path) -> None:
+    """A page already in canonical form must NOT be returned as changed —
+    the validator will still see it via the broader touched-page set."""
     mod = compile_all_module
-    policy = wiki_dir / "policies" / "p.md"
-    _write_page(
-        policy,
-        title="P",
-        page_type="policy",
-        body=("Policy P covers a rule. Two sentences.\n\n## Related\n\n- [[whatever]]\n"),
-    )
+    clean = wiki_dir / "topics" / "clean.md"
+    # Minimal body: the formatter should find nothing to rewrite.
+    _write_page(clean, title="Clean", page_type="topic", body="Just a sentence.\n")
 
-    batch_start = time.time() - 60  # policy is newer than batch_start
-    normalized = mod._normalize_touched_pages(batch_start, wiki_dir)
-
-    assert policy not in normalized
-
-
-def test_normalize_returns_empty_when_wiki_missing(compile_all_module, tmp_path: Path) -> None:
-    """Missing wiki dir → empty list, no exception (matches stamp helper)."""
-    mod = compile_all_module
-    result = mod._normalize_touched_pages(time.time(), tmp_path / "does-not-exist")
-    assert result == []
+    normalized = mod._normalize_touched_pages([clean], wiki_dir)
+    # Formatter is idempotent on clean pages → not reported as changed.
+    assert clean not in normalized
 
 
 def test_validate_hook_returns_error_map(compile_all_module, wiki_dir: Path) -> None:
@@ -199,6 +225,55 @@ def test_validate_hook_skips_crashes_without_raising(
     assert errors_by_page == {}
 
 
+def test_validate_runs_on_pages_formatter_skipped(
+    compile_all_module, wiki_dir: Path
+) -> None:
+    """The validator must see every touched page, not just the subset the
+    formatter rewrote.
+
+    This is the Codex P2 regression: pages the formatter leaves alone
+    (already-clean pages OR malformed pages the formatter skips) are still
+    part of the batch's footprint and can carry agent-introduced corruption.
+    Feeding only ``normalized`` pages into the validator would let that
+    corruption slip through silently.
+
+    Exercise: create a page with NO frontmatter — ``format_file`` returns a
+    ``skipped_reason`` so ``format_page`` returns False and it never lands
+    in ``normalized``. Then prove the validator still flags it when the
+    call site passes the broader touched set.
+    """
+    mod = compile_all_module
+
+    # Page with no frontmatter — format_file returns skipped_reason
+    # ("unparseable frontmatter"), so format_page returns False and this
+    # page is NOT in `normalized`. The validator should still see it.
+    skipped = wiki_dir / "topics" / "no-frontmatter.md"
+    skipped.write_text("Just body text, no frontmatter at all.\n", encoding="utf-8")
+
+    # Page the formatter leaves alone because it's already canonical.
+    clean = wiki_dir / "topics" / "clean.md"
+    _write_page(clean, title="Clean", page_type="topic", body="Sentence one.\n")
+
+    batch_start = time.time()
+    _set_mtime(skipped, batch_start + 1)
+    _set_mtime(clean, batch_start + 1)
+
+    touched = mod._iter_touched_pages(batch_start, wiki_dir)
+    normalized = mod._normalize_touched_pages(touched, wiki_dir)
+    # Sanity: the formatter didn't rewrite either page — proves the
+    # validator would MISS them if we only fed it `normalized`.
+    assert skipped not in normalized
+    assert clean not in normalized
+
+    # The production call site feeds `touched` (not `normalized`) into the
+    # validator so corruption on formatter-skipped pages is surfaced.
+    errors_by_page = mod._validate_touched_pages(touched, wiki_dir)
+    assert skipped in errors_by_page, (
+        "validator must surface errors on pages the formatter skipped; "
+        "otherwise Codex P2 regression returns"
+    )
+
+
 def test_validate_hook_logs_errors_but_does_not_fail_batch(
     compile_all_module,
     wiki_dir: Path,
@@ -221,13 +296,13 @@ def test_validate_hook_logs_errors_but_does_not_fail_batch(
         "---\nstray fence\n---\n\nBody text.\n",
         encoding="utf-8",
     )
-    _backdate(page, 60)
     batch_start = time.time()
-    time.sleep(0.05)
-    page.touch()  # advance mtime past batch_start
+    _set_mtime(page, batch_start + 1)  # pin mtime past batch_start
 
-    normalized = mod._normalize_touched_pages(batch_start, wiki_dir)
-    errors_by_page = mod._validate_touched_pages(normalized, wiki_dir)
+    touched = mod._iter_touched_pages(batch_start, wiki_dir)
+    normalized = mod._normalize_touched_pages(touched, wiki_dir)
+    del normalized  # not used — validator runs on the broader touched set
+    errors_by_page = mod._validate_touched_pages(touched, wiki_dir)
 
     assert page in errors_by_page
     # The batch would mark "compiled" at the call site; validator errors

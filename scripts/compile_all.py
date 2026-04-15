@@ -118,46 +118,69 @@ def _stamp_recently_modified_pages(
     return stamped, skipped
 
 
-def _normalize_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
-    """Run the formatter against every wiki page modified since `batch_start`.
+def _iter_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
+    """Return every wiki page whose mtime advanced at/after ``batch_start``.
 
-    Prompt discipline alone doesn't keep the agent from writing the things
-    the light-format rule forbids (hand-written ``## Related`` / ``## People``
-    / duplicate-heading drift). This hook closes the loop at write time:
-    after a batch's emails are marked compiled, walk the wiki, pick every
-    page whose mtime advanced during the batch, and run the idempotent
-    formatter over it in-process.
-
-    The formatter is a no-op on clean pages, so touching unaffected pages
-    is cheap. Returns the list of page paths that were actually changed
-    (for logging + downstream validation). Exceptions from the formatter
-    are caught and logged — a buggy formatter should never corrupt the
-    successful compile that already happened.
+    Scans the same set of categories the formatter operates on
+    (topics/entities/systems — policies/timelines/conflicts keep their own
+    templates). Used by both the post-batch formatter and validator so the
+    validator sees every page the batch touched, not just the ones the
+    formatter chose to rewrite. Missing ``wiki_dir`` → empty list (matches
+    the stamp helper's contract).
     """
     wiki_path = Path(wiki_dir)
     if not wiki_path.exists():
         return []
 
-    changed: list[Path] = []
-    # Limit to the content categories the formatter knows how to normalize
-    # (policies/timelines/conflicts keep their own templates). Same set
-    # `scripts/format_wiki.py::CATEGORIES` uses.
+    touched: list[Path] = []
     for category in ("topics", "entities", "systems"):
         cat_dir = wiki_path / category
         if not cat_dir.exists():
             continue
         for md_file in sorted(cat_dir.glob("*.md")):
             try:
-                if md_file.stat().st_mtime < batch_start:
-                    continue
-                if format_page(md_file, wiki_path, confirm=True):
-                    changed.append(md_file)
-            except Exception as exc:  # noqa: BLE001 — formatter must not crash compile
+                if md_file.stat().st_mtime >= batch_start:
+                    touched.append(md_file)
+            except OSError as exc:
+                # stat() can fail if the page was deleted mid-scan. Log and
+                # skip — a missing page is never "touched" for our purposes.
                 logger.warning(
-                    "post-batch formatter failed",
+                    "post-batch stat failed",
                     path=str(md_file),
                     error=str(exc),
                 )
+    return touched
+
+
+def _normalize_touched_pages(pages: list[Path], wiki_dir: Path) -> list[Path]:
+    """Run the formatter against each page in ``pages``. Returns the subset
+    the formatter actually rewrote.
+
+    Prompt discipline alone doesn't keep the agent from writing the things
+    the light-format rule forbids (hand-written ``## Related`` / ``## People``
+    / duplicate-heading drift). This hook closes the loop at write time:
+    after a batch's emails are marked compiled, run the idempotent formatter
+    over every page the batch touched.
+
+    The formatter is a no-op on clean pages and skips malformed ones (both
+    return False), so this list is a strict subset of ``pages``. The caller
+    feeds ``pages`` (not the returned subset) into the validator so we
+    surface corruption on pages the formatter leaves alone. Exceptions from
+    the formatter are caught and logged — a buggy formatter should never
+    corrupt the successful compile that already happened.
+    """
+    wiki_path = Path(wiki_dir)
+    changed: list[Path] = []
+    for md_file in pages:
+        try:
+            if format_page(md_file, wiki_path, confirm=True):
+                changed.append(md_file)
+        except Exception as exc:  # noqa: BLE001 — formatter must not crash compile
+            logger.warning(
+                "post-batch formatter failed",
+                path=str(md_file),
+                error=str(exc),
+            )
     return changed
 
 
@@ -741,8 +764,15 @@ def main(
                 # batch commits, so the next batch sees a clean wiki. Both
                 # helpers are best-effort: they log warnings but never roll
                 # back a successful compile.
-                normalized = _normalize_touched_pages(batch_start, Path(wiki_dir))
-                errors_by_page = _validate_touched_pages(normalized, Path(wiki_dir))
+                #
+                # Validator input is the full touched-page set (not just
+                # formatter-normalized pages): pages the formatter skips as
+                # malformed or leaves alone as already-clean must still be
+                # validated, otherwise newly-introduced corruption slips
+                # through silently.
+                touched_pages = _iter_touched_pages(batch_start, Path(wiki_dir))
+                normalized = _normalize_touched_pages(touched_pages, Path(wiki_dir))
+                errors_by_page = _validate_touched_pages(touched_pages, Path(wiki_dir))
                 if errors_by_page:
                     logger.warning(
                         "batch touched pages have validator errors",
