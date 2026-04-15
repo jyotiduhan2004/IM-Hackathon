@@ -97,6 +97,26 @@ def compile_all_module() -> Any:
 # ---------------------------------------------------------------------------
 
 
+def test_ensure_schema_recreates_dropped_table(db_conn: psycopg.Connection) -> None:
+    db_conn.execute("DROP TABLE compile_attempts CASCADE")
+    db_conn.commit()
+
+    repo.ensure_schema()
+    _insert_message(db_conn, "m1")
+    db_conn.commit()
+
+    with db_pkg.connect() as conn:
+        attempt_id = repo.record_start(
+            conn,
+            message_id="m1",
+            run_id=None,
+            compile_model="minimax/minimax-m2.7",
+        )
+        conn.commit()
+
+    assert attempt_id > 0
+
+
 def test_record_start_returns_id_with_null_outcome(db_conn: psycopg.Connection) -> None:
     _insert_message(db_conn, "m1")
     db_conn.commit()
@@ -394,3 +414,39 @@ def test_healthy_pool_never_empties_pool(
     assert set(kept) == {"model_A", "model_B"}
     # But we still report what we'd have dropped, so the operator sees it.
     assert len(excluded) == 2
+
+
+def test_filter_pool_to_available_models_preserves_order(compile_all_module: Any) -> None:
+    kept, dropped = compile_all_module._filter_pool_to_available_models(
+        ["model_A", "model_B", "model_C"],
+        {"model_B", "model_C"},
+    )
+    assert kept == ["model_B", "model_C"]
+    assert dropped == ["model_A"]
+
+
+def test_fetch_available_models_parses_proxy_catalog(
+    compile_all_module: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(compile_all_module.settings, "litellm_base_url", "https://proxy.example.com")
+    monkeypatch.setattr(compile_all_module.settings, "openai_api_key", "sk-test")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "data": [
+                    {"id": "model_A"},
+                    {"id": "model_B"},
+                    {"id": "  model_C  "},
+                    {"id": ""},
+                    {"not_id": "ignored"},
+                ]
+            }
+
+    monkeypatch.setattr(compile_all_module.httpx, "get", lambda *args, **kwargs: FakeResponse())
+
+    models = compile_all_module._fetch_available_models()
+    assert models == {"model_A", "model_B", "model_C"}

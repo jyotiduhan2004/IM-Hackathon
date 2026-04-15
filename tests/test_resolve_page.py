@@ -40,6 +40,15 @@ def test_resolve_page_no_args_returns_error() -> None:
     assert "provide at least one" in result["error"]
 
 
+def test_resolve_page_surfaces_empty_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", dict)
+
+    result = _resolve(slug="anything")
+    assert result["exists"] is False
+    assert result["catalog_counts"] == {}
+    assert "wiki_pages catalog is empty or stale" in result["error"]
+
+
 def test_resolve_page_hit_by_slug(db_conn: psycopg.Connection) -> None:
     repo.upsert_wiki_page(
         db_conn,
@@ -62,7 +71,8 @@ def test_resolve_page_hit_by_slug(db_conn: psycopg.Connection) -> None:
     }
 
 
-def test_resolve_page_miss_returns_exists_false() -> None:
+def test_resolve_page_miss_returns_exists_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"topic": 1})
     result = _resolve(slug="does-not-exist")
     assert result["exists"] is False
     assert result["slug"] is None
@@ -125,6 +135,7 @@ def test_resolve_page_uses_mocked_lookup(monkeypatch: pytest.MonkeyPatch) -> Non
             "confidence": 1.0,
         }
 
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"topic": 1})
     monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
 
     result = _resolve(slug="foo")
@@ -149,6 +160,7 @@ def test_resolve_page_surfaces_superseded_status(
             "confidence": 1.0,
         }
 
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"policy": 1})
     monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
 
     result = _resolve(slug="old-policy")

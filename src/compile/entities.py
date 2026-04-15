@@ -286,3 +286,142 @@ def create_entity_page(
         "email": email_lc,
         "evidence_level": "forced" if (force and level == "weak") else level,
     }
+
+
+def _normalize_raw_path(raw_path: str, raw_dir: Path) -> Path:
+    """Return a safe repo-relative raw path anchored under ``raw_dir``."""
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("raw_paths must contain non-empty strings")
+
+    candidate = Path(raw_path.strip())
+    if candidate.is_absolute():
+        raise ValueError(f"raw path must be relative: {raw_path!r}")
+    if ".." in candidate.parts:
+        raise ValueError(f"raw path must not contain '..': {raw_path!r}")
+
+    raw_prefix: tuple[str, ...]
+    if raw_dir.is_absolute():
+        raw_prefix = (raw_dir.name,)
+        base_dir = raw_dir.parent
+    else:
+        raw_prefix = raw_dir.parts
+        base_dir = Path()
+
+    if candidate.parts[: len(raw_prefix)] != raw_prefix:
+        raise ValueError(f"raw path must stay under {raw_dir}: {raw_path!r}")
+
+    return base_dir / candidate
+
+
+def create_entity_pages(
+    raw_paths: list[str],
+    requests: list[dict[str, Any]],
+    *,
+    entities_dir: Path | None = None,
+    raw_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Resolve or create multiple entity pages in one call.
+
+    Each requested email must appear literally in at least one raw file from
+    ``raw_paths``. This blocks hallucinated or stale entity creation requests.
+    """
+    if not raw_paths:
+        return {"ok": False, "error": "raw_paths is required"}
+    if not requests:
+        return {"ok": False, "error": "entities is required"}
+
+    raw_root = settings.raw_dir if raw_dir is None else raw_dir
+    validated_raw_paths: list[str] = []
+    raw_contents: dict[str, str] = {}
+    try:
+        for raw_path in raw_paths:
+            normalized = _normalize_raw_path(raw_path, raw_root)
+            raw_path_text = raw_path.strip()
+            validated_raw_paths.append(raw_path_text)
+            raw_contents[raw_path_text] = normalized.read_text(encoding="utf-8").lower()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+    results: list[dict[str, Any]] = []
+    for idx, request in enumerate(requests):
+        if not isinstance(request, dict):
+            results.append(
+                {
+                    "ok": False,
+                    "reason": "invalid_request",
+                    "index": idx,
+                    "guidance": "Each entity request must be an object with email/display_name/force.",
+                }
+            )
+            continue
+
+        email_value = request.get("email")
+        display_name = request.get("display_name", "")
+        force = request.get("force", False)
+        if not isinstance(email_value, str) or not email_value.strip():
+            results.append(
+                {
+                    "ok": False,
+                    "reason": "invalid_email",
+                    "index": idx,
+                    "guidance": "Each entity request needs a non-empty `email` string.",
+                }
+            )
+            continue
+        if display_name is not None and not isinstance(display_name, str):
+            results.append(
+                {
+                    "ok": False,
+                    "reason": "invalid_display_name",
+                    "index": idx,
+                    "email": email_value,
+                    "guidance": "`display_name` must be a string when provided.",
+                }
+            )
+            continue
+        if not isinstance(force, bool):
+            results.append(
+                {
+                    "ok": False,
+                    "reason": "invalid_force",
+                    "index": idx,
+                    "email": email_value,
+                    "guidance": "`force` must be true or false.",
+                }
+            )
+            continue
+
+        email_lc = email_value.strip().lower()
+        matched_raw_paths = [
+            path for path, content in raw_contents.items() if email_lc in content
+        ]
+        if not matched_raw_paths:
+            results.append(
+                {
+                    "ok": False,
+                    "reason": "email_not_in_raw",
+                    "index": idx,
+                    "email": email_lc,
+                    "raw_paths_checked": list(raw_contents),
+                    "guidance": (
+                        "Only create entities for email addresses that appear literally "
+                        "in the current batch's raw emails."
+                    ),
+                }
+            )
+            continue
+
+        result = create_entity_page(
+            email_lc,
+            display_name=display_name or None,
+            entities_dir=entities_dir,
+            force=force,
+        )
+        result["matched_raw_paths"] = matched_raw_paths
+        results.append(result)
+
+    return {
+        "ok": all(bool(result.get("ok")) for result in results),
+        "validated_raw_paths": validated_raw_paths,
+        "results": results,
+    }

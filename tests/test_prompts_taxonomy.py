@@ -27,6 +27,11 @@ def test_cc_only_weak_evidence_rule() -> None:
     assert "CC-only" in COMPILER_SYSTEM_PROMPT
 
 
+def test_prompt_tells_agent_to_use_coordinator_batch() -> None:
+    assert "Do NOT call" in COMPILER_SYSTEM_PROMPT
+    assert "`list_uncompiled_emails`" in COMPILER_SYSTEM_PROMPT
+
+
 def test_sections_ordered_before_wikilinks() -> None:
     topic_idx = COMPILER_SYSTEM_PROMPT.index("## Topic vs system")
     entity_idx = COMPILER_SYSTEM_PROMPT.index("## Entity evidence strength")

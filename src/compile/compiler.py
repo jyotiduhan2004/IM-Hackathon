@@ -875,6 +875,7 @@ def resolve_page(
         describing the missing input.
     """
     # deferred to avoid circular import at module load time
+    from src.db.wiki_pages import count_wiki_pages_by_type
     from src.db.wiki_pages import lookup_page
 
     if slug is None and title is None and canonical_user_email is None:
@@ -887,6 +888,23 @@ def resolve_page(
             "status": None,
             "confidence": 0.0,
             "error": "provide at least one of: slug, title, canonical_user_email",
+        }
+
+    catalog_counts = count_wiki_pages_by_type()
+    if not catalog_counts or sum(catalog_counts.values()) == 0:
+        return {
+            "exists": False,
+            "slug": None,
+            "title": None,
+            "page_type": None,
+            "path": None,
+            "status": None,
+            "confidence": 0.0,
+            "error": (
+                "wiki_pages catalog is empty or stale; run "
+                "`uv run python scripts/backfill_wiki_pages.py` before relying on resolve_page"
+            ),
+            "catalog_counts": catalog_counts,
         }
 
     row = lookup_page(slug=slug, title=title, canonical_user_email=canonical_user_email)
@@ -1028,6 +1046,31 @@ def create_entity(email: str, display_name: str = "", force: bool = False) -> di
     return create_entity_page(email, display_name or None, force=force)
 
 
+@tool
+def create_entities(raw_paths: list[str], entities: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resolve or create MULTIPLE entity pages in one call.
+
+    Prefer this over repeated `create_entity(...)` calls whenever the same
+    email or thread mentions 2+ people. The tool validates each requested
+    email address against the provided raw files and refuses any address
+    that does not literally appear in those emails.
+
+    Args:
+        raw_paths: Relative raw email paths for the current batch, e.g.
+            ["raw/2026-04-11_subject_a.md", "raw/2026-04-11_subject_b.md"].
+        entities: List of objects shaped like
+            {"email": "amit@indiamart.com", "display_name": "Amit Jain", "force": false}.
+
+    Returns:
+        {"ok": bool, "validated_raw_paths": [...], "results": [...]}
+        where each `results` item mirrors `create_entity(...)` success/error
+        output and adds `matched_raw_paths` on success.
+    """
+    from src.compile.entities import create_entity_pages
+
+    return create_entity_pages(raw_paths, entities)
+
+
 # === Frontmatter helpers ===
 
 
@@ -1144,13 +1187,17 @@ def create_compiler(
     # the agent can fix in-session before moving on. It does NOT flip
     # compile state; it's a self-review gate. The coordinator marks
     # programmatically post-batch as before.
+    # NOTE: `list_uncompiled_emails` is deliberately NOT exposed to the agent.
+    # The coordinator owns the compile queue and already passes the batch file
+    # list in the user instruction. Letting the agent browse the whole queue
+    # was pure context tax in Langfuse traces.
     return create_deep_agent(
         model=model,
         tools=[
             find_new_sources,
-            list_uncompiled_emails,
             list_wiki_pages,
             resolve_page,
+            create_entities,
             create_entity,
             write_draft_page,
             log_insight,
@@ -1161,7 +1208,10 @@ def create_compiler(
     )
 
 
-def get_langfuse_handler() -> Any | None:
+def get_langfuse_handler(
+    *,
+    update_trace: bool = True,
+) -> Any | None:
     """Return a Langfuse callback handler if configured, else None.
 
     Langfuse v3+ removed the legacy `langfuse.callback` module. The handler
@@ -1214,7 +1264,7 @@ def get_langfuse_handler() -> Any | None:
         logger.warning("langfuse not installed, tracing disabled")
         return None
 
-    return CallbackHandler()
+    return CallbackHandler(update_trace=update_trace)
 
 
 def run_compilation(
@@ -1225,6 +1275,9 @@ def run_compilation(
     recursion_limit: int = 150,
     cache_stats: Any | None = None,
     tool_log: ToolCallLogHandler | None = None,
+    run_name: str | None = None,
+    trace_metadata: dict[str, Any] | None = None,
+    trace_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 
@@ -1244,7 +1297,7 @@ def run_compilation(
     agent = create_compiler(model_name=model_name, raw_dir=raw_dir, wiki_dir=wiki_dir)
 
     callbacks = []
-    lf = get_langfuse_handler()
+    lf = get_langfuse_handler(update_trace=True)
     if lf:
         callbacks.append(lf)
     if cache_stats is not None:
@@ -1256,6 +1309,12 @@ def run_compilation(
     if callbacks:
         config["callbacks"] = callbacks
     config["recursion_limit"] = recursion_limit
+    if run_name:
+        config["run_name"] = run_name
+    if trace_metadata:
+        config["metadata"] = trace_metadata
+    if trace_tags:
+        config["tags"] = trace_tags
 
     logger.info(
         "running compilation",

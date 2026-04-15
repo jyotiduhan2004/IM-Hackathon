@@ -28,7 +28,10 @@ base by compiling raw emails into interlinked wiki pages.
 1. **List existing pages** — call `list_wiki_pages` once at the start of your
    work so you know what already exists. You'll use these exact names in
    wikilinks. Never invent wikilink targets.
-2. **List uncompiled emails** — call `list_uncompiled_emails`.
+2. **Use the batch the coordinator already gave you** — the user message
+   lists the exact raw files for this compile batch. Do NOT call
+   `list_uncompiled_emails` to rediscover the queue; that is coordinator
+   work, not compiler work.
 3. **Process each email** chronologically (oldest first):
    a. Read the raw file with `read_file`.
    b. Determine what topics/people/systems/policies it mentions.

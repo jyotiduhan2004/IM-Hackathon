@@ -21,6 +21,7 @@ from typing import Literal
 from uuid import UUID
 
 import click
+import httpx
 import psycopg
 import structlog
 
@@ -515,6 +516,49 @@ _HEALTH_FAIL_RATE_THRESHOLD = 0.5
 _HEALTH_ABS_FAILURE_CAP = 10
 
 
+def _fetch_available_models() -> set[str] | None:
+    """Return the LiteLLM proxy's advertised model ids, or None on failure."""
+    if not settings.litellm_base_url or not settings.openai_api_key:
+        return None
+
+    headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+    url = settings.litellm_base_url.rstrip("/") + "/models"
+    try:
+        response = httpx.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("model_catalog_fetch_failed", url=url, error=str(exc))
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        logger.warning("model_catalog_invalid_json", url=url, error=str(exc))
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, list):
+        logger.warning("model_catalog_unexpected_shape", url=url, payload_type=type(data).__name__)
+        return None
+
+    return {
+        model_id.strip()
+        for item in data
+        if isinstance(item, dict)
+        and isinstance(model_id := item.get("id"), str)
+        and model_id.strip()
+    }
+
+
+def _filter_pool_to_available_models(
+    pool: list[str], available_models: set[str]
+) -> tuple[list[str], list[str]]:
+    """Drop pool entries the proxy does not currently advertise."""
+    kept = [model for model in pool if model in available_models]
+    dropped = [model for model in pool if model not in available_models]
+    return kept, dropped
+
+
 def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
     """Filter ``pool`` by recent ``compile_attempts`` outcomes.
 
@@ -745,6 +789,26 @@ def main(
     else:
         pool = settings.model_pool if len(settings.model_pool) > 1 else []
 
+    if not dry_run:
+        try:
+            compile_attempts_repo.ensure_schema()
+        except psycopg.Error as exc:
+            logger.warning("compile_attempts_schema_ensure_failed", error=str(exc))
+
+    available_models = _fetch_available_models()
+    base_url = settings.litellm_base_url
+    if pool and available_models is not None:
+        pool, unavailable = _filter_pool_to_available_models(pool, available_models)
+        if unavailable:
+            click.echo(
+                "Provider catalog dropped " + ", ".join(unavailable) + " (not in /models)"
+            )
+    if not pool and available_models is not None and base_url and resolved_model not in available_models:
+        click.echo(
+            f"WARNING: selected model {resolved_model} is not advertised by "
+            f"{base_url.rstrip('/')}/models"
+        )
+
     # Drop chronically-failing models from the pool at run-start so we
     # don't spend a run rediscovering the same 401/400/recursion-loop
     # failure. Fails open on DB errors so a Postgres blip can't block
@@ -904,6 +968,20 @@ def main(
                         recursion_limit=recursion_limit,
                         cache_stats=cache_cb,
                         tool_log=tool_cb,
+                        run_name=f"compile:{batch_model}:{thread_id[:12] or 'no-thread'}",
+                        trace_metadata={
+                            "compile_run_id": str(run_id),
+                            "compile_batch_index": batch_idx,
+                            "compile_email_count": len(batch),
+                            "compile_model": batch_model,
+                            "compile_thread_id": thread_id,
+                        },
+                        trace_tags=[
+                            "email-kb",
+                            "compile",
+                            f"model:{batch_model}",
+                            f"batch:{batch_idx}",
+                        ],
                     ),
                     timeout_s=batch_timeout,
                 )

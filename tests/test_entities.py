@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from src.compile import entities as entities_module
 from src.compile.entities import create_entity_page
+from src.compile.entities import create_entity_pages
 from src.compile.entities import email_to_slug
 from src.compile.entities import find_entity_by_email
 from src.compile.entities import is_external_email
@@ -302,6 +303,64 @@ class TestCreateEntityEvidenceGate:
         assert "force=True" in result["guidance"]
         # No file was written.
         assert not (tmp_path / "manay-shankar-indiamart-com.md").exists()
+
+
+class TestCreateEntityPagesBatch:
+    def test_creates_multiple_entities_when_emails_are_in_raw(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 1, "to_count": 0, "cc_count": 0, "distinct_threads": 1},
+        )
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "thread-a.md").write_text(
+            "From: owner@indiamart.com\nTo: amit@indiamart.com\nCC: ruchi@indiamart.com\n",
+            encoding="utf-8",
+        )
+
+        result = create_entity_pages(
+            ["raw/thread-a.md"],
+            [
+                {"email": "amit@indiamart.com", "display_name": "Amit"},
+                {"email": "ruchi@indiamart.com", "display_name": "Ruchi"},
+            ],
+            entities_dir=tmp_path / "wiki" / "entities",
+            raw_dir=raw_dir,
+        )
+
+        assert result["ok"] is True
+        assert result["validated_raw_paths"] == ["raw/thread-a.md"]
+        assert [item["email"] for item in result["results"]] == [
+            "amit@indiamart.com",
+            "ruchi@indiamart.com",
+        ]
+        assert all(item["created"] is True for item in result["results"])
+        assert all(item["matched_raw_paths"] == ["raw/thread-a.md"] for item in result["results"])
+
+    def test_rejects_email_not_present_in_raw(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_evidence(
+            monkeypatch,
+            {"from_count": 1, "to_count": 0, "cc_count": 0, "distinct_threads": 1},
+        )
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "thread-a.md").write_text("From: owner@indiamart.com\n", encoding="utf-8")
+
+        result = create_entity_pages(
+            ["raw/thread-a.md"],
+            [{"email": "ghost@indiamart.com", "display_name": "Ghost"}],
+            entities_dir=tmp_path / "wiki" / "entities",
+            raw_dir=raw_dir,
+        )
+
+        assert result["ok"] is False
+        assert result["results"][0]["reason"] == "email_not_in_raw"
+        assert result["results"][0]["email"] == "ghost@indiamart.com"
+        assert not (tmp_path / "wiki" / "entities" / "ghost-indiamart-com.md").exists()
 
     def test_weak_evidence_with_force_creates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

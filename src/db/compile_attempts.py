@@ -16,11 +16,54 @@ transaction as the surrounding compile-state UPDATE.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import psycopg
 import structlog
 
+import src.db as db_pkg
+
 logger = structlog.get_logger(__name__)
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS compile_attempts (
+  id              bigserial PRIMARY KEY,
+  message_id      text NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
+  run_id          uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
+  compile_model   text,
+  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+  error           text,
+  attempted_at    timestamptz NOT NULL DEFAULT now(),
+  finished_at     timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS compile_attempts_health_stats_idx
+  ON compile_attempts (compile_model, attempted_at DESC)
+  WHERE compile_model IS NOT NULL AND finished_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS compile_attempts_message_idx
+  ON compile_attempts (message_id);
+
+CREATE INDEX IF NOT EXISTS compile_attempts_run_idx
+  ON compile_attempts (run_id);
+"""
+
+
+def _row_get(row: Any, key: str, fallback_index: int) -> Any:
+    """Fetch a column from either dict-style or tuple-style psycopg rows."""
+    if isinstance(row, dict):
+        return row[key]
+    try:
+        return row[key]
+    except (TypeError, KeyError, IndexError):
+        return row[fallback_index]
+
+
+def ensure_schema() -> None:
+    """Create compile_attempts + indexes if this environment is behind."""
+    with db_pkg.connect() as conn:
+        conn.execute(_SCHEMA_SQL)
+        conn.commit()
 
 
 def record_start(
@@ -45,7 +88,7 @@ def record_start(
     ).fetchone()
     if row is None:  # pragma: no cover — unreachable if INSERT succeeds
         raise RuntimeError("INSERT compile_attempts returned no row")
-    return int(row["id"])
+    return int(_row_get(row, "id", 0))
 
 
 def record_outcome(
