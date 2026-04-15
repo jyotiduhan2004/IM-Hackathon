@@ -14,8 +14,10 @@ CREATE TABLE IF NOT EXISTS messages (
   date              TIMESTAMPTZ,
 
   -- Compile queue state machine
+  -- 'skipped' added on 2026-04-16 via src/db/migrations/202604160000_add_skipped_state.sql
+  -- for trivial-filter matches (acks / calendar noise / short tangential replies).
   compile_state     TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (compile_state IN ('pending', 'claimed', 'compiled', 'failed')),
+                    CHECK (compile_state IN ('pending', 'claimed', 'compiled', 'failed', 'skipped')),
   compile_run_id    UUID,
   claimed_at        TIMESTAMPTZ,
   compiled_at       TIMESTAMPTZ,
@@ -299,7 +301,8 @@ CREATE TABLE IF NOT EXISTS compile_attempts (
   message_id      text NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
   run_id          uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
   compile_model   text,
-  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+  -- 'skipped' added on 2026-04-16 via src/db/migrations/202604160000_add_skipped_state.sql
+  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout', 'skipped')),
   error           text,
   attempted_at    timestamptz NOT NULL DEFAULT now(),
   finished_at     timestamptz

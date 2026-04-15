@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS compile_attempts (
   message_id      text NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
   run_id          uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
   compile_model   text,
-  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout', 'skipped')),
   error           text,
   attempted_at    timestamptz NOT NULL DEFAULT now(),
   finished_at     timestamptz

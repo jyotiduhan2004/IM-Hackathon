@@ -383,13 +383,17 @@ def _compile_progress_block() -> list[str]:
     pending = states.get("pending", 0)
     failed = states.get("failed", 0)
     claimed = states.get("claimed", 0)
+    skipped = states.get("skipped", 0)
     pct = (100 * compiled / total) if total else 0.0
+
+    summary = f"{pending:,} pending, {failed:,} failed, {claimed:,} in-flight"
+    if skipped:
+        summary += f", {skipped:,} skipped"
 
     lines: list[str] = [
         "## Compile progress",
         "",
-        f"**{compiled:,} of {total:,} emails compiled** ({pct:.1f}%). "
-        f"{pending:,} pending, {failed:,} failed, {claimed:,} in-flight.",
+        f"**{compiled:,} of {total:,} emails compiled** ({pct:.1f}%). {summary}.",
         "",
         "```mermaid",
         "pie showData title Compile state",
@@ -400,6 +404,8 @@ def _compile_progress_block() -> list[str]:
         lines.append(f'    "failed" : {failed}')
     if claimed:
         lines.append(f'    "in-flight" : {claimed}')
+    if skipped:
+        lines.append(f'    "skipped" : {skipped}')
     lines.extend(["```", ""])
 
     if weekly_rows:

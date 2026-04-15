@@ -20,8 +20,11 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
+import structlog
 
 from src.db import connect
+
+logger = structlog.get_logger(__name__)
 
 
 def insert_message(
@@ -209,6 +212,35 @@ def fail_message_compile(message_id: str, error: str, compile_model: str | None 
             """,
             (error, compile_model, message_id),
         )
+
+
+def mark_skipped(message_id: str, reason: str) -> int:
+    """Flip a message to the terminal 'skipped' state. Returns rowcount.
+
+    'skipped' rows are never re-claimed by the compile loop (the claim
+    query filters to 'pending'/'failed' only). Use for trivial-filter
+    matches where we've decided not to spend an LLM call on the email.
+
+    ``reason`` is stashed in ``last_error`` — overloaded but avoids a
+    schema change for a field only operators read.
+    """
+    with connect() as conn, conn.transaction():
+        cur = conn.execute(
+            """
+            UPDATE messages
+               SET compile_state = 'skipped',
+                   last_error = %s
+             WHERE message_id = %s
+            """,
+            (reason, message_id),
+        )
+    logger.info(
+        "messages.mark_skipped",
+        message_id=message_id,
+        reason=reason,
+        rowcount=cur.rowcount,
+    )
+    return cur.rowcount
 
 
 def find_by_raw_path(raw_path: str) -> dict[str, Any] | None:

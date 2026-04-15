@@ -62,7 +62,7 @@ def _load_messages_ddl() -> str:
       date              TIMESTAMPTZ,
       compile_state     TEXT NOT NULL DEFAULT 'pending'
                         CHECK (compile_state IN
-                          ('pending', 'claimed', 'compiled', 'failed')),
+                          ('pending', 'claimed', 'compiled', 'failed', 'skipped')),
       compile_run_id    UUID,
       claimed_at        TIMESTAMPTZ,
       compiled_at       TIMESTAMPTZ,
@@ -256,7 +256,7 @@ def _load_messages_ddl() -> str:
                       REFERENCES {TEST_SCHEMA}.compile_runs(run_id)
                       ON DELETE CASCADE,
       compile_model   text,
-      outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+      outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout', 'skipped')),
       error           text,
       attempted_at    timestamptz NOT NULL DEFAULT now(),
       finished_at     timestamptz

@@ -42,9 +42,7 @@ def _insert(
 
 
 def _fetch_one(conn: psycopg.Connection, message_id: str) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM messages WHERE message_id = %s", (message_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM messages WHERE message_id = %s", (message_id,)).fetchone()
     assert row is not None, f"no row for {message_id}"
     return row
 
@@ -138,9 +136,7 @@ def test_claim_skip_locked_no_double_claim(db_conn: psycopg.Connection) -> None:
 
     assert first is not None
     assert second is not None
-    assert first["message_id"] != second["message_id"], (
-        "two workers must not claim the same row"
-    )
+    assert first["message_id"] != second["message_id"], "two workers must not claim the same row"
     assert {first["message_id"], second["message_id"]} == {"m1", "m2"}
 
     # Third claim: queue empty → None.
@@ -312,6 +308,36 @@ def test_reset_to_pending_bulk(db_conn: psycopg.Connection) -> None:
 # ---------------------------------------------------------------------------
 # reset_to_pending_by_path (targeted)
 # ---------------------------------------------------------------------------
+
+
+def test_mark_skipped_flips_state_and_is_excluded_from_claim(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Skipped rows carry the reason in last_error and are invisible to the
+    claim loop (which only scans pending/failed/stale-claimed)."""
+    _insert(db_conn, message_id="m_skip", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m_keep", date=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    db_conn.commit()
+
+    rows_flipped = repo.mark_skipped("m_skip", "auto_sender")
+    assert rows_flipped == 1
+
+    row = _fetch_one(db_conn, "m_skip")
+    assert row["compile_state"] == "skipped"
+    assert row["last_error"] == "auto_sender"
+    assert row["is_compiled"] is False
+
+    # The claim loop must not pick up skipped rows — only m_keep is eligible.
+    claimed = repo.claim_next_message(uuid.uuid4())
+    assert claimed is not None
+    assert claimed["message_id"] == "m_keep"
+
+    # Nothing else claimable.
+    assert repo.claim_next_message(uuid.uuid4()) is None
+
+    # list_uncompiled and remaining_uncompiled_count also exclude skipped.
+    remaining_ids = {r["message_id"] for r in repo.list_uncompiled()}
+    assert "m_skip" not in remaining_ids
 
 
 def test_reset_to_pending_by_path(db_conn: psycopg.Connection) -> None:
