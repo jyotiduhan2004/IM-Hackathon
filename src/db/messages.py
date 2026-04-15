@@ -268,3 +268,47 @@ def reset_to_pending_by_path(raw_paths: list[str]) -> int:
             (list(raw_paths),),
         )
         return cur.rowcount
+
+
+# TODO(refactor): move to src/db/compile_attempts.py once the import graph
+# tolerates it. Kept here for this PR to minimize churn on the compile_all.py
+# side (already imports from src.db.messages).
+def model_health_stats(*, since_hours: int = 24) -> list[dict[str, Any]]:
+    """Per-model attempt outcomes over the last ``since_hours``.
+
+    Used by ``scripts/compile_all.py::_healthy_pool`` at run-start to drop
+    models that have been failing consistently. Sourced from the
+    append-only ``compile_attempts`` table because ``messages.compile_model``
+    is overwritten by ``COALESCE`` on retry and so loses failure history.
+
+    Returns a list of dicts: ``{compile_model, total, failed, fail_rate}``.
+    Only counts attempts where ``finished_at IS NOT NULL`` (excludes
+    in-flight rows that haven't resolved yet). ``timeout`` outcomes are
+    counted alongside ``failed`` — they're both "the model didn't
+    produce a usable compile".
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT compile_model,
+                   count(*)::int AS total,
+                   count(*) FILTER (
+                     WHERE outcome IN ('failed', 'timeout')
+                   )::int AS failed
+              FROM compile_attempts
+             WHERE compile_model IS NOT NULL
+               AND finished_at IS NOT NULL
+               AND attempted_at >= now() - make_interval(hours => %s)
+             GROUP BY compile_model
+            """,
+            (since_hours,),
+        ).fetchall()
+    return [
+        {
+            "compile_model": r["compile_model"],
+            "total": r["total"],
+            "failed": r["failed"],
+            "fail_rate": (r["failed"] / r["total"]) if r["total"] else 0.0,
+        }
+        for r in rows
+    ]

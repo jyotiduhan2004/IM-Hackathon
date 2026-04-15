@@ -38,6 +38,8 @@ from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.compile.tool_call_log import ToolCallLogHandler  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.db import compile_attempts as compile_attempts_repo  # noqa: E402
+from src.db import connect  # noqa: E402
 from src.db.compile_runs import finish_run  # noqa: E402
 from src.db.compile_runs import start_run  # noqa: E402
 from src.db.insights import list_for_run as list_insights_for_run  # noqa: E402
@@ -45,6 +47,7 @@ from src.db.insights import max_id_for_run as _insights_max_id  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
+from src.db.messages import model_health_stats  # noqa: E402
 from src.db.tool_call_log import fallback_to_jsonl as tool_log_fallback_to_jsonl  # noqa: E402
 from src.db.tool_call_log import insert_many as tool_log_insert_many  # noqa: E402
 from src.db.tool_call_log import summarize as tool_log_summarize  # noqa: E402
@@ -411,11 +414,13 @@ def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
 
 def _mark_batch_compiled(
     batch: list, wiki_dir: Path, compile_model: str | None = None
-) -> tuple[int, int, int]:
+) -> tuple[list[str], int, int]:
     """Mark only batch emails whose raw_path is actually cited in the wiki.
 
-    Returns (marked, not_cited, missing).
-      - marked:   emails cited in >=1 wiki page's sources — flipped to compiled.
+    Returns (marked_message_ids, not_cited, missing).
+      - marked_message_ids: message_ids cited in >=1 wiki page's
+        sources — flipped to compiled. Caller uses the list to stamp
+        the matching ``compile_attempts`` rows as ``outcome='compiled'``.
       - not_cited: emails not referenced anywhere in wiki — agent likely
         didn't finish them before returning; left pending for next claim.
       - missing:  emails whose raw_path has no `messages` row at all —
@@ -428,7 +433,8 @@ def _mark_batch_compiled(
     but actually stopped early" failure mode.
     """
     cited = _collect_cited_raw_paths(wiki_dir)
-    marked, not_cited, missing = 0, 0, 0
+    marked_ids: list[str] = []
+    not_cited, missing = 0, 0
     for path in _batch_paths(batch):
         row = find_by_raw_path(path)
         if row is None:
@@ -444,8 +450,8 @@ def _mark_batch_compiled(
             not_cited += 1
             continue
         finish_message_compile(row["message_id"], compile_model=compile_model)
-        marked += 1
-    return marked, not_cited, missing
+        marked_ids.append(str(row["message_id"]))
+    return marked_ids, not_cited, missing
 
 
 def _mark_batch_failed(batch: list, error: str, compile_model: str | None = None) -> int:
@@ -498,6 +504,134 @@ def _group_by_thread(
     # chronological for supersession detection across topics.
     groups.sort(key=lambda g: min(e.get("date", "") for e in g) if g else "")
     return groups
+
+
+# Auto-exclusion thresholds. If you tune these, update the matching
+# comment block in src/config.py::llm_model_pool so future reviewers can
+# reason about "why did my model get dropped?" without grepping.
+_HEALTH_WINDOW_HOURS = 24
+_HEALTH_MIN_ATTEMPTS = 5
+_HEALTH_FAIL_RATE_THRESHOLD = 0.5
+_HEALTH_ABS_FAILURE_CAP = 10
+
+
+def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Filter ``pool`` by recent ``compile_attempts`` outcomes.
+
+    Drops models where ``(fail_rate > 0.5 AND total >= 5) OR failed >= 10``
+    over the last 24h. Fails open — on DB errors, missing stats, or a
+    filter that would empty the pool, returns the unfiltered pool (with
+    a warning when all models would be excluded, so we never deadlock).
+
+    Returns ``(kept_models, exclusion_records)``. ``exclusion_records``
+    is a list of the ``model_health_stats`` dicts we dropped, so the
+    caller can surface them to the operator.
+    """
+    try:
+        stats = model_health_stats(since_hours=_HEALTH_WINDOW_HOURS)
+    except psycopg.Error as exc:
+        logger.warning("healthy_pool_db_error", error=str(exc))
+        return pool, []
+
+    by_model = {s["compile_model"]: s for s in stats}
+    kept: list[str] = []
+    excluded: list[dict[str, Any]] = []
+    for m in pool:
+        s = by_model.get(m)
+        if s is None:
+            kept.append(m)
+            continue
+        should_drop = (
+            s["fail_rate"] > _HEALTH_FAIL_RATE_THRESHOLD and s["total"] >= _HEALTH_MIN_ATTEMPTS
+        ) or s["failed"] >= _HEALTH_ABS_FAILURE_CAP
+        if should_drop:
+            excluded.append(s)
+        else:
+            kept.append(m)
+
+    if not kept:
+        logger.warning("healthy_pool_would_empty_pool", excluded=excluded)
+        return pool, excluded
+    return kept, excluded
+
+
+def _record_attempts_start(
+    batch: list[Any],
+    *,
+    run_id: UUID,
+    compile_model: str,
+) -> dict[str, int]:
+    """Insert one in-flight ``compile_attempts`` row per batch message.
+
+    Returns a map of ``message_id → attempt_id`` so the caller can stamp
+    the outcome on batch completion. Uses a single connection and commits
+    immediately — if the batch crashes mid-compile, the in-flight rows
+    are still visible for the next run's ``_healthy_pool`` pass (they just
+    lack an outcome; ``model_health_stats`` filters them via
+    ``finished_at IS NOT NULL``).
+
+    Fails open on DB errors: logs a warning and returns an empty map so
+    the caller proceeds without attempt tracking rather than aborting the
+    batch. Rows that can't map a path → message_id (backfill drift) are
+    skipped with a warning — same behavior as ``_mark_batch_compiled``.
+    """
+    attempts: dict[str, int] = {}
+    try:
+        with connect() as conn:
+            for path in _batch_paths(batch):
+                row = find_by_raw_path(path)
+                if row is None:
+                    logger.warning(
+                        "attempt_start: no messages row for batch path",
+                        path=path,
+                    )
+                    continue
+                message_id = str(row["message_id"])
+                attempt_id = compile_attempts_repo.record_start(
+                    conn,
+                    message_id=message_id,
+                    run_id=run_id,
+                    compile_model=compile_model,
+                )
+                attempts[message_id] = attempt_id
+            conn.commit()
+    except psycopg.Error as exc:
+        logger.warning("attempt_start_db_error", error=str(exc))
+        return {}
+    return attempts
+
+
+def _record_attempts_outcome(
+    attempts: dict[str, int],
+    message_ids: list[str],
+    *,
+    outcome: str,
+    error: str | None = None,
+) -> None:
+    """Stamp ``outcome`` + ``finished_at`` on the given attempt rows.
+
+    ``message_ids`` scopes which attempts to update (so success path only
+    stamps the actually-marked messages). Fails open on DB errors — the
+    next run's guard just sees stale in-flight rows, which are filtered
+    out of ``model_health_stats``.
+    """
+    if not attempts or not message_ids:
+        return
+    try:
+        with connect() as conn:
+            for mid in message_ids:
+                attempt_id = attempts.get(mid)
+                if attempt_id is None:
+                    continue
+                compile_attempts_repo.record_outcome(
+                    conn,
+                    attempt_id=attempt_id,
+                    outcome=outcome,
+                    error=error,
+                )
+            conn.commit()
+    except psycopg.Error as exc:
+        logger.warning("attempt_outcome_db_error", error=str(exc))
 
 
 @click.command()
@@ -610,6 +744,20 @@ def main(
         pool = [m.strip() for m in model_pool.split(",") if m.strip()]
     else:
         pool = settings.model_pool if len(settings.model_pool) > 1 else []
+
+    # Drop chronically-failing models from the pool at run-start so we
+    # don't spend a run rediscovering the same 401/400/recursion-loop
+    # failure. Fails open on DB errors so a Postgres blip can't block
+    # compile. See `_healthy_pool` for the rule.
+    if pool:
+        pool, excluded = _healthy_pool(pool)
+        if excluded:
+            click.echo(
+                "Auto-exclusion dropped "
+                + ", ".join(
+                    f"{s['compile_model']} ({s['failed']}/{s['total']} failed)" for s in excluded
+                )
+            )
     if pool:
         click.echo(f"Model pool: {pool} (random pick per batch)")
 
@@ -737,6 +885,11 @@ def main(
             # formatter hook can find every page the agent touched during
             # the batch (mtime >= batch_start).
             batch_start = time.time()
+            # Record in-flight compile_attempts rows BEFORE dispatch so a
+            # mid-batch crash still leaves the attempt visible (with a
+            # NULL outcome) for post-mortem and for the next run's
+            # `_healthy_pool` pass to filter out.
+            attempts = _record_attempts_start(batch, run_id=run_id, compile_model=batch_model)
             try:
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it
@@ -754,10 +907,11 @@ def main(
                     ),
                     timeout_s=batch_timeout,
                 )
-                marked, not_cited, missing = _mark_batch_compiled(
+                marked_ids, not_cited, missing = _mark_batch_compiled(
                     batch, Path(wiki_dir), compile_model=batch_model
                 )
-                processed += marked
+                processed += len(marked_ids)
+                _record_attempts_outcome(attempts, marked_ids, outcome="compiled")
                 # Post-batch normalization + validation. Catches agent-
                 # introduced format drift (duplicate ## Related headings,
                 # broken wikilinks, malformed frontmatter) right after the
@@ -817,8 +971,16 @@ def main(
                 # Ctrl+C: flush any in-flight tool records before letting the
                 # outer handler mark the run 'killed'. Without this, the
                 # Postgres compile_tool_calls table loses every tool call
-                # since the last batch boundary.
+                # since the last batch boundary. Same for the in-flight
+                # compile_attempts rows — best-effort stamp so we don't
+                # carry a bunch of orphaned NULL-outcome rows forward.
                 _flush_tool_calls(run_id, tool_cb)
+                _record_attempts_outcome(
+                    attempts,
+                    list(attempts.keys()),
+                    outcome="failed",
+                    error="KeyboardInterrupt",
+                )
                 raise
             except Exception as e:  # noqa: BLE001
                 # concurrent.futures.TimeoutError has an empty str(),
@@ -829,10 +991,12 @@ def main(
                     err_msg = (
                         f"TimeoutError: batch exceeded {batch_timeout}s (thread={thread_id[:12]})"
                     )
+                    attempt_outcome = "timeout"
                 else:
                     # str(e) is empty for some zero-message exception types;
                     # repr(e) keeps the type name so the log row stays useful.
                     err_msg = str(e) or repr(e)
+                    attempt_outcome = "failed"
                 logger.error("batch compilation failed", batch_index=batch_idx, error=err_msg)
                 # Flush tool-call records BEFORE _mark_batch_failed so a secondary
                 # DB failure on the mark step doesn't swallow the primary telemetry.
@@ -843,6 +1007,12 @@ def main(
                     fail_notes = f"{fail_notes}; {tool_suffix}"
                 failed_marked = _mark_batch_failed(batch, err_msg, compile_model=batch_model)
                 failed += failed_marked
+                _record_attempts_outcome(
+                    attempts,
+                    list(attempts.keys()),
+                    outcome=attempt_outcome,
+                    error=err_msg[:500],
+                )
                 click.echo(f"ERROR in batch ({failed_marked} marked failed): {err_msg}")
                 click.echo("Continuing with next batch...")
                 _append_batch_log(batch_idx, batch, "failed", wiki_dir, notes=fail_notes)

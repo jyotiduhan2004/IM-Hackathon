@@ -69,33 +69,45 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM — single-model default (legacy single-model path). For A/B
-    # routing, set LLM_MODEL_POOL (comma-separated) and the per-batch
-    # selector in compile_all.py picks uniformly per batch.
-    #
-    # We default to z-ai/glm-4.6 because glm-5.1 does NOT cache prompts
-    # through OpenRouter (verified 2026-04-13, see
-    # docs/reviews/prompt-caching-20260413.md); glm-4.6 caches ~20% of
-    # our 3000-token system prompt, which compounds over a full compile
-    # to a ~3-4x cost delta.
-    llm_model: str = "z-ai/glm-4.6"
+    # LLM — `llm_model_pool` is the source of truth; every batch picks
+    # one entry uniformly at random (after the auto-exclusion guard in
+    # `scripts/compile_all.py::_healthy_pool` drops known-broken ones).
+    # `llm_model` is a fallback for code paths that invoke
+    # `run_compilation` without a model override (one-off scripts,
+    # tests); it mirrors the first pool entry so behavior doesn't
+    # quietly diverge.
+    llm_model: str = "minimax/minimax-m2.7"
 
-    # Per-batch model A/B pool — comma-separated. Empty → single-model
-    # (uses `llm_model` above). Each batch picks one uniformly at random
-    # and stamps the choice in `messages.compile_model` so we can join
-    # model → outcome later.
+    # Per-batch model A/B pool — comma-separated. Each batch picks one
+    # uniformly at random and stamps the choice in
+    # `messages.compile_model` so we can join model → outcome later.
     #
-    # Pool history:
-    # - z-ai/glm-5.1 (2026-04-13): LiteLLM proxy returns 400
-    #   ("Invalid model name ... Call /v1/models") on every call —
-    #   upstream routing issue, not key-access. Dropped.
-    # - z-ai/glm-4.6 (2026-04-14): across 44 batch attempts across 5
-    #   runs it failed 52% of the time, almost always hitting the
-    #   recursion limit (model loops past 120 tool-calls without
-    #   converging). minimax-m2.7 and glm-5 both run ~5% failure on
-    #   the same workload. Dropped until we understand why glm-4.6
-    #   doesn't converge on our 3000-token tool-heavy prompt.
-    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5"
+    # A coordinator-side auto-exclusion guard in compile_all.py drops
+    # any model with >50% failure over ≥5 attempts OR ≥10 absolute
+    # failures in the last 24h. That lets us re-enable historically
+    # flaky models here without a manual post-mortem every cycle — if
+    # the proxy still rejects them or they still loop recursively, the
+    # guard drops them at the next run-start.
+    #
+    # Pool history (the guard handles short-term flap; these comments
+    # capture the "don't re-add yet" judgment calls the guard can't):
+    # - z-ai/glm-5.1 (2026-04-13): LiteLLM proxy returned 400 on every
+    #   call. Re-added 2026-04-15; guard will drop it again if the
+    #   proxy still rejects it.
+    # - z-ai/glm-4.6 (2026-04-14): 52% recursion-limit fail rate across
+    #   44 batches (minimax-m2.7 and glm-5 ran ~5% on the same prompt).
+    #   Kept OUT of the pool until someone investigates why it loops
+    #   past 120 tool-calls without converging — the 24h guard window
+    #   doesn't retain week-old failures, so it won't preemptively drop
+    #   glm-4.6 if naively re-added.
+    # - deepseek/deepseek-v3.2, xiaomi/mimo-v2-pro, x-ai/grok-4.1-fast
+    #   (2026-04-15): added for wider A/B coverage. Team-key access is
+    #   not provisioned for deepseek/* or xiaomi/* yet — the guard will
+    #   drop them after their first ~10 401s.
+    llm_model_pool: str = (
+        "minimax/minimax-m2.7,z-ai/glm-5,z-ai/glm-5.1,"
+        "deepseek/deepseek-v3.2,xiaomi/mimo-v2-pro,x-ai/grok-4.1-fast"
+    )
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None

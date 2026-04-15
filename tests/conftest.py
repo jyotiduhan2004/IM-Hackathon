@@ -246,6 +246,28 @@ def _load_messages_ddl() -> str:
       ON {TEST_SCHEMA}.compile_insights(run_id);
     CREATE INDEX compile_insights_category_created_idx
       ON {TEST_SCHEMA}.compile_insights(category, created_at DESC);
+
+    CREATE TABLE {TEST_SCHEMA}.compile_attempts (
+      id              bigserial PRIMARY KEY,
+      message_id      text NOT NULL
+                      REFERENCES {TEST_SCHEMA}.messages(message_id)
+                      ON DELETE CASCADE,
+      run_id          uuid
+                      REFERENCES {TEST_SCHEMA}.compile_runs(run_id)
+                      ON DELETE CASCADE,
+      compile_model   text,
+      outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+      error           text,
+      attempted_at    timestamptz NOT NULL DEFAULT now(),
+      finished_at     timestamptz
+    );
+
+    CREATE INDEX compile_attempts_model_attempted_idx
+      ON {TEST_SCHEMA}.compile_attempts (compile_model, attempted_at DESC);
+    CREATE INDEX compile_attempts_outcome_attempted_idx
+      ON {TEST_SCHEMA}.compile_attempts (outcome, attempted_at DESC);
+    CREATE INDEX compile_attempts_run_idx
+      ON {TEST_SCHEMA}.compile_attempts (run_id);
     """
 
 
@@ -316,23 +338,29 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(db_insights, "connect", _scoped_connect)
 
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        # message_participants + message_touched_pages → messages/users/
-        # wiki_pages via FK; truncate together so we don't have to think
+        # message_participants + message_touched_pages + compile_attempts
+        # → messages via FK; truncate together so we don't have to think
         # about delete order. compile_runs and ingest_cursors have no FK
-        # back to messages so they get their own truncates.
+        # back to messages so they get their own truncates. compile_attempts
+        # also FKs compile_runs, so it's named in both statements below so
+        # Postgres doesn't complain about dangling dependencies either way.
         conn.execute(
             f"TRUNCATE TABLE {TEST_SCHEMA}.message_touched_pages, "
             f"{TEST_SCHEMA}.message_participants, "
+            f"{TEST_SCHEMA}.compile_attempts, "
             f"{TEST_SCHEMA}.wiki_pages, "
             f"{TEST_SCHEMA}.messages, {TEST_SCHEMA}.users, "
             f"{TEST_SCHEMA}.threads CASCADE"
         )
-        # compile_tool_calls + compile_insights both have FKs to compile_runs
-        # — Postgres requires all dependent tables in one TRUNCATE statement.
+        # compile_tool_calls + compile_insights + compile_attempts all have
+        # FKs to compile_runs — Postgres requires all dependent tables in
+        # one TRUNCATE statement. compile_attempts is also named in the
+        # earlier messages-rooted TRUNCATE; either order keeps the FK happy.
         conn.execute(
             f"TRUNCATE TABLE "
             f"{TEST_SCHEMA}.compile_tool_calls, "
             f"{TEST_SCHEMA}.compile_insights, "
+            f"{TEST_SCHEMA}.compile_attempts, "
             f"{TEST_SCHEMA}.compile_runs"
         )
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.ingest_cursors")

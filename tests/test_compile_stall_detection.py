@@ -68,9 +68,7 @@ def test_run_with_timeout_none_means_disabled(compile_all_module):
     assert mod._run_with_timeout(lambda: "ok", timeout_s=None) == "ok"
 
 
-def test_run_with_timeout_zero_runs_inline_no_executor(
-    compile_all_module, monkeypatch
-):
+def test_run_with_timeout_zero_runs_inline_no_executor(compile_all_module, monkeypatch):
     """timeout_s=0 must call fn() directly — never instantiate a pool.
 
     Guards against a regression where a truthy check (e.g. ``if timeout_s:``)
@@ -85,9 +83,7 @@ def test_run_with_timeout_zero_runs_inline_no_executor(
             created.append((a, kw))
             raise AssertionError("executor must not be created when timeout_s=0")
 
-    monkeypatch.setattr(
-        mod.concurrent.futures, "ThreadPoolExecutor", _BoomExecutor
-    )
+    monkeypatch.setattr(mod.concurrent.futures, "ThreadPoolExecutor", _BoomExecutor)
     assert mod._run_with_timeout(lambda: "inline", timeout_s=0) == "inline"
     assert created == []
 
@@ -193,7 +189,7 @@ def _patch_main_dependencies(
     monkeypatch.setattr(mod, "start_run", lambda **_: "run-id-test")
     monkeypatch.setattr(mod, "finish_run", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "fetch_budget", lambda: None)
-    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (1, 0, 0))
+    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (["m1"], 0, 0))
     monkeypatch.setattr(mod, "_mark_batch_failed", lambda *_a, **_kw: 1)
     monkeypatch.setattr(mod, "_stamp_recently_modified_pages", lambda *a, **kw: (0, 0))
 

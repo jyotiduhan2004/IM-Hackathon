@@ -87,7 +87,7 @@ def test_mark_batch_compiled_only_flips_cited_emails(compile_all_module, db_conn
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}, {"path": "raw/c.md"}]
     marked, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
-    assert marked == 2
+    assert set(marked) == {"m1", "m3"}
     assert not_cited == 1
     assert missing == 0
     assert _state(db_conn, "m1") == "compiled"
@@ -104,15 +104,13 @@ def test_mark_batch_compiled_reports_missing(compile_all_module, db_conn, tmp_pa
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/not-in-db.md"}]
     marked, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
-    assert marked == 1
+    assert marked == ["m1"]
     assert not_cited == 0
     assert missing == 1
     assert _state(db_conn, "m1") == "compiled"
 
 
-def test_mark_batch_compiled_all_uncited_keeps_all_pending(
-    compile_all_module, db_conn, tmp_path
-):
+def test_mark_batch_compiled_all_uncited_keeps_all_pending(compile_all_module, db_conn, tmp_path):
     """If the agent didn't touch the wiki at all (no pages cite any batch
     email), NOTHING gets flipped — matches the 'agent gave up early'
     failure mode the user flagged."""
@@ -126,7 +124,7 @@ def test_mark_batch_compiled_all_uncited_keeps_all_pending(
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}]
     marked, not_cited, _missing = mod._mark_batch_compiled(batch, tmp_path)
-    assert marked == 0
+    assert marked == []
     assert not_cited == 2
     assert _state(db_conn, "m1") == "pending"
     assert _state(db_conn, "m2") == "pending"
@@ -143,9 +141,7 @@ def test_mark_batch_failed_flips_to_failed(compile_all_module, db_conn):
     assert marked == 2
     assert _state(db_conn, "m1") == "failed"
     assert _state(db_conn, "m2") == "failed"
-    row = db_conn.execute(
-        "SELECT last_error FROM messages WHERE message_id = 'm1'"
-    ).fetchone()
+    row = db_conn.execute("SELECT last_error FROM messages WHERE message_id = 'm1'").fetchone()
     assert row["last_error"] == "recursion limit hit"
 
 
@@ -156,7 +152,5 @@ def test_mark_batch_failed_truncates_long_error(compile_all_module, db_conn):
 
     long_err = "x" * 10_000
     mod._mark_batch_failed([{"path": "raw/a.md"}], long_err)
-    row = db_conn.execute(
-        "SELECT last_error FROM messages WHERE message_id = 'm1'"
-    ).fetchone()
+    row = db_conn.execute("SELECT last_error FROM messages WHERE message_id = 'm1'").fetchone()
     assert len(row["last_error"]) == 500

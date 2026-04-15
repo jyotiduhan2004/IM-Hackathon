@@ -281,3 +281,33 @@ CREATE TABLE IF NOT EXISTS compile_insights (
 CREATE INDEX IF NOT EXISTS compile_insights_run_id_idx ON compile_insights(run_id);
 CREATE INDEX IF NOT EXISTS compile_insights_category_created_idx
   ON compile_insights(category, created_at DESC);
+
+
+-- ---------------------------------------------------------------------------
+-- compile_attempts — append-only event log of every model invocation.
+-- Replaces the lossy `messages.compile_model` field which gets overwritten
+-- by COALESCE on retry. Used by the run-start `_healthy_pool` guard in
+-- scripts/compile_all.py to auto-exclude consistently-failing models.
+--
+-- Rows are written at batch dispatch (attempt start) so orphaned claims
+-- (worker died mid-batch) and stale-reclaims stay visible; `outcome` and
+-- `finished_at` are NULL while the attempt is in-flight.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS compile_attempts (
+  id              bigserial PRIMARY KEY,
+  message_id      text NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
+  run_id          uuid REFERENCES compile_runs(run_id) ON DELETE CASCADE,
+  compile_model   text,
+  outcome         text CHECK (outcome IN ('compiled', 'failed', 'timeout')),
+  error           text,
+  attempted_at    timestamptz NOT NULL DEFAULT now(),
+  finished_at     timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS compile_attempts_model_attempted_idx
+  ON compile_attempts (compile_model, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS compile_attempts_outcome_attempted_idx
+  ON compile_attempts (outcome, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS compile_attempts_run_idx
+  ON compile_attempts (run_id);

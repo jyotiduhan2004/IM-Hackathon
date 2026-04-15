@@ -101,7 +101,7 @@ def _patch_main_dependencies(
     monkeypatch.setattr(mod, "start_run", lambda **_: "run-id-test")
     monkeypatch.setattr(mod, "finish_run", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "fetch_budget", lambda: None)
-    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (1, 0, 0))
+    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (["m1"], 0, 0))
     monkeypatch.setattr(mod, "_mark_batch_failed", lambda *_a, **_kw: 1)
     monkeypatch.setattr(mod, "_stamp_recently_modified_pages", lambda *a, **kw: (0, 0))
     monkeypatch.setattr(mod, "_flush_tool_calls", lambda *_a, **_kw: "")
