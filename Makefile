@@ -34,6 +34,9 @@ lint-wiki: ## Run wiki health checks
 lint-wiki-fix: ## Run wiki health checks and auto-normalize wikilinks (no auto-stub creation — pass --create-stubs explicitly to opt in)
 	uv run python scripts/lint_wiki.py --fix
 
+dump-agent-diagram: ## Refresh docs/architecture.md (LangGraph + tool table)
+	uv run python scripts/dump_agent_diagram.py
+
 # === Full Pipeline ===
 
 pipeline: ingest compile lint-wiki ## Run full pipeline: ingest → compile → lint

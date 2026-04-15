@@ -1,0 +1,23 @@
+%% Auto-extracted from CompiledStateGraph.get_graph().draw_mermaid()
+%% Source: src/compile/compiler.py :: create_compiler()
+%% Regenerate: uv run python -c "from src.compile.compiler import create_compiler; print(create_compiler('z-ai/glm-5').get_graph().draw_mermaid())"
+
+graph TD;
+	__start__([__start__]):::first
+	model(model)
+	tools(tools)
+	todo(TodoListMiddleware.after_model)
+	patch(PatchToolCallsMiddleware.before_agent)
+	__end__([__end__]):::last
+
+	__start__ --> patch
+	patch --> model
+	model --> todo
+	todo -.-> tools
+	todo -.-> model
+	todo -.-> __end__
+	tools -.-> model
+
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
