@@ -286,6 +286,34 @@ def format_file(path: Path, known_slugs: set[str]) -> FileResult:
     return FileResult(path, changed=True, diff=_format_diff(path, content, new_content))
 
 
+def format_page(path: Path, wiki_root: Path, confirm: bool = False) -> bool:
+    """Normalize a single wiki page in-process. Returns True if it changed.
+
+    Thin wrapper around `format_file` for callers that just want "normalize
+    this one file". The compile_all post-batch hook uses this so it can run
+    the formatter on newly-written pages without shelling out. Safe on
+    unreadable/unparseable pages — they're skipped and return False rather
+    than raising.
+    """
+    known_slugs = _known_slugs(wiki_root)
+    result = format_file(path, known_slugs)
+    if result.skipped_reason or not result.changed:
+        return False
+
+    if confirm:
+        # Re-derive fresh content and write. Matches the pattern in `run()`.
+        content = path.read_text(encoding="utf-8")
+        fm = extract_frontmatter(content)
+        body = extract_body(content)
+        new_body = _normalize_body(body, fm, known_slugs, path.stem)
+        new_content = _compose(content, new_body)
+        if not new_content.endswith("\n"):
+            new_content += "\n"
+        path.write_text(new_content, encoding="utf-8")
+
+    return True
+
+
 def _iter_pages(wiki_dir: Path, explicit_paths: list[Path] | None) -> list[Path]:
     """Return the list of .md paths to process.
 

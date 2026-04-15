@@ -149,6 +149,20 @@ Gmail mailing list
 - The coordinator script verifies outcomes, stamps modified pages,
   appends to `wiki/log.md`, and rebuilds `wiki/index.md`.
 
+### Post-batch auto-format and validate
+
+After every batch of emails is marked compiled, the coordinator runs the
+idempotent formatter (`scripts/format_wiki.py`) and the per-page validator
+(`scripts/validate_wiki.py::validate_page`) in-process over every wiki page
+whose mtime advanced during the batch. The formatter strips agent-written
+nav sections and normalises `## Related`; the validator surfaces format
+drift the formatter can't auto-fix (malformed frontmatter, broken
+wikilinks, duplicate H2s). Errors are logged and attached to the batch's
+notes in `wiki/log.md` but do **not** fail the batch — the emails are
+already compiled, and recompiling them rarely helps. Operators re-compile
+manually via `scripts/reconcile_compile_state.py` when the validator
+flags something actionable.
+
 ### Current information architecture
 
 - `wiki/topics/` is the most important surface. This is where project and

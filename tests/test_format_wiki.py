@@ -231,3 +231,91 @@ def test_skips_on_broken_frontmatter(mini_wiki: Path) -> None:
     broken_results = [r for r in summary.results if r.path == page]
     assert len(broken_results) == 1
     assert broken_results[0].skipped_reason is not None
+
+
+def test_format_page_confirm_writes_change(mini_wiki: Path) -> None:
+    """``format_page(path, wiki, confirm=True)`` mutates the file and
+    returns True when a change was needed.
+
+    Covers the in-process API the compile_all post-batch hook calls. The
+    CLI drives this via ``run(..., confirm=True)``, but the hook wants a
+    single-page entrypoint without the whole-wiki walk.
+    """
+    # Regeneration target so the Related block actually emits something.
+    _write_page(
+        mini_wiki / "topics" / "target.md",
+        title="Target",
+        page_type="topic",
+        body="Target is a thing. Two sentences.\n",
+    )
+    page = mini_wiki / "topics" / "dirty.md"
+    _write_page(
+        page,
+        title="Dirty",
+        page_type="topic",
+        body=(
+            "Dirty references [[target]]. Second sentence.\n\n"
+            "## Related\n\n- [[target]]\n\n"
+            "## People\n\n- [[someone]]\n"
+        ),
+    )
+
+    changed = formatter.format_page(page, mini_wiki, confirm=True)
+    assert changed is True
+    content = page.read_text(encoding="utf-8")
+    assert "## People" not in content
+    assert content.count("## Related") == 1
+
+
+def test_format_page_dry_run_does_not_write(mini_wiki: Path) -> None:
+    """``confirm=False`` returns True if a change is needed, but leaves the
+    file on disk untouched — matches the CLI's default dry-run semantics."""
+    _write_page(
+        mini_wiki / "topics" / "target.md",
+        title="Target",
+        page_type="topic",
+        body="Target exists. Two sentences.\n",
+    )
+    page = mini_wiki / "topics" / "dirty.md"
+    _write_page(
+        page,
+        title="Dirty",
+        page_type="topic",
+        body=("Dirty page references [[target]]. Two sentences.\n\n## People\n\n- [[someone]]\n"),
+    )
+    before = page.read_text(encoding="utf-8")
+
+    changed = formatter.format_page(page, mini_wiki, confirm=False)
+    assert changed is True
+    assert page.read_text(encoding="utf-8") == before
+
+
+def test_format_page_returns_false_on_clean_page(mini_wiki: Path) -> None:
+    """Clean pages → False (no change); makes the hook's "was anything done"
+    check cheap."""
+    _write_page(
+        mini_wiki / "topics" / "clean.md",
+        title="Clean",
+        page_type="topic",
+        body="Clean is a tidy page. Two sentences.\n",
+    )
+    # First pass normalizes; second pass should be a no-op.
+    formatter.format_page(mini_wiki / "topics" / "clean.md", mini_wiki, confirm=True)
+    changed = formatter.format_page(mini_wiki / "topics" / "clean.md", mini_wiki, confirm=True)
+    assert changed is False
+
+
+def test_format_page_returns_false_on_skipped_page(mini_wiki: Path) -> None:
+    """Unparseable frontmatter → format_page returns False (matches
+    format_file's skipped_reason path), so the caller doesn't count it as
+    a "changed page"."""
+    page = mini_wiki / "topics" / "broken.md"
+    page.write_text(
+        '---\ntitle: "Broken\npage_type: topic\nstatus: current\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    # Must not raise, must not write, must return False.
+    changed = formatter.format_page(page, mini_wiki, confirm=True)
+    assert changed is False
+    # File content unchanged — the broken page is safe from us.
+    assert page.read_text(encoding="utf-8").startswith('---\ntitle: "Broken')

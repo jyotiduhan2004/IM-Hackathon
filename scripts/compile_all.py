@@ -28,6 +28,9 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.format_wiki import format_page  # noqa: E402
+from scripts.validate_wiki import Error as ValidationError  # noqa: E402
+from scripts.validate_wiki import validate_page  # noqa: E402
 from src.budget import fetch_budget  # noqa: E402
 from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
@@ -113,6 +116,81 @@ def _stamp_recently_modified_pages(
                 logger.warning("stamp skip", path=str(md_file), error=str(exc))
                 skipped += 1
     return stamped, skipped
+
+
+def _normalize_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
+    """Run the formatter against every wiki page modified since `batch_start`.
+
+    Prompt discipline alone doesn't keep the agent from writing the things
+    the light-format rule forbids (hand-written ``## Related`` / ``## People``
+    / duplicate-heading drift). This hook closes the loop at write time:
+    after a batch's emails are marked compiled, walk the wiki, pick every
+    page whose mtime advanced during the batch, and run the idempotent
+    formatter over it in-process.
+
+    The formatter is a no-op on clean pages, so touching unaffected pages
+    is cheap. Returns the list of page paths that were actually changed
+    (for logging + downstream validation). Exceptions from the formatter
+    are caught and logged — a buggy formatter should never corrupt the
+    successful compile that already happened.
+    """
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return []
+
+    changed: list[Path] = []
+    # Limit to the content categories the formatter knows how to normalize
+    # (policies/timelines/conflicts keep their own templates). Same set
+    # `scripts/format_wiki.py::CATEGORIES` uses.
+    for category in ("topics", "entities", "systems"):
+        cat_dir = wiki_path / category
+        if not cat_dir.exists():
+            continue
+        for md_file in sorted(cat_dir.glob("*.md")):
+            try:
+                if md_file.stat().st_mtime < batch_start:
+                    continue
+                if format_page(md_file, wiki_path, confirm=True):
+                    changed.append(md_file)
+            except Exception as exc:  # noqa: BLE001 — formatter must not crash compile
+                logger.warning(
+                    "post-batch formatter failed",
+                    path=str(md_file),
+                    error=str(exc),
+                )
+    return changed
+
+
+def _validate_touched_pages(pages: list[Path], wiki_dir: Path) -> dict[Path, list[ValidationError]]:
+    """Run the per-page validator against each touched page. Returns a
+    page→errors map for pages that have at least one error.
+
+    Companion to ``_normalize_touched_pages``. Visibility lever, not a
+    retry mechanism — the emails are already compiled, and the caller
+    logs the error set + surfaces it in the batch notes so an operator
+    can decide whether to re-compile via
+    ``scripts/reconcile_compile_state.py``.
+
+    ``wiki_dir`` is accepted for future parity with cross-page validators
+    (duplicate-body, broken-wikilinks) if we decide to promote any of them
+    to the per-batch hook; currently we only call ``validate_page`` which
+    inspects a single file in isolation.
+    """
+    _ = wiki_dir  # currently unused; see docstring
+    errors_by_page: dict[Path, list[ValidationError]] = {}
+    for page in pages:
+        try:
+            errs = validate_page(page)
+        except Exception as exc:  # noqa: BLE001 — validator must not crash compile
+            logger.warning(
+                "post-batch validator failed",
+                path=str(page),
+                error=str(exc),
+            )
+            continue
+        if errs:
+            errors_by_page[page] = errs
+    return errors_by_page
 
 
 def _run_with_timeout[T](fn: Callable[[], T], timeout_s: float | None) -> T:
@@ -632,6 +710,10 @@ def main(
             # Snapshot the insight-id cursor BEFORE the batch so we can show
             # only the insights logged during this batch in the digest.
             insights_cursor = _max_insight_id_safe(run_id)
+            # Snapshot wall-clock BEFORE run_compilation so the post-batch
+            # formatter hook can find every page the agent touched during
+            # the batch (mtime >= batch_start).
+            batch_start = time.time()
             try:
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it
@@ -653,11 +735,32 @@ def main(
                     batch, Path(wiki_dir), compile_model=batch_model
                 )
                 processed += marked
+                # Post-batch normalization + validation. Catches agent-
+                # introduced format drift (duplicate ## Related headings,
+                # broken wikilinks, malformed frontmatter) right after the
+                # batch commits, so the next batch sees a clean wiki. Both
+                # helpers are best-effort: they log warnings but never roll
+                # back a successful compile.
+                normalized = _normalize_touched_pages(batch_start, Path(wiki_dir))
+                errors_by_page = _validate_touched_pages(normalized, Path(wiki_dir))
+                if errors_by_page:
+                    logger.warning(
+                        "batch touched pages have validator errors",
+                        batch_index=batch_idx,
+                        errors=[
+                            {"page": str(p), "reasons": [e.reason for e in errs]}
+                            for p, errs in errors_by_page.items()
+                        ],
+                    )
                 suffix_parts = []
                 if not_cited:
                     suffix_parts.append(f"{not_cited} not-yet-cited (kept pending)")
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
+                suffix_parts.append(
+                    f"normalized {len(normalized)} pages, "
+                    f"{len(errors_by_page)} with validator errors"
+                )
                 cache = cache_cb.snapshot()
                 served = ",".join(cache["served_models"]) or cache["requested_model"]
                 suffix_parts.append(
