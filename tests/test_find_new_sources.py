@@ -83,16 +83,20 @@ def test_all_filters_set_builds_all_where_clauses(fake_conn: _FakeConn) -> None:
     assert "LIMIT %s OFFSET %s" in sql
 
     # Params are positional + ordered: filters first (in the order filters
-    # are appended), then limit/offset last.
+    # are appended), then limit/offset last. ILIKE wildcards are wrapped
+    # in Python (not in SQL) so psycopg3's strict placeholder parser
+    # doesn't trip on `%'` in `'%' || %s || '%'`.
     assert params == (
         "2026-01-01",
         "2026-04-01",
-        "alice",
-        "urgent",
+        "%alice%",
+        "%urgent%",
         "t-123",
         10,
         5,
     )
+    # Belt-and-braces: the buggy SQL-side wildcard pattern must not return.
+    assert "'%' || %s || '%'" not in sql
 
 
 def test_only_date_from_emits_date_lower_bound_no_ilike(fake_conn: _FakeConn) -> None:
@@ -147,10 +151,11 @@ def test_sql_is_parameterized_no_interpolation(fake_conn: _FakeConn) -> None:
     assert "DROP TABLE" not in sql
     assert "urgent" not in sql
     assert "t-xyz" not in sql
-    # But they MUST appear in params.
+    # But they MUST appear in params (ILIKE inputs wrapped with `%` for
+    # substring match — see list_uncompiled_with_filters).
     assert "2026-01-01" in params
-    assert "'; DROP TABLE messages; --" in params
-    assert "urgent" in params
+    assert "%'; DROP TABLE messages; --%" in params
+    assert "%urgent%" in params
     assert "t-xyz" in params
 
 

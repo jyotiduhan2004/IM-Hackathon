@@ -116,11 +116,16 @@ def list_uncompiled_with_filters(
         conditions.append("date < (%s::date + interval '1 day')")
         params.append(date_to)
     if sender_contains is not None:
-        conditions.append("from_address ILIKE '%' || %s || '%'")
-        params.append(sender_contains)
+        # Wrap wildcards in Python rather than SQL: psycopg3's strict
+        # query parser sees `%'` in `'%' || %s || '%'` as an unknown
+        # placeholder format and raises "only '%s', '%b', '%t' are
+        # allowed as placeholders, got '%''". Bound parameter sidesteps
+        # the parser entirely.
+        conditions.append("from_address ILIKE %s")
+        params.append(f"%{sender_contains}%")
     if subject_contains is not None:
-        conditions.append("subject ILIKE '%' || %s || '%'")
-        params.append(subject_contains)
+        conditions.append("subject ILIKE %s")
+        params.append(f"%{subject_contains}%")
     if thread_id is not None:
         conditions.append("thread_id = %s")
         params.append(thread_id)
