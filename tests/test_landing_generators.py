@@ -164,14 +164,14 @@ def test_generate_home_lists_all_domains_and_recent(tmp_path: Path) -> None:
     for slug, title, _keywords in _DOMAINS:
         assert f"[{title}](domains/{slug}.md)" in content
     assert "[[topics/recent]]" in content or "[[systems/lens]]" in content
-    assert "page_type: index" in content
+    assert "page_type: home" in content
 
 
 def test_generate_changes_no_db_writes_stub(tmp_path: Path) -> None:
     path = _generate_changes(tmp_path, db_conn=_FakeConn(rows=[]))
     content = path.read_text()
     assert "*No recent activity.*" in content
-    assert "page_type: index" in content
+    assert "page_type: changes" in content
 
 
 def test_generate_changes_groups_by_day(tmp_path: Path) -> None:
