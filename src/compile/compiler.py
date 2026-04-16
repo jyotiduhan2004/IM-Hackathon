@@ -626,6 +626,10 @@ _SECTION_BLURBS = {
         "Current rules, approval flows, guidelines, and procedures — "
         "including the supersession history when a policy has been replaced."
     ),
+    "domains": (
+        "Compiler-generated domain hubs — one per North-Star domain. "
+        "Each lists the topics and systems tagged with that domain."
+    ),
 }
 
 _SECTION_TITLES = {
@@ -633,6 +637,7 @@ _SECTION_TITLES = {
     "systems": "Products & Platforms",
     "entities": "People",
     "policies": "Policies",
+    "domains": "Domains",
 }
 
 

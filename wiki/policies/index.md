@@ -1,12 +1,12 @@
 ---
-title: "Policies"
+title: Policies
 page_type: index
 status: current
+last_compiled: '2026-04-16T08:15:30.890702+00:00'
 ---
 
 # Policies
 
-Current rules, approval flows, guidelines, and procedures — including the
-supersession history when a policy has been replaced.
+Current rules, approval flows, guidelines, and procedures — including the supersession history when a policy has been replaced.
 
-(Placeholder — a curated current-vs-superseded view comes in a later PR.)
+*No pages compiled yet.*
