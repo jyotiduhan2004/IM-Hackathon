@@ -15,8 +15,6 @@ nav:
       - systems/index.md
   - Policies:
       - policies/index.md
-  - People:
-      - entities/index.md
   - Changes: log.md
   - About: about.md
 

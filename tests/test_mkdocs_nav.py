@@ -67,7 +67,6 @@ def test_all_top_level_landing_pages_emitted(built_site: Path) -> None:
         built_site / "topics" / "index.html",
         built_site / "systems" / "index.html",
         built_site / "policies" / "index.html",
-        built_site / "entities" / "index.html",
         built_site / "log" / "index.html",
         built_site / "about" / "index.html",
     ]

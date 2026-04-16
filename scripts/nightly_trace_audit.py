@@ -57,6 +57,7 @@ class TraceRubric(TypedDict):
     tid: str
     grade: str
     issues: list[str]
+    issue_counts: dict[str, int]
     tool_seq_first_5: list[str]
     output_chars: int
     tool_calls: int
@@ -76,10 +77,15 @@ def _cli_env() -> dict[str, str]:
     return env
 
 
+# Pinned via npx so a langfuse-cli release can't silently break the
+# nightly audit. Bump deliberately after testing locally.
+_LANGFUSE_CLI = "langfuse-cli@0.0.8"
+
+
 def _run_cli(args: list[str], timeout_s: int) -> tuple[str, str, int]:
     """Run ``npx langfuse-cli`` and return (stdout, stderr, returncode)."""
     proc = subprocess.run(
-        ["npx", "langfuse-cli", *args],
+        ["npx", _LANGFUSE_CLI, *args],
         capture_output=True,
         text=True,
         timeout=timeout_s,
@@ -161,8 +167,15 @@ def _scan_output_issues(output_text: str) -> list[str]:
 def _scan_tool_issues(
     observations: list[dict[str, Any]],
     tool_seq: list[str],
-) -> list[str]:
+) -> tuple[list[str], dict[str, int]]:
+    """Return (stable issue tags, separate counts).
+
+    Tags use stable keys (`abs_path_call`, `resolve_page_flail`) so the
+    summary histogram aggregates cleanly. Per-trace counts live in the
+    second return value and propagate to the rubric for grading.
+    """
     issues: list[str] = []
+    counts: dict[str, int] = {}
     # Absolute-path fs calls
     abs_path_hits = 0
     for o in observations:
@@ -172,7 +185,8 @@ def _scan_tool_issues(
         if re.search(r'"file_path":\s*"/', tin) or re.search(r"'file_path':\s*'/", tin):
             abs_path_hits += 1
     if abs_path_hits:
-        issues.append(f"abs_path_call_{abs_path_hits}")
+        issues.append("abs_path_call")
+        counts["abs_path_call"] = abs_path_hits
     # check_my_work before first write
     first_write_idx = next(
         (i for i, n in enumerate(tool_seq) if n in {"write_file", "edit_file", "patch_page"}),
@@ -184,13 +198,22 @@ def _scan_tool_issues(
     # resolve_page flail (>=3 calls)
     resolve_count = sum(1 for n in tool_seq if n == "resolve_page")
     if resolve_count >= 3:
-        issues.append(f"resolve_page_flail_{resolve_count}x")
+        issues.append("resolve_page_flail")
+        counts["resolve_page_flail"] = resolve_count
     # create_entity without a content-type page write
     if "create_entity" in tool_seq and not any(
         n in {"write_file", "edit_file", "patch_page", "write_draft_page"} for n in tool_seq
     ):
         issues.append("created_entity_cc_only")
-    return issues
+    return issues, counts
+
+
+# Tool-issue tags that indicate a bad trace, regardless of output looking clean.
+# Anything in this set forces grade <= C so abs-path / cc-only-entity traces can't
+# silently earn an A grade — that would defeat the audit's purpose.
+_DOWNGRADING_TOOL_ISSUES: frozenset[str] = frozenset(
+    {"abs_path_call", "created_entity_cc_only", "resolve_page_flail", "checked_work_before_write"}
+)
 
 
 def _grade(
@@ -199,6 +222,7 @@ def _grade(
     tool_call_median: float,
     err_obs_count: int,
     output_issues: list[str],
+    tool_issues: list[str],
 ) -> str:
     if err_obs_count > 0:
         return "F"
@@ -208,6 +232,8 @@ def _grade(
         return "D"
     blockquote_issue = next((i for i in output_issues if i.startswith("blockquotes_")), None)
     if blockquote_issue and "no_synthesis_markers" in output_issues:
+        return "C"
+    if any(t in _DOWNGRADING_TOOL_ISSUES for t in tool_issues):
         return "C"
     if tool_calls > tool_call_median:
         return "B"
@@ -224,6 +250,7 @@ def _score_trace(
             tid=tid,
             grade="F",
             issues=[f"fetch_error:{str(trace['error'])[:80]}"],
+            issue_counts={},
             tool_seq_first_5=[],
             output_chars=0,
             tool_calls=0,
@@ -238,18 +265,20 @@ def _score_trace(
     tool_seq = _extract_tool_seq(observations)
     err_obs_count = sum(1 for o in observations if o.get("level") == "ERROR")
     output_issues = _scan_output_issues(output_text)
-    tool_issues = _scan_tool_issues(observations, tool_seq)
+    tool_issues, issue_counts = _scan_tool_issues(observations, tool_seq)
     grade = _grade(
         output_text=output_text,
         tool_calls=len(tool_seq),
         tool_call_median=tool_call_median,
         err_obs_count=err_obs_count,
         output_issues=output_issues,
+        tool_issues=tool_issues,
     )
     return TraceRubric(
         tid=tid,
         grade=grade,
         issues=[*output_issues, *tool_issues],
+        issue_counts=issue_counts,
         tool_seq_first_5=tool_seq[:5],
         output_chars=len(output_text),
         tool_calls=len(tool_seq),
@@ -262,13 +291,17 @@ def _score_trace(
 def _summarize(rubrics: list[TraceRubric]) -> dict[str, Any]:
     grades: dict[str, int] = {}
     common_issues: dict[str, int] = {}
+    issue_total_counts: dict[str, int] = {}
     for r in rubrics:
         grades[r["grade"]] = grades.get(r["grade"], 0) + 1
         for issue in r["issues"]:
             common_issues[issue] = common_issues.get(issue, 0) + 1
+        for tag, n in r.get("issue_counts", {}).items():
+            issue_total_counts[tag] = issue_total_counts.get(tag, 0) + n
     return {
         "grades": dict(sorted(grades.items())),
         "common_issues": dict(sorted(common_issues.items(), key=lambda kv: -kv[1])),
+        "issue_total_counts": dict(sorted(issue_total_counts.items(), key=lambda kv: -kv[1])),
     }
 
 

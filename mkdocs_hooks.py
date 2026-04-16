@@ -133,6 +133,14 @@ def _fix_list_gaps(body: str) -> str:
     return "\n".join(out) + ("\n" if body.endswith("\n") else "")
 
 
+def _find_h1_index(lines: list[str]) -> int:
+    """Return the index of the first ``# H1`` line, or ``-1`` if none."""
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            return i
+    return -1
+
+
 def _render_external_badge(fm: dict) -> str:
     """Return the external-contact badge HTML, or empty string.
 
@@ -284,11 +292,7 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     badge_html = _render_external_badge(fm)
     if badge_html:
         body_lines = body.splitlines(keepends=False)
-        h1_idx = -1
-        for i, line in enumerate(body_lines):
-            if line.startswith("# "):
-                h1_idx = i
-                break
+        h1_idx = _find_h1_index(body_lines)
         if h1_idx >= 0:
             body_lines[h1_idx] = body_lines[h1_idx] + " " + badge_html
             body = "\n".join(body_lines)
@@ -305,11 +309,7 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     body_head = "\n".join(body.splitlines()[:10])
     if "· last compiled " not in body_head:
         body_lines = body.splitlines(keepends=False)
-        h1_idx = -1
-        for i, line in enumerate(body_lines):
-            if line.startswith("# "):
-                h1_idx = i
-                break
+        h1_idx = _find_h1_index(body_lines)
         if h1_idx >= 0:
             body_lines.insert(h1_idx + 1, "")
             body_lines.insert(h1_idx + 2, banner.rstrip())
@@ -323,11 +323,7 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     status_html = _render_status_badge(fm)
     if status_html and "ns-status-" not in "\n".join(body.splitlines()[:10]):
         body_lines = body.splitlines(keepends=False)
-        h1_idx = -1
-        for i, line in enumerate(body_lines):
-            if line.startswith("# "):
-                h1_idx = i
-                break
+        h1_idx = _find_h1_index(body_lines)
         if h1_idx >= 0:
             body_lines.insert(h1_idx + 1, "")
             body_lines.insert(h1_idx + 2, status_html)
