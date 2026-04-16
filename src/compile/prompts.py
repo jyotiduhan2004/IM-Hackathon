@@ -206,7 +206,7 @@ Context: Batch contains one email announcing a new test-coverage number
 for an ongoing rollout.
 
 ```
-get_thread_context("thread_abc123") → {messages: [...], subject: "WhatsApp 9696 coverage"}
+get_thread_context("19b59cdc863ac109") → {messages: [...], subject: "WhatsApp 9696 coverage"}
 resolve_page("whatsapp-9696-rollout") → {exists: true, slug: "whatsapp-9696-rollout", ...}
 get_page_summary("whatsapp-9696-rollout") → shows current-state section already tracks coverage
 patch_page("whatsapp-9696-rollout", "Current state", "As of 2026-04-15, ...")
@@ -220,7 +220,7 @@ Context: Email introduces a new internal service ("Mesh-PG") for the first
 time. Multiple paragraphs of substantive content.
 
 ```
-get_thread_context("thread_def456") → {messages: [...], subject: "Introducing Mesh-PG"}
+get_thread_context("19b7e2682d15163d") → {messages: [...], subject: "Introducing Mesh-PG"}
 resolve_page("mesh-pg") → {exists: false, candidates: []}
 read_file("/raw/2026-04-15_mesh_pg_launch_abc.md")  # need exact wording for the API surface
 validate_page_draft(slug="mesh-pg", body="Mesh-PG is a ...", title="Mesh-PG", page_type="system")
@@ -229,7 +229,7 @@ title: Mesh-PG
 page_type: system
 status: active
 source_threads:
-  - thread_def456
+  - 19b7e2682d15163d
 ---
 
 Mesh-PG is an internal Postgres-compatible query service that ...
@@ -243,7 +243,7 @@ Context: New email says "this replaces the refund policy published
 2026-03-01."
 
 ```
-get_thread_context("thread_ghi789")
+get_thread_context("19b92d9b270daa57")
 resolve_page("refund-policy") → {exists: true, slug: "refund-policy", status: "active"}
 read_file("/wiki/policies/refund-policy.md")
 # Mark old superseded
@@ -255,7 +255,7 @@ page_type: policy
 status: active
 supersedes: refund-policy
 source_threads:
-  - thread_ghi789
+  - 19b92d9b270daa57
 ---
 ...
 ''')
@@ -345,7 +345,7 @@ title: "Human Readable Title"
 page_type: topic | system | policy | person | decision | glossary
 status: active | superseded | archived
 source_threads:
-  - thread_abc123   # append new thread_ids over time; never replace
+  - 19b59cdc863ac109   # append new thread_ids over time; never replace
 related:
   - "[[other-slug]]"
 ---
