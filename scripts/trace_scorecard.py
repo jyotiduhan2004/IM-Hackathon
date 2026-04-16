@@ -294,7 +294,10 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
         if obs.get("type") != "TOOL":
             continue
 
-        name = str(obs.get("name", ""))
+        # `or ""` collapses both missing key and explicit JSON null to ""
+        # — without it, `str(None)` becomes the truthy string "None" and
+        # bypasses the unnamed-skip guard below.
+        name = str(obs.get("name") or "")
         if not name:
             continue
         tool_index = metrics.tool_calls  # 0-based ordinal within this trace

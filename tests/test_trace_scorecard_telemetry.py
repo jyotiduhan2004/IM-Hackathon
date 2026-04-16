@@ -274,6 +274,28 @@ def test_audit_extract_tier_a_signals_skips_unnamed_tool_events() -> None:
     assert todos is True
 
 
+def test_skip_null_name_tool_events_in_both_paths() -> None:
+    """JSON null `name` (vs missing key) must also be treated as unnamed.
+
+    Without `obs.get("name") or ""`, str(None) = "None" (truthy) bypasses
+    the unnamed-skip guard. Codex P2 (round 2) on #98.
+    """
+    null_name_obs = {"type": "TOOL", "name": None, "output": "", "input": ""}
+    obs = [
+        dict(null_name_obs),
+        dict(null_name_obs),
+        _mk_tool_obs("write_todos", "[]"),  # would be index 2 if null counted
+    ]
+    # Scorecard
+    trace = _mk_trace(obs)
+    m = _extract_trace_metrics(trace)
+    assert m.wrote_todos_early is True
+    assert m.tool_calls == 1  # null-name observations not counted
+    # Audit
+    _auto, _verdict, todos = _extract_tier_a_signals(obs)
+    assert todos is True
+
+
 def test_audit_score_trace_populates_signals() -> None:
     """_score_trace surfaces the signals on the TraceRubric."""
     trace = _mk_trace(

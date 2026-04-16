@@ -180,7 +180,10 @@ def _extract_tier_a_signals(
     for obs in observations:
         if obs.get("type") != "TOOL":
             continue
-        name = str(obs.get("name", ""))
+        # `or ""` collapses both missing key and explicit JSON null to ""
+        # so the unnamed-skip guard catches both cases. Without it,
+        # `str(None)` becomes the truthy "None" and slips through.
+        name = str(obs.get("name") or "")
         # Skip unnamed TOOL events (malformed/partial Langfuse rows) so the
         # tool index stays in sync with `_extract_trace_metrics` in
         # `trace_scorecard.py`. Otherwise the audit and scorecard can disagree
