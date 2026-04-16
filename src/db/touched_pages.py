@@ -66,3 +66,34 @@ def touches_for_page(page_id: int) -> list[dict[str, Any]]:
             """,
             (page_id,),
         ).fetchall()
+
+
+def get_sources_for_slug(slug: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Return email sources that touched this wiki page, newest first.
+
+    Joins `message_touched_pages` → `messages` via `wiki_pages.slug` so the
+    viewer can render a "Sources" block without reading the `sources:` list
+    from the page's frontmatter. Each row carries the fields the hook needs
+    to render a collapsible block: `raw_path`, `subject`, `date`,
+    `from_address`. Newest-first ordering matches the entity-page "show
+    recent" convention.
+
+    Unknown slug → empty list (not an error). Caller decides whether to
+    fall back to frontmatter.
+    """
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT m.raw_path,
+                   m.subject,
+                   m.date,
+                   m.from_address
+              FROM message_touched_pages mtp
+              JOIN messages m ON m.message_id = mtp.message_id
+              JOIN wiki_pages wp ON wp.page_id = mtp.page_id
+             WHERE wp.slug = %s
+             ORDER BY m.date DESC NULLS LAST, m.message_id ASC
+             LIMIT %s
+            """,
+            (slug, limit),
+        ).fetchall()

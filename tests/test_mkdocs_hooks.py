@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -177,3 +179,167 @@ def test_hook_still_skips_unrelated_top_level_files() -> None:
     out = on_page_markdown("# About\n", page=_page("about.md", meta), config={}, files=[])
     assert "ns-status-" not in out
     assert "last compiled" not in out
+
+
+# --- NS_CATALOG_SOURCES flag coverage -------------------------------------
+#
+# When the env var is set, the hook replaces the frontmatter-driven sources
+# list with the result of `get_sources_for_slug(slug)`. When it's unset (or
+# set to anything other than 1/true/yes), the existing frontmatter path runs
+# unchanged. The fallback kicks in when the DB import fails or the query
+# raises — the build must never die on a viewer-side DB hiccup.
+
+
+def _set_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "1")
+
+
+def test_flag_off_reads_sources_from_frontmatter(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Default behavior — no env var set — renders the frontmatter list.
+    monkeypatch.delenv("NS_CATALOG_SOURCES", raising=False)
+
+    def _should_not_be_called(slug: str, *, limit: int = 50) -> list[dict]:
+        raise AssertionError(f"catalog path ran despite flag off: slug={slug}")
+
+    monkeypatch.setattr(
+        "src.db.touched_pages.get_sources_for_slug", _should_not_be_called, raising=True
+    )
+
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/msg-fm.md"],
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "# Topic\n\nBody.\n", page=_page("topics/topic.md", meta), config={}, files=[]
+    )
+    assert "raw/msg-fm.md" in out
+    assert "<summary>📚 Sources (1)</summary>" in out
+
+
+def test_flag_on_uses_catalog_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_flag_on(monkeypatch)
+
+    def _fake(slug: str, *, limit: int = 50) -> list[dict]:
+        assert slug == "whatsapp-handoff"
+        return [
+            {
+                "raw_path": "raw/msg-db-new.md",
+                "subject": "Newer",
+                "date": None,
+                "from_address": "x@y.z",
+            },
+            {
+                "raw_path": "raw/msg-db-old.md",
+                "subject": "Older",
+                "date": None,
+                "from_address": "x@y.z",
+            },
+        ]
+
+    monkeypatch.setattr("src.db.touched_pages.get_sources_for_slug", _fake, raising=True)
+
+    # Frontmatter still says only one stale source — the catalog path MUST win.
+    meta = {
+        "title": "WhatsApp Handoff",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/msg-stale-fm.md"],
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "# WhatsApp Handoff\n\nBody.\n",
+        page=_page("topics/whatsapp-handoff.md", meta),
+        config={},
+        files=[],
+    )
+    assert "raw/msg-db-new.md" in out
+    assert "raw/msg-db-old.md" in out
+    assert "raw/msg-stale-fm.md" not in out
+    assert "<summary>📚 Sources (2)</summary>" in out
+
+
+def test_flag_on_falls_back_to_frontmatter_on_db_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_flag_on(monkeypatch)
+
+    def _boom(slug: str, *, limit: int = 50) -> list[dict]:
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr("src.db.touched_pages.get_sources_for_slug", _boom, raising=True)
+
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/msg-fm.md"],
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "# Topic\n\nBody.\n", page=_page("topics/topic.md", meta), config={}, files=[]
+    )
+    # Build succeeds and frontmatter list appears — graceful degradation.
+    assert "raw/msg-fm.md" in out
+    assert "<summary>📚 Sources (1)</summary>" in out
+
+
+def test_flag_on_falls_back_to_frontmatter_when_catalog_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Backfill hasn't populated this slug yet — don't blank out the block;
+    # show what frontmatter has so the viewer still looks populated.
+    _set_flag_on(monkeypatch)
+    monkeypatch.setattr(
+        "src.db.touched_pages.get_sources_for_slug",
+        lambda slug, *, limit=50: [],
+        raising=True,
+    )
+
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/msg-fm.md"],
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "# Topic\n\nBody.\n", page=_page("topics/topic.md", meta), config={}, files=[]
+    )
+    assert "raw/msg-fm.md" in out
+
+
+def test_flag_on_entity_cap_uses_newest_first_slice(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catalog returns newest-first. Entity pages >20 sources show first 10.
+    _set_flag_on(monkeypatch)
+
+    rows = [
+        {"raw_path": f"raw/msg-{i:02d}.md", "subject": f"s{i}", "date": None, "from_address": ""}
+        for i in range(30)  # 0 = newest, 29 = oldest
+    ]
+    monkeypatch.setattr(
+        "src.db.touched_pages.get_sources_for_slug", lambda slug, *, limit=50: rows, raising=True
+    )
+
+    meta = {
+        "title": "Jane",
+        "page_type": "entity",
+        "status": "current",
+        "sources": [],
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "Email: jane@example.com\n\nBody.\n",
+        page=_page("entities/jane.md", meta),
+        config={},
+        files=[],
+    )
+    # Summary shows total (30); only the 10 newest render; +20 older hint present.
+    assert "<summary>📚 Sources (30)</summary>" in out
+    assert "raw/msg-00.md" in out  # newest
+    assert "raw/msg-09.md" in out  # 10th newest — boundary
+    assert "raw/msg-10.md" not in out  # 11th newest — cut off
+    assert "raw/msg-29.md" not in out  # oldest — cut off
+    assert "+20 older sources" in out

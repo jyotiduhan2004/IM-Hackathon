@@ -5,12 +5,16 @@ Adds a "Sources" section at the bottom of every wiki page, pulling the
 <details> block showing the raw email's headers + body inline — so you can
 verify the compilation against the original without leaving the page.
 
-Frontmatter stays the single source of truth; human-visible citations appear
-at render time only.
+Frontmatter is still the default source of truth. Set
+``NS_CATALOG_SOURCES=1`` (or ``true``/``yes``) to instead pull sources via
+``message_touched_pages JOIN messages`` keyed on the page slug; the
+frontmatter path stays the fallback when the DB is unavailable or the slug
+has no rows yet.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date
 from datetime import datetime
@@ -19,6 +23,41 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).parent
+
+
+def _catalog_sources_enabled() -> bool:
+    """Is the DB-backed sources path turned on?
+
+    Read the env var on every call so tests can toggle via
+    ``monkeypatch.setenv`` without reloading the module.
+    """
+    value = os.environ.get("NS_CATALOG_SOURCES", "").strip().lower()
+    return value in {"1", "true", "yes"}
+
+
+def _fetch_catalog_sources(slug: str) -> list[str] | None:
+    """Return `raw_path` strings for a slug, newest-first, or None on failure.
+
+    Isolates the DB import so mkdocs can run in environments that don't
+    have the catalog package installed (CI, docs-only builds). Any
+    exception from the import or the query path is swallowed and reported
+    as None so the caller can fall back to frontmatter.
+
+    Empty result (known slug, zero touches) also returns None — we treat
+    "no catalog evidence" the same as "catalog unavailable" so the viewer
+    still shows the frontmatter-derived list when the backfill hasn't
+    caught up yet.
+    """
+    try:
+        from src.db.touched_pages import get_sources_for_slug
+    except ImportError:
+        return None
+    try:
+        rows = get_sources_for_slug(slug)
+    except Exception:  # noqa: BLE001 — viewer must never fail the build
+        return None
+    paths = [row["raw_path"] for row in rows if row.get("raw_path")]
+    return paths or None
 
 
 def _extract_frontmatter(content: str) -> tuple[dict, str]:
@@ -344,8 +383,21 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         else:
             body = status_html + "\n\n" + body
 
-    sources = fm.get("sources") or []
-    if not sources or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
+    # Catalog path (flag ON) queries message_touched_pages and returns a
+    # newest-first list. Frontmatter path (default or catalog miss/error)
+    # is oldest-first by compiler convention.
+    catalog_sources: list[str] | None = None
+    if _catalog_sources_enabled():
+        catalog_sources = _fetch_catalog_sources(Path(src_path).stem)
+
+    if catalog_sources is not None:
+        sources_list = catalog_sources
+        newest_first = True
+    else:
+        sources_list = [s for s in (fm.get("sources") or []) if isinstance(s, str)]
+        newest_first = False
+
+    if not sources_list or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
         return body
 
     # For entity pages, try to recover the person's email so each source can
@@ -362,29 +414,49 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         if m:
             page_email = m.group(1)
 
-    # Cap entity pages with many sources — show newest 10 inside the
-    # collapsed Sources block. Sources are stored chronologically
-    # oldest-first, so newest = tail.
-    is_entity = fm.get("page_type") == "entity"
+    sources_block = _render_sources_block(
+        sources_list,
+        page_email=page_email,
+        is_entity=(fm.get("page_type") == "entity"),
+        newest_first=newest_first,
+    )
+    return body.rstrip() + "\n" + sources_block + "\n"
+
+
+def _render_sources_block(
+    sources_list: list[str],
+    *,
+    page_email: str | None,
+    is_entity: bool,
+    newest_first: bool,
+) -> str:
+    """Render the collapsible `## Sources` block as a string.
+
+    `sources_list` is ordered; `newest_first=True` means element 0 is the
+    newest (catalog path). Frontmatter convention is oldest-first, so the
+    entity-page "show newest 10" cap slices the tail. Keeping both paths
+    in one renderer avoids drift between the flag-on and flag-off output.
+    """
     show_recent = 10
     cap_at = 20
-    sources_to_render = sources
     older_count = 0
-    if is_entity and len(sources) > cap_at:
-        sources_to_render = sources[-show_recent:]
-        older_count = len(sources) - show_recent
+    sources_to_render = sources_list
+    if is_entity and len(sources_list) > cap_at:
+        if newest_first:
+            sources_to_render = sources_list[:show_recent]
+        else:
+            sources_to_render = sources_list[-show_recent:]
+        older_count = len(sources_list) - show_recent
 
     blocks = [
         "",
         "---",
         "",
         '<details markdown="1">',
-        f"<summary>📚 Sources ({len(sources)})</summary>",
+        f"<summary>📚 Sources ({len(sources_list)})</summary>",
         "",
     ]
     for src in sources_to_render:
-        if not isinstance(src, str):
-            continue
         rendered = _render_raw_source(REPO_ROOT / src, page_email)
         if rendered:
             blocks.append(rendered)
@@ -398,5 +470,4 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
 
     blocks.append("")
     blocks.append("</details>")
-
-    return body.rstrip() + "\n" + "\n".join(blocks) + "\n"
+    return "\n".join(blocks)

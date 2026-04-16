@@ -127,3 +127,73 @@ def test_delete_page_cascades_touches(db_conn: psycopg.Connection) -> None:
     db_conn.commit()
 
     assert repo.touches_for_message("m1") == []
+
+
+# ---------------------------------------------------------------------------
+# get_sources_for_slug — the viewer-facing catalog query.
+# ---------------------------------------------------------------------------
+
+
+def _mk_full_message(
+    db_conn: psycopg.Connection,
+    *,
+    message_id: str,
+    subject: str,
+    date_: datetime,
+    from_address: str = "a@b.c",
+) -> None:
+    messages_repo.insert_message(
+        db_conn,
+        message_id=message_id,
+        raw_path=f"raw/{message_id}.md",
+        thread_id="t-1",
+        subject=subject,
+        from_address=from_address,
+        date=date_,
+    )
+
+
+def test_get_sources_for_slug_returns_newest_first(db_conn: psycopg.Connection) -> None:
+    page_id = _mk_page(db_conn, "whatsapp-handoff")
+    _mk_full_message(
+        db_conn, message_id="m-old", subject="Older", date_=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    _mk_full_message(
+        db_conn, message_id="m-mid", subject="Middle", date_=datetime(2026, 2, 1, tzinfo=UTC)
+    )
+    _mk_full_message(
+        db_conn, message_id="m-new", subject="Newest", date_=datetime(2026, 3, 1, tzinfo=UTC)
+    )
+    db_conn.commit()
+
+    for mid in ("m-old", "m-mid", "m-new"):
+        repo.insert_touch(db_conn, message_id=mid, page_id=page_id)
+    db_conn.commit()
+
+    rows = repo.get_sources_for_slug("whatsapp-handoff")
+    assert [r["raw_path"] for r in rows] == ["raw/m-new.md", "raw/m-mid.md", "raw/m-old.md"]
+    # Full payload the hook expects — subject/date/from_address ride along.
+    assert rows[0]["subject"] == "Newest"
+    assert rows[0]["from_address"] == "a@b.c"
+
+
+def test_get_sources_for_slug_unknown_returns_empty(db_conn: psycopg.Connection) -> None:
+    assert repo.get_sources_for_slug("does-not-exist") == []
+
+
+def test_get_sources_for_slug_respects_limit(db_conn: psycopg.Connection) -> None:
+    page_id = _mk_page(db_conn, "busy-page")
+    for i in range(5):
+        _mk_full_message(
+            db_conn,
+            message_id=f"m-{i}",
+            subject=f"S{i}",
+            date_=datetime(2026, 1, i + 1, tzinfo=UTC),
+        )
+    db_conn.commit()
+    for i in range(5):
+        repo.insert_touch(db_conn, message_id=f"m-{i}", page_id=page_id)
+    db_conn.commit()
+
+    assert len(repo.get_sources_for_slug("busy-page", limit=2)) == 2
+    assert len(repo.get_sources_for_slug("busy-page", limit=10)) == 5
