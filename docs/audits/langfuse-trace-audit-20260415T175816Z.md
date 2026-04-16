@@ -14,8 +14,8 @@ was retrievable, I fell back to trace metadata only.
 
 The directional assessment below compares observed behavior against the current
 compiler prompt in `src/compile/prompts.py` and the proposal-draft north-star
-docs at `/Users/amtagrwl/git/email-knowledge-base/.claude/worktrees/proposal-draft/docs/NORTH-STAR.md`
-and `/Users/amtagrwl/git/email-knowledge-base/.claude/worktrees/proposal-draft/docs/proposal/NORTH-STAR-DRAFT.md`.
+docs (`docs/NORTH-STAR.md` and `docs/proposal/NORTH-STAR-DRAFT.md` — see
+the `docs/north-star-proposal` branch / PR #79 for the canonical version).
 
 Langfuse itself was unstable during collection:
 
@@ -134,8 +134,10 @@ The highest-value rules for this codebase are:
 - There is no synthesis self-review. `check_my_work` currently asks "is the
   markdown clean?" but not "does this read like an encyclopedia entry instead of
   a filing cabinet?"
-- There is no trivial-message filter. Acks and short reply-only emails are not
-  being explicitly skipped even though the north star expects that filter.
+- ~~There is no trivial-message filter. Acks and short reply-only emails are not
+  being explicitly skipped even though the north star expects that filter.~~
+  **(Fixed 2026-04-16 in `b52a2c3` — `src/ingest/filter_trivial.py` now
+  skips acks / short reply-only emails. Phase B item below: done.)**
 - There is no domain/tag guidance, no lazy decision-page guidance, and no
   canonical examples of a good topic page in the new shape.
 - At 400+ lines, the prompt has grown by patching rather than by a deliberate
@@ -191,6 +193,27 @@ The highest-value additions named in the second review are:
 - `merge_topics(slug_a, slug_b)`: explicitly deferred to a later dedupe phase.
 
 ## Ordered roadmap
+
+### Progress since audit (2026-04-16)
+
+Several roadmap items have already landed since this branch was cut. Marking
+them here so readers don't treat the entire roadmap as TODO:
+
+| Item | Phase | Landed in |
+|---|---|---|
+| `resolve_page` reshaped to single-query + fuzzy | A | `6af82e3` |
+| `log_insight` section added to compiler prompt | A | `536d049` |
+| Tracing improved, toolbox tightened | A | `49f3bfd` |
+| Model pool trimmed (deepseek + xiaomi removed) | A | `2a5eae3` |
+| Trivial-message filter | B | `b52a2c3` |
+| 4 north-star browse/patch/validate tools added | C | `64046d8` |
+| Entities hidden from primary nav | D | `d53e9df` |
+| 30-case golden eval fixture | E | `7fec4ee` |
+| Nightly trace audit job | E | `a9087a1` |
+
+The remaining roadmap items (below) are the pieces still in flight as of
+2026-04-16. Tier-A consolidation PR + Tier-B units 1-6 (PRs #79, #82, #93-#97)
+cover most of what's left.
 
 ### Phase A - stop the bleeding
 
