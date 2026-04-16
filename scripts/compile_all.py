@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal
+from typing import cast
 from uuid import UUID
 
 import click
@@ -54,11 +55,14 @@ from src.db.insights import max_id_for_run as _insights_max_id  # noqa: E402
 from src.db.messages import fail_message_compile  # noqa: E402
 from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
+from src.db.messages import mark_skipped  # noqa: E402
 from src.db.messages import model_health_stats  # noqa: E402
 from src.db.tool_call_log import fallback_to_jsonl as tool_log_fallback_to_jsonl  # noqa: E402
 from src.db.tool_call_log import insert_many as tool_log_insert_many  # noqa: E402
 from src.db.tool_call_log import summarize as tool_log_summarize  # noqa: E402
+from src.db.touched_pages import insert_touch  # noqa: E402
 from src.db.users import upsert_user  # noqa: E402
+from src.db.wiki_pages import find_by_slug  # noqa: E402
 from src.db.wiki_pages import upsert_wiki_page  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
@@ -159,6 +163,50 @@ def _stamp_recently_modified_pages(
     return stamped, skipped
 
 
+_CONTENT_PAGE_DIRS: tuple[str, ...] = (
+    "topics",
+    "systems",
+    "policies",
+    "decisions",
+    "timelines",
+    "conflicts",
+)
+
+
+def _iter_touched_content_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
+    """Like ``_iter_touched_pages`` but scans every CONTENT-type directory.
+
+    The catalog write path needs touch rows for any content-type page the
+    batch modified — including ``policies/`` and ``decisions/`` which the
+    formatter/validator helpers don't walk. Without this, a batch that
+    only edits a policy page writes zero touch rows and the message stays
+    pending forever (Bug C-shaped: Codex flagged on PR #132).
+
+    Excludes ``entities/`` and ``people/`` — person stubs are not
+    compile-state evidence (we tightened the citation check explicitly).
+    Excludes ``glossary`` (single root-level file, agent doesn't author).
+    """
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return []
+    touched: list[Path] = []
+    for category in _CONTENT_PAGE_DIRS:
+        cat_dir = wiki_path / category
+        if not cat_dir.exists():
+            continue
+        for md_file in sorted(cat_dir.glob("*.md")):
+            try:
+                if md_file.stat().st_mtime >= batch_start:
+                    touched.append(md_file)
+            except OSError as exc:
+                logger.warning(
+                    "post-batch content stat failed",
+                    path=str(md_file),
+                    error=str(exc),
+                )
+    return touched
+
+
 def _iter_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
     """Return every wiki page whose mtime advanced at/after ``batch_start``.
 
@@ -169,6 +217,9 @@ def _iter_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
     validator so the validator sees every page the batch touched, not just
     the ones the formatter chose to rewrite. Missing ``wiki_dir`` → empty
     list (matches the stamp helper's contract).
+
+    NOT used for catalog writes — see ``_iter_touched_content_pages`` for
+    the wider scope that covers policies/decisions too.
     """
     wiki_path = Path(wiki_dir)
     if not wiki_path.exists():
@@ -252,6 +303,16 @@ _TOP_LEVEL_LANDING_PAGE_TYPES: dict[str, str] = {
     "glossary.md": "glossary",
     "changes.md": "changes",
 }
+
+# Page types that count as "the agent did real compile work". Entity /
+# person stubs name-drop a message without extracting content, so citing
+# an email only in a stub is NOT evidence of compile success. The
+# catalog-truth compile-state check filters `message_touched_pages`
+# joins against this set; anything else (entity, person, home, changes,
+# domain) keeps the message in `pending` so the next claim cycle retries.
+CONTENT_PAGE_TYPES = frozenset(
+    {"topic", "system", "policy", "decision", "glossary", "timeline", "conflict"}
+)
 
 
 def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
@@ -515,6 +576,77 @@ def _validate_touched_pages(pages: list[Path], wiki_dir: Path) -> dict[Path, lis
     return errors_by_page
 
 
+def _write_touch_catalog(touched_pages: list[Path], batch_message_ids: list[str]) -> int:
+    """Insert ``(message_id, page_id)`` rows into ``message_touched_pages``
+    for every (batch message, content-type touched page) pair.
+
+    Returns the count of rows actually inserted (ON-CONFLICT no-ops via
+    ``insert_touch``'s RETURNING check don't count).
+
+    Uses **batch message_ids**, NOT the subset that ended up marked
+    compiled — the catalog must be authoritative on "which messages
+    contributed to which page", which is independent of the state the
+    claim loop ends up flipping. Under ``--batch-size 1`` there's only
+    one message per batch; with larger batch sizes every message in the
+    batch gets a row for each touched content page.
+
+    Content filter uses ``CONTENT_PAGE_TYPES`` — entity / person stubs
+    are excluded because name-dropping a message in a stub is not
+    evidence the agent did compile work.
+
+    Each insert runs inside its own SAVEPOINT so a single bad pair
+    (e.g. the page catalog row vanished between sync and here) rolls
+    back only that row. Without the savepoint, psycopg3 leaves the
+    connection in an aborted-transaction state after the first
+    constraint violation and every subsequent insert on the same
+    connection silently no-ops — mirrors the ``_sync_wiki_catalog``
+    pattern.
+
+    Catalog staleness is strictly less bad than a crashed coordinator,
+    so all failures log ``touch_insert_failed`` and continue.
+    """
+    if not touched_pages or not batch_message_ids:
+        return 0
+
+    # Lazy import so the conftest monkeypatch on ``src.db.connect`` (which
+    # pins search_path to the per-test schema) is picked up here. A
+    # top-level ``from src.db import connect`` would bind the unpatched
+    # function and tests would write to the production schema.
+    from src.db import connect as _connect
+
+    inserted = 0
+    with _connect() as conn:
+        for page_path in touched_pages:
+            slug = page_path.stem
+            try:
+                page_row = find_by_slug(slug)
+            except Exception as exc:  # noqa: BLE001 — catalog read is best-effort
+                logger.warning("touch_insert_lookup_failed", slug=slug, error=str(exc))
+                continue
+            if page_row is None:
+                continue
+            if page_row.get("page_type") not in CONTENT_PAGE_TYPES:
+                continue
+            page_id = page_row["page_id"]
+            for mid in batch_message_ids:
+                try:
+                    conn.execute("SAVEPOINT touch_insert")
+                    if insert_touch(conn, message_id=mid, page_id=page_id):
+                        inserted += 1
+                    conn.execute("RELEASE SAVEPOINT touch_insert")
+                except Exception as exc:  # noqa: BLE001
+                    conn.execute("ROLLBACK TO SAVEPOINT touch_insert")
+                    logger.warning(
+                        "touch_insert_failed",
+                        message_id=mid,
+                        page_id=page_id,
+                        slug=slug,
+                        error=str(exc),
+                    )
+        conn.commit()
+    return inserted
+
+
 def _run_with_timeout[T](fn: Callable[[], T], timeout_s: float | None) -> T:
     """Run ``fn()`` in a worker thread, raising
     ``concurrent.futures.TimeoutError`` after ``timeout_s`` seconds.
@@ -711,73 +843,161 @@ def _batch_paths(batch: list) -> list[str]:
     return [item["path"] if isinstance(item, dict) else str(item) for item in batch]
 
 
-def _collect_cited_raw_paths(wiki_dir: Path) -> set[str]:
-    """Scan every wiki page's `sources:` list; return the set of cited raw paths.
+def _collect_content_cited_message_ids(message_ids: list[str]) -> set[str]:
+    """Return the subset of `message_ids` with >=1 touch in a content-type page.
 
-    This is the durable evidence that the agent actually processed an
-    email — the email's raw path will appear in at least one wiki page's
-    frontmatter `sources:` list.
+    Replaces the older frontmatter scan with a catalog query against
+    `message_touched_pages` joined to `wiki_pages` filtered by
+    ``CONTENT_PAGE_TYPES``. Entity/person stubs don't count — name-dropping
+    a message in a stub is not evidence the agent did compile work.
+
+    Empty input → empty set (no DB round-trip).
     """
-    cited: set[str] = set()
-    for cat in _WIKI_CATEGORIES:
-        cat_dir = wiki_dir / cat
-        if not cat_dir.exists():
-            continue
-        for md in cat_dir.glob("*.md"):
-            try:
-                content = md.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            fm = extract_frontmatter(content)
-            sources = fm.get("sources")
-            if not isinstance(sources, list):
-                continue
-            for src in sources:
-                if isinstance(src, str) and src.strip():
-                    cited.add(src.strip())
-    return cited
+    if not message_ids:
+        return set()
+    # Lazy import so the conftest monkeypatch on ``src.db.connect`` (which
+    # pins search_path to the per-test schema) is picked up. A top-level
+    # ``from src.db import connect`` would bind the unpatched function and
+    # tests would read from the production schema.
+    from src.db import connect as _connect
+
+    with _connect() as conn:
+        # ``src.db.connect`` uses ``dict_row`` so fetchall() yields dicts,
+        # but mypy can't see that through the generic ``psycopg.Connection``
+        # return type — cast the result explicitly.
+        rows = cast(
+            list[dict[str, Any]],
+            conn.execute(
+                """
+                SELECT DISTINCT mtp.message_id
+                  FROM message_touched_pages mtp
+                  JOIN wiki_pages wp ON wp.page_id = mtp.page_id
+                 WHERE mtp.message_id = ANY(%s)
+                   AND wp.page_type IN (
+                     'topic','system','policy','decision','glossary',
+                     'timeline','conflict'
+                   )
+                """,
+                (list(message_ids),),
+            ).fetchall(),
+        )
+    return {r["message_id"] for r in rows}
+
+
+# Insight categories that mean "don't compile this email, but don't
+# leave it pending either". `trivial_skip` is currently accepted by the
+# ``compile_insights`` CHECK (migration 202604160000); `already_captured`
+# lands with U3 once the CHECK is widened. Keeping both names here is
+# cheap and future-proofs the lookup: the DB never produces
+# ``already_captured`` yet, so querying for it is a harmless no-op.
+_SKIP_INSIGHT_CATEGORIES = frozenset({"trivial_skip", "already_captured"})
+
+
+def _insights_skip_paths(run_id: UUID) -> set[str]:
+    """Return `email_path`s the agent flagged as skip-worthy this run.
+
+    Joined against batch raw paths to flip matching messages to
+    ``skipped`` instead of leaving them pending. Failures are logged and
+    return an empty set — absence of a skip signal is the safe default
+    (leave ``pending``; the claim loop will retry).
+    """
+    from src.db import connect as _connect
+
+    try:
+        with _connect() as conn:
+            rows = cast(
+                list[dict[str, Any]],
+                conn.execute(
+                    """
+                    SELECT DISTINCT email_path
+                      FROM compile_insights
+                     WHERE run_id = %s
+                       AND category = ANY(%s)
+                       AND email_path IS NOT NULL
+                    """,
+                    (run_id, list(_SKIP_INSIGHT_CATEGORIES)),
+                ).fetchall(),
+            )
+    except Exception as exc:  # noqa: BLE001 — insights are best-effort
+        logger.warning("skip_insights_fetch_failed", run_id=run_id, error=str(exc))
+        return set()
+    return {r["email_path"] for r in rows if r.get("email_path")}
 
 
 def _mark_batch_compiled(
-    batch: list, wiki_dir: Path, compile_model: str | None = None
-) -> tuple[list[str], int, int]:
-    """Mark only batch emails whose raw_path is actually cited in the wiki.
+    batch: list,
+    wiki_dir: Path,
+    compile_model: str | None = None,
+    *,
+    run_id: UUID | None = None,
+) -> tuple[list[str], list[str], int, int]:
+    """Flip batch emails to `compiled` / `skipped` / keep-pending using
+    the catalog as source of truth.
 
-    Returns (marked_message_ids, not_cited, missing).
-      - marked_message_ids: message_ids cited in >=1 wiki page's
-        sources — flipped to compiled. Caller uses the list to stamp
-        the matching ``compile_attempts`` rows as ``outcome='compiled'``.
-      - not_cited: emails not referenced anywhere in wiki — agent likely
-        didn't finish them before returning; left pending for next claim.
-      - missing:  emails whose raw_path has no `messages` row at all —
-        indicates backfill drift; logged as a warning.
+    Returns ``(compiled_ids, skipped_ids, not_cited, missing)``.
+      - ``compiled_ids``: message_ids with >=1 touch in a content-type
+        page (``CONTENT_PAGE_TYPES``) → flipped to ``compiled``.
+      - ``skipped_ids``: message_ids the agent declared trivial /
+        already-captured via ``log_insight`` this run → flipped to
+        ``skipped`` (terminal; never re-claimed).
+      - ``not_cited``: emails without a content touch AND without a skip
+        insight — agent likely didn't finish them; kept ``pending`` for
+        the next claim cycle.
+      - ``missing``: emails whose raw_path has no ``messages`` row at
+        all — indicates backfill drift; logged as a warning.
 
     `compile_model` records which A/B-pool model produced this batch so
-    we can later join model → outcome.
+    we can later join model → outcome. `run_id` scopes the skip-insight
+    lookup to the current run — insights from earlier runs don't reach
+    back and flip emails this run didn't touch. When ``run_id`` is None
+    the skip path is a no-op (callers can still get the compiled/pending
+    split).
 
-    The wiki-citation check is the safety net against the "agent said done
-    but actually stopped early" failure mode.
+    Catalog-truth successor to the frontmatter scan: entity/person stubs
+    name-dropping the email no longer count as "compiled" because the
+    ``page_type`` join filters them out. ``wiki_dir`` is retained for
+    call-site compatibility; no longer read.
     """
-    cited = _collect_cited_raw_paths(wiki_dir)
-    marked_ids: list[str] = []
-    not_cited, missing = 0, 0
+    _ = wiki_dir  # retained for back-compat; content-truth now comes from the catalog
+    # Resolve (path → messages row) once so we can batch the catalog
+    # query by message_id instead of running one query per path.
+    row_by_path: dict[str, Any] = {}
+    missing = 0
     for path in _batch_paths(batch):
         row = find_by_raw_path(path)
         if row is None:
             logger.warning("no messages row for batch path", path=path)
             missing += 1
             continue
-        if path not in cited:
-            logger.warning(
-                "batch email not cited in wiki; leaving pending",
-                path=path,
-                message_id=row["message_id"],
-            )
-            not_cited += 1
+        row_by_path[path] = row
+
+    message_ids = [str(row["message_id"]) for row in row_by_path.values()]
+    content_cited = _collect_content_cited_message_ids(message_ids)
+    skip_paths = _insights_skip_paths(run_id) if run_id is not None else set()
+
+    compiled_ids: list[str] = []
+    skipped_ids: list[str] = []
+    not_cited = 0
+    for path, row in row_by_path.items():
+        mid = str(row["message_id"])
+        if mid in content_cited:
+            finish_message_compile(mid, compile_model=compile_model)
+            compiled_ids.append(mid)
             continue
-        finish_message_compile(row["message_id"], compile_model=compile_model)
-        marked_ids.append(str(row["message_id"]))
-    return marked_ids, not_cited, missing
+        if path in skip_paths:
+            # ``mark_skipped`` is a no-op on already-compiled/claimed
+            # rows (state guard inside the repo function), so ordering
+            # vs. the ``content_cited`` branch is safe either way.
+            mark_skipped(mid, "insight:trivial_or_already_captured")
+            skipped_ids.append(mid)
+            continue
+        logger.warning(
+            "batch email not cited in content page; leaving pending",
+            path=path,
+            message_id=mid,
+        )
+        not_cited += 1
+    return compiled_ids, skipped_ids, not_cited, missing
 
 
 def _mark_batch_failed(batch: list, error: str, compile_model: str | None = None) -> int:
@@ -1484,23 +1704,6 @@ def main(
                             batch, run_id=run_id, compile_model=batch_model
                         )
                         click.echo(f"  retry: model={batch_model}")
-                marked_ids, not_cited, missing = _mark_batch_compiled(
-                    batch, Path(wiki_dir), compile_model=batch_model
-                )
-                processed += len(marked_ids)
-                _record_attempts_outcome(attempts, marked_ids, outcome="compiled")
-                # Stamp the un-marked attempts as failures so they don't sit
-                # in-flight forever. `not_cited` (agent didn't cite the email)
-                # and `missing` (backfill drift) both count as model-level
-                # failures for that batch — `model_health_stats` will see them.
-                unfinished_ids = [mid for mid in attempts if mid not in marked_ids]
-                if unfinished_ids:
-                    _record_attempts_outcome(
-                        attempts,
-                        unfinished_ids,
-                        outcome="failed",
-                        error="not cited in wiki",
-                    )
                 # Post-batch normalization + validation. Catches agent-
                 # introduced format drift (duplicate ## Related headings,
                 # broken wikilinks, malformed frontmatter) right after the
@@ -1513,6 +1716,12 @@ def main(
                 # malformed or leaves alone as already-clean must still be
                 # validated, otherwise newly-introduced corruption slips
                 # through silently.
+                #
+                # Order is load-bearing: the touch-catalog write + mark
+                # step below depend on ``_sync_wiki_catalog`` having
+                # upserted the ``wiki_pages`` rows they join against.
+                # Running either earlier leaves ``message_touched_pages``
+                # empty and every email stays ``pending``.
                 touched_pages = _iter_touched_pages(batch_start, Path(wiki_dir))
                 normalized = _normalize_touched_pages(touched_pages, Path(wiki_dir))
                 catalog_synced = _sync_wiki_catalog(touched_pages, Path(wiki_dir))
@@ -1526,15 +1735,62 @@ def main(
                             for p, errs in errors_by_page.items()
                         ],
                     )
+                # Catalog-truth write: one ``(message_id, page_id)`` row
+                # per (batch message, touched content-type page). Must
+                # run AFTER ``_sync_wiki_catalog`` (so the join target
+                # has rows) and BEFORE ``_mark_batch_compiled`` (which
+                # reads the catalog). ``attempts`` is keyed by
+                # ``message_id`` so we reuse its keys instead of a
+                # second ``find_by_raw_path`` pass over the batch.
+                #
+                # Use ``_iter_touched_content_pages`` (wider scope than
+                # ``_iter_touched_pages``) so policy/decision/timeline/
+                # conflict edits also write touch rows. Without this, a
+                # batch that only modifies a policy page writes zero
+                # rows → message stays pending → re-claimed forever.
+                touched_content_pages = _iter_touched_content_pages(batch_start, Path(wiki_dir))
+                touches_inserted = _write_touch_catalog(touched_content_pages, list(attempts))
+                compiled_ids, skipped_ids, not_cited, missing = _mark_batch_compiled(
+                    batch,
+                    Path(wiki_dir),
+                    compile_model=batch_model,
+                    run_id=run_id,
+                )
+                processed += len(compiled_ids)
+                _record_attempts_outcome(attempts, compiled_ids, outcome="compiled")
+                if skipped_ids:
+                    _record_attempts_outcome(
+                        attempts,
+                        skipped_ids,
+                        outcome="skipped",
+                        error="insight:trivial_or_already_captured",
+                    )
+                # Stamp the un-accounted-for attempts as failures so they
+                # don't sit in-flight forever. ``not_cited`` (agent didn't
+                # cite the email) and ``missing`` (backfill drift) both
+                # count as model-level failures for that batch —
+                # ``model_health_stats`` will see them.
+                accounted_for = set(compiled_ids) | set(skipped_ids)
+                unfinished_ids = [mid for mid in attempts if mid not in accounted_for]
+                if unfinished_ids:
+                    _record_attempts_outcome(
+                        attempts,
+                        unfinished_ids,
+                        outcome="failed",
+                        error="not cited in wiki",
+                    )
                 suffix_parts = []
                 if not_cited:
                     suffix_parts.append(f"{not_cited} not-yet-cited (kept pending)")
+                if skipped_ids:
+                    suffix_parts.append(f"{len(skipped_ids)} skipped (trivial/already-captured)")
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
                 suffix_parts.append(
                     f"normalized {len(normalized)} pages, "
                     f"{len(errors_by_page)} with validator errors, "
-                    f"catalog_synced {catalog_synced}"
+                    f"catalog_synced {catalog_synced}, "
+                    f"touches_inserted {touches_inserted}"
                 )
                 cache = cache_cb.snapshot()
                 served = ",".join(cache["served_models"]) or cache["requested_model"]
