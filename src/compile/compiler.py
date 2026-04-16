@@ -1373,6 +1373,12 @@ _VALID_INSIGHT_CATEGORIES = frozenset(
     }
 )
 
+# Categories that the coordinator uses to mark a message ``skipped``.
+# For these the insight MUST name the specific raw path it applies to —
+# otherwise the coordinator can't correlate the insight back to a message
+# and the decision is silently lost. See Cycle 4 Case #2 audit.
+_SKIP_INSIGHT_CATEGORIES = frozenset({"trivial_skip", "already_captured"})
+
 
 @tool
 def log_insight(
@@ -1407,13 +1413,17 @@ def log_insight(
               No new page delta needed, but the signal is different
               from ``trivial_skip`` and we want to preserve it.
         message: 1-2 sentence observation.
-        email_path: Optional raw email this is about (e.g.
-            ``raw/2026-04-11_subject_abc.md``).
+        email_path: Raw email path this insight is about (e.g.
+            ``raw/2026-04-11_subject_abc.md``). **Required** for
+            ``trivial_skip`` and ``already_captured`` — the coordinator
+            uses it to materialize the skip. Optional for investigatory
+            categories.
         suggested_action: Optional concrete fix the human could take.
 
     Returns:
         ``{"ok": True, "id": <int>}`` on success, or
-        ``{"ok": False, "error": "..."}`` on invalid category.
+        ``{"ok": False, "error": "..."}`` on invalid category or a
+        skip-category call that omitted ``email_path``.
     """
     import os
 
@@ -1424,6 +1434,18 @@ def log_insight(
             "ok": False,
             "error": (
                 f"invalid category {category!r}; must be one of {sorted(_VALID_INSIGHT_CATEGORIES)}"
+            ),
+        }
+
+    if category in _SKIP_INSIGHT_CATEGORIES and not email_path:
+        return {
+            "ok": False,
+            "error": (
+                f"email_path is required for category={category!r} — "
+                f"call log_insight once per email you're skipping, with "
+                f"email_path='raw/YYYY-MM-DD_..._hash.md'. Without it the "
+                f"coordinator can't mark the message skipped and the "
+                f"decision is lost."
             ),
         }
 

@@ -83,6 +83,54 @@ class TestLogInsightTool:
         assert result == {"ok": True, "id": 99}
         record.assert_called_once()
 
+    def test_trivial_skip_with_email_path_is_accepted(self) -> None:
+        with patch("src.db.insights.record", return_value=100) as record:
+            result = _invoke(
+                category="trivial_skip",
+                message="OOO auto-reply from Alice, no content.",
+                email_path="raw/2026-04-15_alice_ooo_xyz.md",
+            )
+        assert result == {"ok": True, "id": 100}
+        record.assert_called_once()
+
+    def test_trivial_skip_without_email_path_is_rejected(self) -> None:
+        # Cycle 4 Case #2: agent called log_insight('trivial_skip') with no
+        # email_path 22 times in a single run; coordinator couldn't correlate
+        # any of them back to messages, so decided-skip batches were mis-marked
+        # as failed/pending. Tool must refuse at the boundary.
+        with patch("src.db.insights.record") as record:
+            result = _invoke(
+                category="trivial_skip",
+                message="One-line 'Thanks!' reply, no content.",
+            )
+        assert result["ok"] is False
+        assert "email_path" in result["error"]
+        assert "trivial_skip" in result["error"]
+        record.assert_not_called()
+
+    def test_already_captured_without_email_path_is_rejected(self) -> None:
+        with patch("src.db.insights.record") as record:
+            result = _invoke(
+                category="already_captured",
+                message="Facts already on [[some-topic]] from thread root.",
+            )
+        assert result["ok"] is False
+        assert "email_path" in result["error"]
+        assert "already_captured" in result["error"]
+        record.assert_not_called()
+
+    def test_investigatory_category_without_email_path_still_accepted(self) -> None:
+        # email_path is only required for the two skip categories; investigatory
+        # insights (topic_merge_candidate, structure_suggestion, etc.) can still
+        # be logged without a specific raw email.
+        with patch("src.db.insights.record", return_value=5) as record:
+            result = _invoke(
+                category="topic_merge_candidate",
+                message="whatsapp-dashboard and whatsapp-alerts look mergeable",
+            )
+        assert result == {"ok": True, "id": 5}
+        record.assert_called_once()
+
 
 class TestInsightsRepoListForRun:
     """list_for_run hits real SQL via the test-schema fixture — the previous
