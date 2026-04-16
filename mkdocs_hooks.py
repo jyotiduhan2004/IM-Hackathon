@@ -250,7 +250,7 @@ def _replace_attachment_refs(body: str) -> str:
     return body
 
 
-def _page_metadata_banner(fm: dict) -> str:
+def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None) -> str:
     """One-line provenance banner at the top of each page.
 
     Renders: `N sources · last compiled YYYY-MM-DD · status: current`
@@ -263,9 +263,17 @@ def _page_metadata_banner(fm: dict) -> str:
 
     YAML parsers coerce bare ISO timestamps into `datetime` objects, so the
     last_compiled normalizer handles strings and datetime/date alike.
+
+    When `sources_count_override` is not None, uses that value instead of the
+    frontmatter length. Caller passes this when the Sources block is rendered
+    from a different source than the frontmatter (e.g. catalog-driven mode
+    under `NS_CATALOG_SOURCES=1`) so the banner count matches the block.
     """
-    sources_raw = fm.get("sources") or []
-    sources_count = len(sources_raw) if isinstance(sources_raw, list) else 0
+    if sources_count_override is not None:
+        sources_count = sources_count_override
+    else:
+        sources_raw = fm.get("sources") or []
+        sources_count = len(sources_raw) if isinstance(sources_raw, list) else 0
 
     last_compiled_str = _format_last_compiled(fm.get("last_compiled"))
 
@@ -351,13 +359,29 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         else:
             body = badge_html + "\n\n" + body
 
+    # Resolve the sources list upfront (catalog-driven or frontmatter) so the
+    # banner's count matches whatever the Sources block will render below.
+    # Catalog path (flag ON) queries message_touched_pages and returns a
+    # newest-first list. Frontmatter path (default or catalog miss/error)
+    # is oldest-first by compiler convention.
+    catalog_sources: list[str] | None = None
+    if _catalog_sources_enabled():
+        catalog_sources = _fetch_catalog_sources(Path(src_path).stem)
+
+    if catalog_sources is not None:
+        sources_list = catalog_sources
+        newest_first = True
+    else:
+        sources_list = [s for s in (fm.get("sources") or []) if isinstance(s, str)]
+        newest_first = False
+
     # Inject a metadata banner at the top. Splice right after the h1 when
     # there is one; otherwise prepend (entity pages rely on Material to
     # auto-generate the h1 from `title:`, so there's nothing in the body to
     # splice next to — the banner renders directly under the auto-h1).
     # Skip injection if a banner already exists at the top of the body —
     # MkDocs may invoke this hook more than once during plugin chains.
-    banner = _page_metadata_banner(fm)
+    banner = _page_metadata_banner(fm, sources_count_override=len(sources_list))
     body_head = "\n".join(body.splitlines()[:10])
     if "· last compiled " not in body_head:
         body_lines = body.splitlines(keepends=False)
@@ -382,20 +406,6 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
             body = "\n".join(body_lines)
         else:
             body = status_html + "\n\n" + body
-
-    # Catalog path (flag ON) queries message_touched_pages and returns a
-    # newest-first list. Frontmatter path (default or catalog miss/error)
-    # is oldest-first by compiler convention.
-    catalog_sources: list[str] | None = None
-    if _catalog_sources_enabled():
-        catalog_sources = _fetch_catalog_sources(Path(src_path).stem)
-
-    if catalog_sources is not None:
-        sources_list = catalog_sources
-        newest_first = True
-    else:
-        sources_list = [s for s in (fm.get("sources") or []) if isinstance(s, str)]
-        newest_first = False
 
     if not sources_list or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
         return body
