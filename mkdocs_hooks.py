@@ -183,9 +183,9 @@ def _find_h1_index(lines: list[str]) -> int:
 def _render_external_badge(fm: dict) -> str:
     """Return the external-contact badge HTML, or empty string.
 
-    Entity pages carry `is_external: true` in frontmatter when the subject is
-    not an @indiamart.com address. Reviewers asked for a visible cue so
-    external contributors are obvious at a glance from the page title.
+    Entity / person pages carry `is_external: true` in frontmatter when the
+    subject is not an @indiamart.com address. Reviewers asked for a visible
+    cue so external contributors are obvious at a glance from the page title.
     """
     if not fm.get("is_external"):
         return ""

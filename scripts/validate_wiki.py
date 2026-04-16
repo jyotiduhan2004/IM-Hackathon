@@ -409,7 +409,15 @@ def check_spelling_variants(wiki_dir: Path) -> list[Error]:
 
 
 def check_same_email_duplicates(wiki_dir: Path) -> list[Error]:
-    """Two entity pages declaring the same `email:` → same person, two slugs."""
+    """Two entity pages declaring the same `email:` → same person, two slugs.
+
+    KNOWN GAP (covered by C1 migration PR): this check only scans
+    `wiki/entities/`, not `wiki/people/`. During the entities→people
+    transition a person page in `people/` could collide on email with a
+    legacy `entities/` page and this check won't catch it. Extend to scan
+    both directories when C1 is in flight — until then the migration is
+    single-writer so the invariant holds externally.
+    """
     errors: list[Error] = []
     by_email: dict[str, list[Path]] = {}
     ent = wiki_dir / "entities"
@@ -545,6 +553,12 @@ def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
       most existing pages were named after display names, so this is legacy
       drift rather than corruption. Skipped if src.compile.entities isn't
       importable (keeps this validator runnable on branches without W0).
+
+    KNOWN GAP (covered by C1 migration PR): this check only scans
+    `wiki/entities/`, not `wiki/people/`. Person pages under `people/`
+    won't get email-hygiene warnings until this check is extended to both
+    directories. Do that in C1 when the migration starts writing `people/`
+    pages for real.
     """
     warnings: list[ValidationWarning] = []
     ent = wiki_dir / "entities"
