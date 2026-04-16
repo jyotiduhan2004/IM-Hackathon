@@ -46,7 +46,7 @@ from src.utils import extract_frontmatter  # noqa: E402
 # Categories we scan for light-format normalization. Policies/timelines/
 # conflicts keep their own templates (history tables, etc.) — out of scope
 # for this pass.
-CATEGORIES = ("topics", "entities", "systems")
+CATEGORIES = ("topics", "entities", "people", "systems")
 
 # H2 headings the agent tends to hand-write as navigation metadata. Matched
 # case-insensitively on the trimmed heading text. "Related Work" is content
