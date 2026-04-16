@@ -12,13 +12,16 @@ use_directory_urls: true
 # See docs/issues/10-phase1-implementation-plan.md (Workstream 2).
 nav:
   - Home: home.md
+  - Domains:
+      - domains/index.md
   - Topics:
       - topics/index.md
   - Products & Platforms:
       - systems/index.md
   - Policies:
       - policies/index.md
-  - Changes: log.md
+  - Glossary: glossary.md
+  - Changes: changes.md
   - About: about.md
 
 # Exclude draft pages from the build (anticipates the _drafts/ folder
