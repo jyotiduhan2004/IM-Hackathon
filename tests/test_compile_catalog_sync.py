@@ -55,9 +55,7 @@ def _write_page(path: Path, frontmatter: dict[str, str], body: str) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_sync_upserts_topic_entity_system(
-    tmp_path: Path, db_conn: psycopg.Connection
-) -> None:
+def test_sync_upserts_topic_entity_system(tmp_path: Path, db_conn: psycopg.Connection) -> None:
     wiki = tmp_path / "wiki"
     topic = wiki / "topics" / "sync-test-topic.md"
     entity = wiki / "entities" / "sync-test-entity.md"
@@ -85,9 +83,7 @@ def test_sync_upserts_topic_entity_system(
     assert find_by_email("sync-test@example.com") is not None
 
 
-def test_sync_ignores_out_of_category_files(
-    tmp_path: Path, db_conn: psycopg.Connection
-) -> None:
+def test_sync_ignores_out_of_category_files(tmp_path: Path, db_conn: psycopg.Connection) -> None:
     wiki = tmp_path / "wiki"
     # Top-level files (no category folder) are not catalog entries.
     top = wiki / "sync-test-home.md"
@@ -166,9 +162,7 @@ def test_sync_does_not_cascade_on_bad_row(
     assert find_by_slug("cascade-test-good-b") is not None
 
 
-def test_sync_stores_repo_relative_paths(
-    tmp_path: Path, db_conn: psycopg.Connection
-) -> None:
+def test_sync_stores_repo_relative_paths(tmp_path: Path, db_conn: psycopg.Connection) -> None:
     """Locks in Claude review Bug 2: touched pages under REPO_ROOT must
     store repo-relative paths, matching scripts/backfill_wiki_pages.py.
     Otherwise the next compile overwrites backfilled relatives with
@@ -207,3 +201,109 @@ def test_sync_is_idempotent(tmp_path: Path, db_conn: psycopg.Connection) -> None
     from src.db.wiki_pages import find_by_slug
 
     assert find_by_slug("sync-test-idempotent") is not None
+
+
+def test_landing_surfaces_sync_and_stamp(tmp_path: Path, db_conn: psycopg.Connection) -> None:
+    """`_sync_and_stamp_landing_surfaces` must:
+    1. upsert wiki_pages rows for top-level home.md / glossary.md / changes.md
+       (all three as page_type='glossary')
+    2. upsert wiki_pages rows for wiki/domains/*.md as page_type='domain'
+    3. upsert wiki_pages rows for wiki/decisions/*.md as page_type='decision'
+    4. stamp every surviving page's frontmatter with `last_compiled`
+    """
+    wiki = tmp_path / "wiki"
+    _write_page(
+        wiki / "home.md",
+        {"title": "Home", "page_type": "index", "status": "active"},
+        "body",
+    )
+    _write_page(
+        wiki / "glossary.md",
+        {"title": "Glossary", "page_type": "glossary", "status": "active"},
+        "body",
+    )
+    _write_page(
+        wiki / "changes.md",
+        {"title": "Changes", "page_type": "index", "status": "active"},
+        "body",
+    )
+    _write_page(
+        wiki / "domains" / "landing-test-agents.md",
+        {"title": "Agents Domain", "page_type": "domain", "status": "active"},
+        "body",
+    )
+    _write_page(
+        wiki / "decisions" / "landing-test-adopt-x.md",
+        {"title": "Adopt X", "page_type": "decision", "status": "active"},
+        "body",
+    )
+
+    stamped, synced = compile_all._sync_and_stamp_landing_surfaces(str(wiki), "landing-test-model")
+
+    # 3 top-level + 1 domain + 1 decision
+    assert stamped == 5
+    assert synced == 5
+
+    from src.db.wiki_pages import find_by_slug
+
+    home_row = find_by_slug("home")
+    glossary_row = find_by_slug("glossary")
+    changes_row = find_by_slug("changes")
+    domain_row = find_by_slug("landing-test-agents")
+    decision_row = find_by_slug("landing-test-adopt-x")
+
+    assert home_row is not None and home_row["page_type"] == "glossary"
+    assert glossary_row is not None and glossary_row["page_type"] == "glossary"
+    assert changes_row is not None and changes_row["page_type"] == "glossary"
+    assert domain_row is not None and domain_row["page_type"] == "domain"
+    assert decision_row is not None and decision_row["page_type"] == "decision"
+
+    # Stamping: last_compiled must appear in the rewritten frontmatter.
+    home_content = (wiki / "home.md").read_text(encoding="utf-8")
+    assert "last_compiled:" in home_content
+    assert "updated_by: landing-test-model" in home_content
+
+
+def test_landing_surfaces_noop_when_wiki_missing(
+    tmp_path: Path, db_conn: psycopg.Connection
+) -> None:
+    """Missing wiki dir → (0, 0); must not crash."""
+    stamped, synced = compile_all._sync_and_stamp_landing_surfaces(
+        str(tmp_path / "does-not-exist"), "any-model"
+    )
+    assert (stamped, synced) == (0, 0)
+
+
+def test_landing_surfaces_noop_when_no_landing_files(
+    tmp_path: Path, db_conn: psycopg.Connection
+) -> None:
+    """Wiki dir exists but has no landing files → (0, 0)."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    # Only an unrelated page exists; none of the landing-surface patterns match.
+    (wiki / "topics").mkdir()
+    _write_page(
+        wiki / "topics" / "landing-test-topic.md",
+        {"title": "Topic", "page_type": "topic"},
+        "body",
+    )
+
+    stamped, synced = compile_all._sync_and_stamp_landing_surfaces(str(wiki), "any-model")
+    assert (stamped, synced) == (0, 0)
+
+
+def test_landing_surfaces_skips_mangled_top_level_file(
+    tmp_path: Path, db_conn: psycopg.Connection
+) -> None:
+    """A mangled top-level file (no title/page_type) must NOT be stamped —
+    the catalog sync can still fall back to stem-title, but we mustn't
+    corrupt a file the regenerator left in a bad state."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    # Body only, no frontmatter at all.
+    (wiki / "home.md").write_text("raw body, no fm\n", encoding="utf-8")
+
+    stamped, synced = compile_all._sync_and_stamp_landing_surfaces(str(wiki), "any-model")
+    # Not stamped (no title/page_type guard), but cataloged (stem fallback).
+    assert stamped == 0
+    assert synced == 1

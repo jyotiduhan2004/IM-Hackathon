@@ -15,4 +15,6 @@ WIKI_CATEGORIES: tuple[str, ...] = (
     "policies",
     "timelines",
     "conflicts",
+    "domains",
+    "decisions",
 )

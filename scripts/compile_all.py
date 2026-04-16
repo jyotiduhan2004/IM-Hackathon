@@ -34,6 +34,7 @@ from scripts.validate_wiki import Error as ValidationError  # noqa: E402
 from scripts.validate_wiki import validate_page  # noqa: E402
 from src.budget import fetch_budget  # noqa: E402
 from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
+from src.compile.categories import WIKI_CATEGORIES as _WIKI_CATEGORIES  # noqa: E402
 from src.compile.compiler import _generate_changes  # noqa: E402
 from src.compile.compiler import _generate_glossary  # noqa: E402
 from src.compile.compiler import _generate_home  # noqa: E402
@@ -62,8 +63,6 @@ from src.db.wiki_pages import upsert_wiki_page  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
-
-_WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 structlog.configure(
     processors=[
@@ -233,8 +232,21 @@ _CATEGORY_BY_FOLDER: dict[str, str] = {
     "policies": "policy",
     "timelines": "timeline",
     "conflicts": "conflict",
+    "domains": "domain",
+    "decisions": "decision",
 }
-_VALID_WIKI_STATUS = {"current", "superseded", "contested"}
+# Matches the wiki_pages status CHECK (widened 2026-04-16 via migration
+# 202604161200_wiki_pages_new_ontology.sql). 'active' / 'archived' are
+# the North-Star values the landing generators emit.
+_VALID_WIKI_STATUS = {"current", "superseded", "contested", "active", "archived"}
+
+# Regenerated every run by `_regenerate_landing_surfaces`. Live outside
+# the category folders, so the per-batch `_sync_wiki_catalog` skips
+# them — `_sync_and_stamp_landing_surfaces` handles these separately.
+# All three get page_type='glossary' (the one CHECK-accepted type that
+# fits — home/changes generators write 'index' which the CHECK rejects).
+_TOP_LEVEL_LANDING_FILES: tuple[str, ...] = ("home.md", "glossary.md", "changes.md")
+_TOP_LEVEL_LANDING_PAGE_TYPE = "glossary"
 
 
 def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
@@ -345,6 +357,123 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
                 )
         conn.commit()
     return synced
+
+
+def _sync_and_stamp_landing_surfaces(wiki_dir: str, model_name: str) -> tuple[int, int]:
+    """Stamp ``last_compiled`` + upsert ``wiki_pages`` rows for the North-Star
+    landing surfaces that ``_regenerate_landing_surfaces`` rewrote.
+
+    Covers:
+    - top-level ``home.md`` / ``glossary.md`` / ``changes.md`` — all stamped
+      as ``page_type='glossary'`` (generators emit mixed 'index'/'glossary'
+      frontmatter; we normalize to one page_type the CHECK constraint
+      accepts so the catalog has one consistent entry per file).
+    - ``wiki/domains/*.md`` — stamped as ``page_type='domain'``.
+    - ``wiki/decisions/*.md`` — stamped as ``page_type='decision'``.
+
+    Runs AFTER ``_regenerate_landing_surfaces``; stamping earlier would
+    be wiped because the generators write without ``last_compiled``.
+    The batch-loop ``_sync_wiki_catalog`` misses these because
+    ``_iter_touched_pages`` only walks topics/entities/systems and the
+    top-level files aren't under any category folder.
+
+    Uses the same per-page SAVEPOINT pattern as ``_sync_wiki_catalog``:
+    a single constraint violation doesn't cascade, DB errors log but
+    never re-raise.
+
+    Returns ``(stamped_count, synced_count)``.
+    """
+    from src.db import connect as _connect
+
+    wiki_path = Path(wiki_dir)
+    if not wiki_path.exists():
+        return 0, 0
+
+    candidates: list[tuple[Path, str]] = []
+    for name in _TOP_LEVEL_LANDING_FILES:
+        path = wiki_path / name
+        if path.exists():
+            candidates.append((path, _TOP_LEVEL_LANDING_PAGE_TYPE))
+    for folder in ("domains", "decisions"):
+        folder_path = wiki_path / folder
+        if not folder_path.exists():
+            continue
+        page_type = _CATEGORY_BY_FOLDER[folder]
+        for md_file in sorted(folder_path.glob("*.md")):
+            candidates.append((md_file, page_type))
+
+    if not candidates:
+        return 0, 0
+
+    now_iso = datetime.now(UTC).isoformat()
+    stamped = 0
+    synced = 0
+
+    with _connect() as conn:
+        for path, page_type in candidates:
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("landing_read_failed", path=str(path), error=str(exc))
+                continue
+            fm = extract_frontmatter(content)
+
+            # Stamp iff frontmatter looks sane. The catalog upsert below
+            # still runs on mangled files (using stem fallback for title)
+            # so resolve_page can still find them.
+            if "title" in fm or "page_type" in fm:
+                fm["last_compiled"] = now_iso
+                fm["updated_by"] = model_name
+                fm["update_count"] = int(fm.get("update_count") or 0) + 1
+                body = extract_body(content)
+                try:
+                    path.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
+                    stamped += 1
+                except OSError as exc:
+                    logger.warning("landing_stamp_write_failed", path=str(path), error=str(exc))
+
+            title_raw = fm.get("title")
+            title = (
+                title_raw.strip()
+                if isinstance(title_raw, str) and title_raw.strip()
+                else path.stem.replace("-", " ").title()
+            )
+            status_raw = fm.get("status")
+            status = (
+                status_raw
+                if isinstance(status_raw, str) and status_raw in _VALID_WIKI_STATUS
+                else "active"
+            )
+            path_abs = path.resolve()
+            try:
+                path_to_store = str(path_abs.relative_to(REPO_ROOT))
+            except ValueError:
+                path_to_store = str(path_abs)
+
+            try:
+                conn.execute("SAVEPOINT sync_landing")
+                upsert_wiki_page(
+                    conn,
+                    slug=path.stem,
+                    path=path_to_store,
+                    title=title,
+                    page_type=page_type,
+                    status=status,
+                    canonical_user_email=None,
+                )
+                conn.execute("RELEASE SAVEPOINT sync_landing")
+                synced += 1
+            except Exception as exc:  # noqa: BLE001
+                conn.execute("ROLLBACK TO SAVEPOINT sync_landing")
+                logger.warning(
+                    "landing_sync_page_failed",
+                    path=str(path),
+                    page_type=page_type,
+                    error=str(exc),
+                )
+        conn.commit()
+
+    return stamped, synced
 
 
 def _validate_touched_pages(pages: list[Path], wiki_dir: Path) -> dict[Path, list[ValidationError]]:
@@ -1003,6 +1132,11 @@ def main(
         click.echo("Regenerating wiki index...")
         click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
         _regenerate_landing_surfaces(wiki_dir)
+        landing_stamped, landing_synced = _sync_and_stamp_landing_surfaces(wiki_dir, resolved_model)
+        if landing_stamped or landing_synced:
+            click.echo(
+                f"Landing surfaces: stamped {landing_stamped}, catalog synced {landing_synced}"
+            )
         return
 
     # Auto-snapshot before compiling so we can roll back if the run corrupts
@@ -1311,6 +1445,16 @@ def main(
     click.echo("\nRegenerating wiki index (post-compile)...")
     click.echo(update_wiki_index.invoke({"wiki_dir": wiki_dir}))
     _regenerate_landing_surfaces(wiki_dir)
+
+    # Stamp + catalog the landing surfaces we just regenerated. Must run
+    # AFTER `_regenerate_landing_surfaces` because the generators rewrite
+    # those files without `last_compiled` — stamping earlier would be wiped.
+    landing_stamped, landing_synced = _sync_and_stamp_landing_surfaces(wiki_dir, resolved_model)
+    if landing_stamped or landing_synced:
+        click.echo(
+            f"Landing surfaces: stamped {landing_stamped}, "
+            f"catalog synced {landing_synced} (home/glossary/changes + domains + decisions)"
+        )
 
     # Run validator and warn (but don't fail) if integrity is broken. Pre-compile
     # snapshot is already captured above for rollback.
