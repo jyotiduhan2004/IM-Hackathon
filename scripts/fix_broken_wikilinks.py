@@ -25,9 +25,21 @@ Rules (in order; the first match wins):
    `docs/audits/broken-wikilinks-<ISO>.md` with page, line number,
    original wikilink, and up to three best-guess candidates.
 
+Scope caveat:
+   The walker only scans categories listed in
+   `validate_wiki.CATEGORY_TO_TYPE`. Newer category directories such as
+   `wiki/decisions/` and `wiki/people/` are NOT visited unless added to
+   that map first — broken wikilinks inside those pages are silently
+   ignored. Add the directory to `validate_wiki.CATEGORY_TO_TYPE` to
+   bring it into scope here.
+
 Usage:
     uv run python scripts/fix_broken_wikilinks.py --dry-run
     uv run python scripts/fix_broken_wikilinks.py --commit
+
+`--dry-run` is read-only: it prints the proposed manual-review body to
+stdout instead of writing the audit file. Only `--commit` writes to disk
+(both wiki/*.md mutations and the audit file).
 """
 
 from __future__ import annotations
@@ -257,19 +269,13 @@ def fix_wiki(
     return all_fixes, all_manual
 
 
-def _write_manual_review(
-    manual: list[ManualItem],
-    audit_path: Path,
-    timestamp: str,
-) -> None:
-    """Persist remaining broken links as a markdown file for human review.
+def _format_manual_review(manual: list[ManualItem], timestamp: str) -> str:
+    """Render the manual-review markdown body without touching disk.
 
     Grouped by page so the operator can tackle one file at a time.
-    Creates the parent directory if missing (first run of this script
-    after a clean checkout).
+    Returned as a single string so callers can either write it to an
+    audit file (--commit) or echo it to stdout (--dry-run).
     """
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-
     by_page: dict[Path, list[ManualItem]] = {}
     for item in manual:
         by_page.setdefault(item.page, []).append(item)
@@ -299,17 +305,35 @@ def _write_manual_review(
             lines.append(f"- Line {item.line_no}: `{item.original}` → suggestions: {suggestions}")
         lines.append("")
 
-    audit_path.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
+
+
+def _write_manual_review(
+    manual: list[ManualItem],
+    audit_path: Path,
+    timestamp: str,
+) -> None:
+    """Persist remaining broken links as a markdown file for human review.
+
+    Creates the parent directory if missing (first run of this script
+    after a clean checkout). Caller is responsible for gating on commit.
+    """
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text(_format_manual_review(manual, timestamp), encoding="utf-8")
 
 
 def _print_summary(
     fixes: list[Fix],
     manual: list[ManualItem],
-    audit_path: Path,
+    audit_path: Path | None,
     *,
     commit: bool,
 ) -> None:
-    """Human-readable stdout summary: rule counts, manual count, file path."""
+    """Human-readable stdout summary: rule counts, manual count, file path.
+
+    `audit_path` is `None` on dry-run (no file written); the proposed
+    manual-review contents are echoed to stdout instead by the caller.
+    """
     by_rule: dict[str, int] = {}
     for fix in fixes:
         by_rule[fix.rule] = by_rule.get(fix.rule, 0) + 1
@@ -319,7 +343,7 @@ def _print_summary(
     for rule in sorted(by_rule):
         click.echo(f"  - {rule}: {by_rule[rule]}")
     click.echo(f"Manual review needed: {len(manual)} link(s)")
-    if manual:
+    if manual and audit_path is not None:
         click.echo(f"  → see {audit_path}")
 
 
@@ -360,8 +384,16 @@ def main(dry_run: bool, commit: bool) -> None:
     fixes, manual = fix_wiki(wiki_dir, commit=commit)
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    audit_path = REPO_ROOT / "docs" / "audits" / f"broken-wikilinks-{timestamp}.md"
-    _write_manual_review(manual, audit_path, timestamp)
+    # Audit file is a side effect; --dry-run prints the proposed body
+    # to stdout instead so previewing stays read-only.
+    audit_path: Path | None = None
+    if commit:
+        audit_path = REPO_ROOT / "docs" / "audits" / f"broken-wikilinks-{timestamp}.md"
+        _write_manual_review(manual, audit_path, timestamp)
+    elif manual:
+        click.echo("--- proposed manual-review (not written; --dry-run) ---")
+        click.echo(_format_manual_review(manual, timestamp))
+        click.echo("--- end proposed manual-review ---")
 
     _print_summary(fixes, manual, audit_path, commit=commit)
 

@@ -285,6 +285,20 @@ def test_cli_dry_run_exits_zero_even_with_manual(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
 
 
+def test_dry_run_does_not_write_audit_file(tmp_path: Path) -> None:
+    """Dry-run must NOT touch docs/audits/*.md — it just previews to stdout."""
+    audits_dir = REPO_ROOT / "docs" / "audits"
+    before = set(audits_dir.glob("broken-wikilinks-*.md")) if audits_dir.exists() else set()
+    wiki = _make_wiki(tmp_path, {"topics/foo": "[[unknown-slug-xyz]]"})
+    result = _run_cli("--dry-run", wiki_dir=wiki)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    after = set(audits_dir.glob("broken-wikilinks-*.md")) if audits_dir.exists() else set()
+    assert before == after, f"dry-run wrote new audit file(s): {after - before}"
+    # Proposed manual-review body should be on stdout.
+    assert "proposed manual-review" in result.stdout
+    assert "unknown-slug-xyz" in result.stdout
+
+
 def test_cli_commit_exits_nonzero_when_manual_remain(tmp_path: Path) -> None:
     """--commit with remaining manual items must exit 1 so publish-gate fails."""
     wiki = _make_wiki(tmp_path, {"topics/foo": "[[truly-unknown-slug]]"})
