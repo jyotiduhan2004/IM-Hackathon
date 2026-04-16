@@ -965,6 +965,18 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
     return kept, excluded
 
 
+def _is_model_unavailable_error(exc: BaseException) -> bool:
+    """True if ``exc`` indicates the LiteLLM proxy refuses this model for
+    this team key — 401 ``team not allowed to access model`` or 400
+    ``Invalid model name``. The batch should retry with a different pool
+    model instead of being marked failed; the 24h ``_healthy_pool`` guard
+    can't help here because the failure must accumulate over time and
+    every batch in between burns latency + telemetry rows.
+    """
+    msg = str(exc)
+    return "team not allowed to access model" in msg or "Invalid model name" in msg
+
+
 def _record_attempts_start(
     batch: list[Any],
     *,
@@ -1396,33 +1408,82 @@ def main(
                 # ``concurrent.futures.TimeoutError`` is a subclass of
                 # ``Exception``, so the outer ``except`` below handles it
                 # via ``_mark_batch_failed`` + ``_append_batch_log``.
-                _run_with_timeout(
-                    partial(
-                        run_compilation,
-                        instruction=instruction,
-                        model_name=batch_model,
-                        raw_dir=raw_dir,
-                        wiki_dir=wiki_dir,
-                        recursion_limit=recursion_limit,
-                        cache_stats=cache_cb,
-                        tool_log=tool_cb,
-                        run_name=f"compile:{batch_model}:{thread_id[:12] or 'no-thread'}",
-                        trace_metadata={
-                            "compile_run_id": str(run_id),
-                            "compile_batch_index": batch_idx,
-                            "compile_email_count": len(batch),
-                            "compile_model": batch_model,
-                            "compile_thread_id": thread_id,
-                        },
-                        trace_tags=[
-                            "email-kb",
-                            "compile",
-                            f"model:{batch_model}",
-                            f"batch:{batch_idx}",
-                        ],
-                    ),
-                    timeout_s=batch_timeout,
-                )
+                #
+                # Inner retry loop: when LiteLLM rejects the picked model
+                # (401 ``team not allowed`` / 400 ``Invalid model name``),
+                # drop the model from ``pool`` for this run and retry the
+                # same batch with another. Avoids burning every batch on
+                # an unprovisioned model while waiting for ``_healthy_pool``
+                # to accumulate enough failures cross-run.
+                while True:
+                    # Cumulative deadline across model retries — the
+                    # documented per-batch wall-clock cap is enforced
+                    # against batch_start, not per-attempt. A pathological
+                    # 401-after-N-seconds attempt won't get a fresh full
+                    # budget for its retry.
+                    remaining_budget = batch_timeout - (time.time() - batch_start)
+                    if remaining_budget <= 0:
+                        raise concurrent.futures.TimeoutError(
+                            f"batch budget ({batch_timeout}s) exhausted across model "
+                            f"retries (thread={thread_id[:12]})"
+                        )
+                    try:
+                        _run_with_timeout(
+                            partial(
+                                run_compilation,
+                                instruction=instruction,
+                                model_name=batch_model,
+                                raw_dir=raw_dir,
+                                wiki_dir=wiki_dir,
+                                recursion_limit=recursion_limit,
+                                cache_stats=cache_cb,
+                                tool_log=tool_cb,
+                                run_name=f"compile:{batch_model}:{thread_id[:12] or 'no-thread'}",
+                                trace_metadata={
+                                    "compile_run_id": str(run_id),
+                                    "compile_batch_index": batch_idx,
+                                    "compile_email_count": len(batch),
+                                    "compile_model": batch_model,
+                                    "compile_thread_id": thread_id,
+                                },
+                                trace_tags=[
+                                    "email-kb",
+                                    "compile",
+                                    f"model:{batch_model}",
+                                    f"batch:{batch_idx}",
+                                ],
+                            ),
+                            timeout_s=remaining_budget,
+                        )
+                        break
+                    except Exception as exc:
+                        if not _is_model_unavailable_error(exc):
+                            raise
+                        eligible = [m for m in pool if m != batch_model]
+                        if not eligible:
+                            raise
+                        click.echo(
+                            f"  model {batch_model} unavailable (LiteLLM 401/400) — "
+                            f"dropping for this run; retrying batch with another"
+                        )
+                        _record_attempts_outcome(
+                            attempts,
+                            list(attempts.keys()),
+                            outcome="failed",
+                            error=str(exc)[:500],
+                        )
+                        _flush_tool_calls(run_id, tool_cb)
+                        # Propagate the prune to subsequent batches too:
+                        # if this team key can't access the model now, no
+                        # other batch in this run will either.
+                        pool[:] = eligible
+                        batch_model = random.choice(eligible)
+                        cache_cb = BatchStatsCallback(model=batch_model)
+                        tool_cb = ToolCallLogHandler()
+                        attempts = _record_attempts_start(
+                            batch, run_id=run_id, compile_model=batch_model
+                        )
+                        click.echo(f"  retry: model={batch_model}")
                 marked_ids, not_cited, missing = _mark_batch_compiled(
                     batch, Path(wiki_dir), compile_model=batch_model
                 )

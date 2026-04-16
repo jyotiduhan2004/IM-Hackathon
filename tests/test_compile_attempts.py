@@ -416,6 +416,42 @@ def test_healthy_pool_never_empties_pool(
     assert len(excluded) == 2
 
 
+# ---------------------------------------------------------------------------
+# _is_model_unavailable_error (LiteLLM 401/400 detector)
+# ---------------------------------------------------------------------------
+
+
+def test_is_model_unavailable_detects_401_team_not_allowed(compile_all_module: Any) -> None:
+    """LiteLLM's 401 dump for an unprovisioned model trips the detector."""
+    exc = RuntimeError(
+        "Error code: 401 - {'error': {'message': \"team not allowed to access model. "
+        "This team can only access models=['openai/gpt-4o', ...]\"}}"
+    )
+    assert compile_all_module._is_model_unavailable_error(exc) is True
+
+
+def test_is_model_unavailable_detects_400_invalid_model_name(compile_all_module: Any) -> None:
+    """LiteLLM's 400 for a model the proxy doesn't route trips the detector."""
+    exc = RuntimeError(
+        "Error code: 400 - {'error': {'message': "
+        '"/chat/completions: Invalid model name passed in model=z-ai/glm-5.1."}}'
+    )
+    assert compile_all_module._is_model_unavailable_error(exc) is True
+
+
+def test_is_model_unavailable_ignores_unrelated_errors(compile_all_module: Any) -> None:
+    """Generic / network / recursion errors must NOT be misclassified — those
+    should mark the batch failed normally instead of triggering a fallback.
+    """
+    for exc in (
+        TimeoutError("batch exceeded 600s"),
+        ValueError("bad input"),
+        RuntimeError("Error code: 500 - upstream timeout"),
+        RuntimeError("recursion limit reached"),
+    ):
+        assert compile_all_module._is_model_unavailable_error(exc) is False, exc
+
+
 def test_filter_pool_to_available_models_preserves_order(compile_all_module: Any) -> None:
     kept, dropped = compile_all_module._filter_pool_to_available_models(
         ["model_A", "model_B", "model_C"],
@@ -428,7 +464,9 @@ def test_filter_pool_to_available_models_preserves_order(compile_all_module: Any
 def test_fetch_available_models_parses_proxy_catalog(
     compile_all_module: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(compile_all_module.settings, "litellm_base_url", "https://proxy.example.com")
+    monkeypatch.setattr(
+        compile_all_module.settings, "litellm_base_url", "https://proxy.example.com"
+    )
     monkeypatch.setattr(compile_all_module.settings, "openai_api_key", "sk-test")
 
     class FakeResponse:
