@@ -238,7 +238,8 @@ def _load_messages_ddl() -> str:
         'prompt_ambiguity',
         'tool_gap',
         'supersession_doubt',
-        'structure_suggestion'
+        'structure_suggestion',
+        'trivial_skip'
       )),
       message text NOT NULL,
       email_path text,

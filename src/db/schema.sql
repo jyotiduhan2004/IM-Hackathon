@@ -283,7 +283,13 @@ CREATE TABLE IF NOT EXISTS compile_insights (
     'prompt_ambiguity',
     'tool_gap',
     'supersession_doubt',
-    'structure_suggestion'
+    'structure_suggestion',
+    -- 'trivial_skip' added 2026-04-16 to match
+    -- src/compile/compiler.py::_VALID_INSIGHT_CATEGORIES. Cycle 1 caught
+    -- this drift: agent correctly classified one-line confirmations /
+    -- OOO auto-replies as trivial-skip but DB CHECK rejected them,
+    -- failing the whole batch.
+    'trivial_skip'
   )),
   message text NOT NULL,
   email_path text,
