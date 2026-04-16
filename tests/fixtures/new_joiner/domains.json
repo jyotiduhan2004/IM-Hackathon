@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "9 new-joiner questions across 3 domains (buyer-experience, seller-experience, ai-automation).",
+    "Each entry maps a concrete question a 6-month-new IndiaMART engineer might ask to the",
+    "wiki slug that should answer it. v1 assertion is purely structural:",
+    "  (a) the expected page exists on disk, and",
+    "  (b) it's reachable from wiki/home.md in <=2 wikilink hops.",
+    "v1 does NOT assert the page's TL;DR actually contains the answer — that's v2 synthesis",
+    "quality, coming after Tier A has been live for a week (per plans/sparkling-skipping-fiddle.md).",
+    "",
+    "expected_slug formats accepted:",
+    "  - bare slug  (e.g. 'mcat-buyer-spec-fill-analysis') — matches any wiki/**/<slug>.md",
+    "  - subpath    (e.g. 'topics/mcat-buyer-spec-fill-analysis') — exact wiki/<subpath>.md",
+    "",
+    "Today's expected baseline: the wiki on main has no content pages yet, so expect ~0/9.",
+    "Threshold rises as Tier A lands and topic pages materialize — tune via the",
+    "NEW_JOINER_BASELINE env var (defaults to 0; bump to 3 after Tier A, 7 for v2)."
+  ],
+  "buyer-experience": [
+    {
+      "question": "What does MCAT buyer spec fill mean?",
+      "expected_slug": "mcat-buyer-spec-fill-analysis"
+    },
+    {
+      "question": "How are Lens visual searches handled?",
+      "expected_slug": "indiamart-lens"
+    },
+    {
+      "question": "What's the MIM app buyer onboarding flow?",
+      "expected_slug": "mim-buyer-onboarding"
+    }
+  ],
+  "seller-experience": [
+    {
+      "question": "What's the MIM seller SOI journey?",
+      "expected_slug": "mim-seller-soi-journey"
+    },
+    {
+      "question": "What does the LMS dashboard show sellers?",
+      "expected_slug": "lms-dashboard"
+    },
+    {
+      "question": "How does seller KYC verification work?",
+      "expected_slug": "seller-kyc-verification"
+    }
+  ],
+  "ai-automation": [
+    {
+      "question": "What's the n8n LLM auditor?",
+      "expected_slug": "n8n-llm-auditor"
+    },
+    {
+      "question": "What's the Dialogflow intent pipeline?",
+      "expected_slug": "dialogflow-intent-pipeline"
+    },
+    {
+      "question": "What's the agentic buyer chatbot?",
+      "expected_slug": "agentic-buyer-chatbot"
+    }
+  ]
+}
