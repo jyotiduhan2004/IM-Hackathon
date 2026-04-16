@@ -122,6 +122,35 @@ def test_count_wiki_pages_by_type_empty(db_conn: psycopg.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Schema-level DEFAULT for `status`
+# ---------------------------------------------------------------------------
+
+
+def test_status_column_default_is_active(db_conn: psycopg.Connection) -> None:
+    """New INSERTs without an explicit `status` must land on 'active'.
+
+    Phase 0 runtime hardening: the schema DEFAULT was flipped from
+    'current' → 'active' so fresh rows no longer re-introduce the
+    legacy value the C1/C2 migrations emptied. We bypass
+    `upsert_wiki_page` (which fills in status client-side) and hit the
+    raw INSERT to prove the default lives where it matters — in
+    Postgres.
+    """
+    db_conn.execute(
+        """
+        INSERT INTO wiki_pages (slug, path, title, page_type)
+        VALUES (%s, %s, %s, %s)
+        """,
+        ("no-status-provided", "wiki/topics/no-status-provided.md", "NS", "topic"),
+    )
+    db_conn.commit()
+
+    row = repo.find_by_slug("no-status-provided")
+    assert row is not None
+    assert row["status"] == "active"
+
+
+# ---------------------------------------------------------------------------
 # page_type CHECK constraint
 # ---------------------------------------------------------------------------
 

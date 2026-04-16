@@ -257,13 +257,15 @@ def _replace_attachment_refs(body: str) -> str:
 def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None) -> str:
     """One-line provenance banner at the top of each page.
 
-    Renders: `N sources · last compiled YYYY-MM-DD · status: current`
+    Renders: `N sources · last compiled YYYY-MM-DD · status: active`
 
     All three fields always render — missing `sources` becomes "0 sources",
-    missing `status` becomes "current" (the default), missing `last_compiled`
-    becomes "last compiled unknown". Stub pages (no real compilation yet)
-    surface `last compiled stub` rather than a fake date so readers can tell
-    backfilled-but-empty pages apart from freshly compiled ones.
+    missing `status` becomes "active" (the North-Star default; flipped from
+    "current" in Phase 0 so new writes no longer inherit the legacy value),
+    missing `last_compiled` becomes "last compiled unknown". Stub pages (no
+    real compilation yet) surface `last compiled stub` rather than a fake
+    date so readers can tell backfilled-but-empty pages apart from freshly
+    compiled ones.
 
     YAML parsers coerce bare ISO timestamps into `datetime` objects, so the
     last_compiled normalizer handles strings and datetime/date alike.
@@ -282,7 +284,7 @@ def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None
 
     last_compiled_str = _format_last_compiled(fm.get("last_compiled"))
 
-    status = fm.get("status") or "current"
+    status = fm.get("status") or "active"
 
     noun = "source" if sources_count == 1 else "sources"
     line = f"{sources_count} {noun} · last compiled {last_compiled_str} · status: {status}"

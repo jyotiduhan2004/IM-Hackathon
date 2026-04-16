@@ -185,7 +185,11 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
                            'timeline', 'conflict',
                            'domain', 'glossary', 'decision', 'person',
                            'home', 'changes')),
-  status                TEXT NOT NULL DEFAULT 'current'
+  -- Default flipped from 'current' → 'active' on 2026-04-16 via
+  -- src/db/migrations/202604162000_wiki_pages_default_status_active.sql.
+  -- CHECK still accepts the legacy triplet so reads of un-migrated rows
+  -- keep working; new writes land on the North-Star value.
+  status                TEXT NOT NULL DEFAULT 'active'
                         CHECK (status IN
                           ('current', 'superseded', 'contested',
                            'active', 'archived')),

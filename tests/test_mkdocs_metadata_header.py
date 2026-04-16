@@ -91,9 +91,12 @@ def test_banner_preserves_stub_marker() -> None:
     assert "last compiled stub" in banner
 
 
-def test_banner_defaults_status_to_current() -> None:
+def test_banner_defaults_status_to_active() -> None:
+    # Phase 0 runtime hardening flipped the fallback from `current` →
+    # `active` so pages missing frontmatter `status:` no longer surface
+    # the legacy value the C1/C2 migrations just emptied.
     banner = _page_metadata_banner({})
-    assert "status: current" in banner
+    assert "status: active" in banner
 
 
 def test_banner_surfaces_non_current_status() -> None:

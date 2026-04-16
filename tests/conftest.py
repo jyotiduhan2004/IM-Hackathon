@@ -177,7 +177,7 @@ def _load_messages_ddl() -> str:
                                'timeline', 'conflict',
                                'domain', 'glossary', 'decision', 'person',
                                'home', 'changes')),
-      status                TEXT NOT NULL DEFAULT 'current'
+      status                TEXT NOT NULL DEFAULT 'active'
                             CHECK (status IN
                               ('current', 'superseded', 'contested',
                                'active', 'archived')),
