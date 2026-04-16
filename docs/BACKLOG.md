@@ -102,6 +102,12 @@ Delivers the Phase-3 end-state (queryable interface, human edits with conflict r
 
 ---
 
+## Phase 4 — Team-scale system
+
+Per the North Star / README, Phase 4 is the team-scale end-state (multi-user editing at scale, access controls, cross-list federation, etc.). **Not yet scoped — items will be added when the time comes.**
+
+---
+
 ## Research / reading list (digest, pull out concrete work)
 
 Referenced from multiple places; treat as context, not ship items.
