@@ -303,9 +303,15 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
             metrics.first_tool = name
 
         raw_output = str(obs.get("output") or "")
+        raw_input = str(obs.get("input") or "")
 
         # One hit is enough: the metric is friction rate, not frequency.
-        if not metrics.auto_corrected and AUTO_CORRECT_PAT.search(raw_output):
+        # Scan input AND output — PathAutoHealMiddleware appends the
+        # annotation to the ToolMessage output, but if the design ever
+        # flips to mutating the input args dict, the metric still works.
+        if not metrics.auto_corrected and (
+            AUTO_CORRECT_PAT.search(raw_output) or AUTO_CORRECT_PAT.search(raw_input)
+        ):
             metrics.auto_corrected = True
 
         # First verdict wins. Reviewer may run multiple times; we only
@@ -320,7 +326,6 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
 
         if name in FS_TOOLS:
             metrics.fs_calls += 1
-            raw_input = str(obs.get("input") or "")
             for fp in _FILE_PATH_PAT.findall(raw_input):
                 if fp.startswith("/"):
                     metrics.fs_absolute_calls += 1
@@ -620,8 +625,10 @@ def _fmt_verdicts(value: dict[str, int] | None) -> str:
     """Render verdict distribution compactly (e.g. ``p=4 r=1 b=0 n=2``).
 
     Short keys keep the column narrow; JSON output retains full keys.
+    Renders ``—`` when no traces have any verdict — distinguishes
+    "reviewer ran and produced 0 of each" from "reviewer hasn't landed yet".
     """
-    if not value:
+    if not value or sum(value.values()) == 0:
         return "—"
     parts = [
         f"{_VERDICT_SHORT_KEYS.get(k, k)}={value.get(k, 0)}" for k in (*REVIEWER_VERDICTS, "none")

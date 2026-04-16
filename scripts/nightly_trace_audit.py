@@ -182,12 +182,17 @@ def _extract_tier_a_signals(
             continue
         name = str(obs.get("name", ""))
         raw_output = str(obs.get("output") or "")
-        if not auto_corrected and AUTO_CORRECT_PAT.search(raw_output):
+        raw_input = str(obs.get("input") or "")
+        # Scan input AND output — middleware may put the annotation in
+        # either depending on PathAutoHealMiddleware's final shape.
+        if not auto_corrected and (
+            AUTO_CORRECT_PAT.search(raw_output) or AUTO_CORRECT_PAT.search(raw_input)
+        ):
             auto_corrected = True
         if reviewer_verdict is None:
-            match = REVIEWER_VERDICT_PAT.search(raw_output)
-            if match:
-                reviewer_verdict = match.group(1).lower()
+            verdict_match = REVIEWER_VERDICT_PAT.search(raw_output)
+            if verdict_match:
+                reviewer_verdict = verdict_match.group(1).lower()
         if name == "write_todos" and tool_index < TODOS_EARLY_WINDOW:
             wrote_todos_early = True
         tool_index += 1

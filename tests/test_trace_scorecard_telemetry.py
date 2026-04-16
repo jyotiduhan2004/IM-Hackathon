@@ -31,8 +31,10 @@ from scripts.trace_scorecard import _extract_trace_metrics  # noqa: E402
 from scripts.trace_scorecard import _fmt_verdicts  # noqa: E402
 
 
-def _mk_tool_obs(name: str, output: str = "", level: str = "DEFAULT") -> dict[str, Any]:
-    return {"type": "TOOL", "name": name, "output": output, "level": level}
+def _mk_tool_obs(
+    name: str, output: str = "", level: str = "DEFAULT", inputs: str = ""
+) -> dict[str, Any]:
+    return {"type": "TOOL", "name": name, "output": output, "level": level, "input": inputs}
 
 
 def _mk_trace(observations: list[dict[str, Any]], trace_id: str = "t0") -> dict[str, Any]:
@@ -81,6 +83,29 @@ def test_scorecard_extract_passive_defaults() -> None:
     assert m.wrote_todos_early is False
 
 
+def test_scorecard_extract_auto_correct_in_input_side() -> None:
+    """If middleware annotates the input dict (not output), still detected."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "read_file",
+                output="file contents",
+                inputs="auto_corrected_from='/.claude/raw/x.md'",
+            ),
+        ]
+    )
+    m = _extract_trace_metrics(trace)
+    assert m.auto_corrected is True
+
+
+def test_scorecard_fmt_verdicts_all_zero_renders_dash() -> None:
+    """All-zero counts mean reviewer hasn't run yet — render '—' not 'p=0…'."""
+    assert _fmt_verdicts({"pass": 0, "revise": 0, "block": 0, "none": 0}) == "—"
+    assert _fmt_verdicts({}) == "—"
+    assert _fmt_verdicts(None) == "—"
+    assert _fmt_verdicts({"pass": 1, "revise": 0, "block": 0, "none": 0}) != "—"
+
+
 def test_scorecard_extract_write_todos_outside_window() -> None:
     """write_todos at index 3 doesn't count as 'early'."""
     trace = _mk_trace(
@@ -93,6 +118,19 @@ def test_scorecard_extract_write_todos_outside_window() -> None:
     )
     m = _extract_trace_metrics(trace)
     assert m.wrote_todos_early is False
+
+
+def test_scorecard_extract_write_todos_at_boundary() -> None:
+    """Fencepost: write_todos at index 2 (last position inside window) counts."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs("ls"),
+            _mk_tool_obs("read_file"),
+            _mk_tool_obs("write_todos", "[]"),  # index 2 — boundary
+        ]
+    )
+    m = _extract_trace_metrics(trace)
+    assert m.wrote_todos_early is True
 
 
 def test_scorecard_extract_first_verdict_wins() -> None:
