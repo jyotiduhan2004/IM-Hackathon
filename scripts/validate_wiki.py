@@ -72,6 +72,8 @@ VALID_PAGE_TYPES = {
     "glossary",
     "decision",
     "person",
+    "home",
+    "changes",
 }
 CATEGORY_TO_TYPE = {
     "topics": "topic",
