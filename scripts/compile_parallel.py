@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import create_compiler  # noqa: E402
+from src.compile.compiler import run_compilation  # noqa: E402
 from src.compile.compiler import list_uncompiled_emails  # noqa: E402
 from src.compile.compiler import update_wiki_index  # noqa: E402
 from src.config import settings  # noqa: E402
@@ -112,14 +112,17 @@ async def _run_batch_async(
 
         click.echo(f"[batch {batch_num}/{total_batches}] starting ({len(batch)} emails)")
 
-        agent = create_compiler(model_name=model, raw_dir=raw_dir, wiki_dir=wiki_dir)
-
+        # Use run_compilation (not create_compiler + agent.invoke) so the
+        # _current_raw_paths ContextVar gets set — otherwise create_entities
+        # in this parallel path fails with "no raw_paths in batch context".
+        # run_compilation does view-root lifecycle + callbacks too.
         try:
-            # Run the sync .invoke in a thread so we don't block the event loop
             result = await asyncio.to_thread(
-                agent.invoke,
-                {"messages": [{"role": "user", "content": instruction}]},
-                {"recursion_limit": 150},
+                run_compilation,
+                instruction,
+                model_name=model,
+                raw_dir=raw_dir,
+                wiki_dir=wiki_dir,
             )
             last = result["messages"][-1]
             summary = str(getattr(last, "content", ""))[:150]
