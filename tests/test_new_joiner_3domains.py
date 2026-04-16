@@ -39,6 +39,11 @@ if str(REPO_ROOT) not in sys.path:
 # make this test carry an implicit DB dependency at import time. Keep in
 # sync with `scripts/audit.py::WIKILINK_RE` (canonical source).
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+# wiki/home.md (and other landing pages) use markdown-style links rather
+# than wikilinks for domain cards: `[Foo Domain](domains/foo.md)`. The
+# BFS has to follow these too, otherwise it finds zero outgoing edges
+# from home.md and reports every domain page as unreachable.
+_MD_LINK_RE = re.compile(r"\[(?:[^\]]+)\]\(([^)#]+\.md)\)")
 
 WIKI_DIR = REPO_ROOT / "wiki"
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "new_joiner" / "domains.json"
@@ -93,22 +98,43 @@ def _resolve_slug(wiki_dir: Path, slug: str) -> Path | None:
     return matches[0] if matches else None
 
 
-def _extract_wikilink_targets(path: Path) -> list[str]:
-    """Return every ``[[target]]`` found in a page (pipe-aliases dropped)."""
+def _extract_link_targets(path: Path) -> list[str]:
+    """Return every link target — wikilink AND markdown link — in a page.
+
+    Wikilink targets keep their original slug form (``foo`` or
+    ``topics/foo``). Markdown link targets are normalized to the same
+    slug form: the ``.md`` suffix is stripped, and a leading category
+    directory like ``domains/`` is preserved (``_resolve_slug`` handles
+    both bare and slashed forms downstream).
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
-    # audit.WIKILINK_RE's first group captures pre-pipe target text; strip to
-    # normalize whitespace consistent with other wikilink consumers.
-    return [target.strip() for target in WIKILINK_RE.findall(text)]
+    # WIKILINK_RE's first group captures pre-pipe target text; strip
+    # to normalize whitespace consistent with other wikilink consumers.
+    wikilinks = [target.strip() for target in WIKILINK_RE.findall(text)]
+    md_links = [_md_target_to_slug(href) for href in _MD_LINK_RE.findall(text)]
+    return wikilinks + md_links
+
+
+def _md_target_to_slug(href: str) -> str:
+    """`domains/foo.md` → `domains/foo`, `foo.md` → `foo`.
+
+    `_resolve_slug` accepts both forms; we just have to drop the ``.md``
+    suffix that markdown links carry but wikilinks don't.
+    """
+    return href.removesuffix(".md")
 
 
 def _reachable_from_home(wiki_dir: Path, target_slug: str, max_hops: int) -> bool:
-    """BFS from ``wiki/home.md`` following ``[[wikilinks]]`` up to ``max_hops``.
+    """BFS from ``wiki/home.md`` following both link styles up to ``max_hops``.
 
-    A page is reachable if ``_resolve_slug`` for the target matches any page
-    visited within the hop budget. ``home.md`` itself counts as hop 0.
+    Follows wikilinks (``[[foo]]``) and markdown links
+    (``[Foo](domains/foo.md)``); home.md uses the latter for domain
+    cards. A page is reachable if ``_resolve_slug`` for the target
+    matches any page visited within the hop budget. ``home.md`` itself
+    counts as hop 0.
     """
     home = wiki_dir / "home.md"
     if not home.exists():
@@ -125,7 +151,7 @@ def _reachable_from_home(wiki_dir: Path, target_slug: str, max_hops: int) -> boo
             return True
         if hops >= max_hops:
             continue
-        for link in _extract_wikilink_targets(page):
+        for link in _extract_link_targets(page):
             next_page = _resolve_slug(wiki_dir, link)
             if next_page is None:
                 continue
@@ -227,3 +253,25 @@ def test_new_joiner_baseline_threshold() -> None:
         f"in <=2 hops (threshold {threshold}). Wikilinks from home.md or intermediate hubs "
         f"may have been removed."
     )
+
+
+def test_reachable_from_home_follows_markdown_links(tmp_path: Path) -> None:
+    """BFS must follow markdown-style links — `home.md` uses `[Foo](path.md)`.
+
+    Regression for the original bug where _extract_link_targets only
+    returned ``[[wikilinks]]``: home's domain cards are markdown links,
+    so the BFS found zero outgoing edges and reported every domain
+    page as unreachable.
+    """
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "home.md").write_text(
+        "# Home\n\n- [Foo Domain](domains/foo.md)\n",
+        encoding="utf-8",
+    )
+    (wiki / "domains").mkdir()
+    (wiki / "domains" / "foo.md").write_text("# Foo\n", encoding="utf-8")
+
+    assert _reachable_from_home(wiki, "foo", max_hops=1) is True
+    # Same target via the slashed form also resolves.
+    assert _reachable_from_home(wiki, "domains/foo", max_hops=1) is True
