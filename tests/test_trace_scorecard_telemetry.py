@@ -259,10 +259,10 @@ def test_audit_extract_tier_a_signals_matches_scorecard() -> None:
         _mk_tool_obs("read_file", "auto_corrected_from=blah"),
         _mk_tool_obs("task", '{"verdict": "block"}'),
     ]
-    auto, verdict, todos = _extract_tier_a_signals(obs)
-    assert auto is True
-    assert verdict == "block"
-    assert todos is True
+    signals = _extract_tier_a_signals(obs)
+    assert signals["auto_corrected"] is True
+    assert signals["reviewer_verdict"] == "block"
+    assert signals["wrote_todos_early"] is True
 
 
 def test_audit_extract_tier_a_signals_input_side_auto_correct() -> None:
@@ -270,8 +270,8 @@ def test_audit_extract_tier_a_signals_input_side_auto_correct() -> None:
     obs = [
         _mk_tool_obs("read_file", output="contents", inputs="auto_corrected_from='/.claude/x.md'"),
     ]
-    auto, _verdict, _todos = _extract_tier_a_signals(obs)
-    assert auto is True
+    signals = _extract_tier_a_signals(obs)
+    assert signals["auto_corrected"] is True
 
 
 def test_audit_extract_tier_a_signals_skips_unnamed_tool_events() -> None:
@@ -285,9 +285,9 @@ def test_audit_extract_tier_a_signals_skips_unnamed_tool_events() -> None:
         {"type": "TOOL", "name": "", "output": "", "input": ""},  # unnamed
         _mk_tool_obs("write_todos", "[]"),  # would be index 2 if unnamed counted
     ]
-    _auto, _verdict, todos = _extract_tier_a_signals(obs)
+    signals = _extract_tier_a_signals(obs)
     # Unnamed events skipped → write_todos at index 0 → counted as early
-    assert todos is True
+    assert signals["wrote_todos_early"] is True
 
 
 def test_skip_null_name_tool_events_in_both_paths() -> None:
@@ -308,8 +308,8 @@ def test_skip_null_name_tool_events_in_both_paths() -> None:
     assert m.wrote_todos_early is True
     assert m.tool_calls == 1  # null-name observations not counted
     # Audit
-    _auto, _verdict, todos = _extract_tier_a_signals(obs)
-    assert todos is True
+    signals = _extract_tier_a_signals(obs)
+    assert signals["wrote_todos_early"] is True
 
 
 def test_audit_score_trace_populates_signals() -> None:

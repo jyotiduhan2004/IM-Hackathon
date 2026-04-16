@@ -44,6 +44,7 @@ if str(REPO_ROOT) not in sys.path:
 # reports stay in lockstep when PathAutoHealMiddleware / reviewer
 # subagent / todo-nudging land.
 from scripts.trace_scorecard import AUTO_CORRECT_PAT  # noqa: E402
+from scripts.trace_scorecard import GATE_REJECT_PAT  # noqa: E402
 from scripts.trace_scorecard import REVIEWER_VERDICT_PAT  # noqa: E402
 from scripts.trace_scorecard import REVIEWER_VERDICTS  # noqa: E402
 from scripts.trace_scorecard import TODOS_EARLY_WINDOW  # noqa: E402
@@ -78,6 +79,10 @@ class TraceRubric(TypedDict):
     auto_corrected: bool
     reviewer_verdict: str | None
     wrote_todos_early: bool
+    # D1 gate middleware signals (2026-04-16).
+    cmw_calls: int
+    cmw_rejected_calls: int
+    cmw_had_accepted: bool
 
 
 def _cli_env() -> dict[str, str]:
@@ -167,18 +172,37 @@ def _extract_tool_seq(observations: list[dict[str, Any]]) -> list[str]:
     return [o.get("name") or "?" for o in observations if o.get("type") == "TOOL"]
 
 
+class TierASignals(TypedDict):
+    """Passive telemetry signals extracted from a trace's observations.
+
+    `auto_corrected` / `reviewer_verdict` / `wrote_todos_early` were
+    the original Tier A shape. D1 (2026-04-16) added the
+    `cmw_*` fields for the check_my_work gate middleware.
+    """
+
+    auto_corrected: bool
+    reviewer_verdict: str | None
+    wrote_todos_early: bool
+    cmw_calls: int
+    cmw_rejected_calls: int
+    cmw_had_accepted: bool
+
+
 def _extract_tier_a_signals(
     observations: list[dict[str, Any]],
-) -> tuple[bool, str | None, bool]:
-    """Scan TOOL observations for Tier A telemetry.
+) -> TierASignals:
+    """Scan TOOL observations for Tier A + D1 telemetry.
 
-    Returns ``(auto_corrected, reviewer_verdict, wrote_todos_early)``.
-    Passive: all three stay at "feature off" values when the
-    corresponding middleware / subagent hasn't landed yet.
+    Passive: every signal stays at its "feature off" value when the
+    corresponding middleware / subagent hasn't landed yet — callers
+    can always read every key.
     """
     auto_corrected = False
     reviewer_verdict: str | None = None
     wrote_todos_early = False
+    cmw_calls = 0
+    cmw_rejected_calls = 0
+    cmw_had_accepted = False
     tool_index = 0
     for obs in observations:
         if obs.get("type") != "TOOL":
@@ -207,8 +231,21 @@ def _extract_tier_a_signals(
                 reviewer_verdict = verdict_match.group(1).lower()
         if name == "write_todos" and tool_index < TODOS_EARLY_WINDOW:
             wrote_todos_early = True
+        if name == "check_my_work":
+            cmw_calls += 1
+            if GATE_REJECT_PAT.search(raw_output):
+                cmw_rejected_calls += 1
+            else:
+                cmw_had_accepted = True
         tool_index += 1
-    return auto_corrected, reviewer_verdict, wrote_todos_early
+    return {
+        "auto_corrected": auto_corrected,
+        "reviewer_verdict": reviewer_verdict,
+        "wrote_todos_early": wrote_todos_early,
+        "cmw_calls": cmw_calls,
+        "cmw_rejected_calls": cmw_rejected_calls,
+        "cmw_had_accepted": cmw_had_accepted,
+    }
 
 
 def _scan_output_issues(output_text: str) -> list[str]:
@@ -318,6 +355,9 @@ def _score_trace(
             auto_corrected=False,
             reviewer_verdict=None,
             wrote_todos_early=False,
+            cmw_calls=0,
+            cmw_rejected_calls=0,
+            cmw_had_accepted=False,
         )
     body = trace.get("body") or trace
     metadata = body.get("metadata") or {}
@@ -327,7 +367,7 @@ def _score_trace(
     err_obs_count = sum(1 for o in observations if o.get("level") == "ERROR")
     output_issues = _scan_output_issues(output_text)
     tool_issues, issue_counts = _scan_tool_issues(observations, tool_seq)
-    auto_corrected, reviewer_verdict, wrote_todos_early = _extract_tier_a_signals(observations)
+    tier_a = _extract_tier_a_signals(observations)
     grade = _grade(
         output_text=output_text,
         tool_calls=len(tool_seq),
@@ -347,9 +387,12 @@ def _score_trace(
         model=metadata.get("compile_model"),
         thread_id=metadata.get("compile_thread_id"),
         run_id=metadata.get("compile_run_id"),
-        auto_corrected=auto_corrected,
-        reviewer_verdict=reviewer_verdict,
-        wrote_todos_early=wrote_todos_early,
+        auto_corrected=tier_a["auto_corrected"],
+        reviewer_verdict=tier_a["reviewer_verdict"],
+        wrote_todos_early=tier_a["wrote_todos_early"],
+        cmw_calls=tier_a["cmw_calls"],
+        cmw_rejected_calls=tier_a["cmw_rejected_calls"],
+        cmw_had_accepted=tier_a["cmw_had_accepted"],
     )
 
 
@@ -375,6 +418,9 @@ def _summarize(
     auto_corrected_n = 0
     verdicts_dist: dict[str, int] = dict.fromkeys((*REVIEWER_VERDICTS, "none"), 0)
     todos_early_n = 0
+    cmw_total_calls = 0
+    cmw_rejected = 0
+    cmw_accepted_traces = 0
     for r in rubrics:
         grades[r["grade"]] = grades.get(r["grade"], 0) + 1
         for issue in r["issues"]:
@@ -389,7 +435,12 @@ def _summarize(
         verdicts_dist[verdict_key] += 1
         if r.get("wrote_todos_early"):
             todos_early_n += 1
+        cmw_total_calls += int(r.get("cmw_calls", 0) or 0)
+        cmw_rejected += int(r.get("cmw_rejected_calls", 0) or 0)
+        if r.get("cmw_had_accepted"):
+            cmw_accepted_traces += 1
     total = len(rubrics) or 1  # avoid div-by-zero for the rate fields
+    premature_rate = (cmw_rejected / cmw_total_calls) if cmw_total_calls else 0.0
     return {
         "grades": dict(sorted(grades.items())),
         "common_issues": dict(sorted(common_issues.items(), key=lambda kv: -kv[1])),
@@ -399,6 +450,8 @@ def _summarize(
         "todo_adoption_rate": todos_early_n / total,
         "pages_migrated_per_run": pages_migrated_per_run,
         "migration_inflight_pct": migration_inflight_pct,
+        "premature_check_my_work_attempt_rate": premature_rate,
+        "first_accepted_check_my_work_rate": cmw_accepted_traces / total,
     }
 
 

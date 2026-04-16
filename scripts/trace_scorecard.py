@@ -140,6 +140,15 @@ class TraceMetrics:
     auto_corrected: bool = False
     reviewer_verdict: str | None = None
     wrote_todos_early: bool = False
+    # check_my_work gate middleware (D1). `cmw_calls` counts all
+    # `check_my_work` tool calls in the trace; `cmw_rejected_calls`
+    # counts the subset whose ToolMessage was the gate's synthetic
+    # rejection; `cmw_had_accepted` is True when the trace had at
+    # least one NOT-rejected call (the happy path — agent wrote
+    # content, then ran the critique successfully).
+    cmw_calls: int = 0
+    cmw_rejected_calls: int = 0
+    cmw_had_accepted: bool = False
 
 
 @dataclass
@@ -170,7 +179,27 @@ class ModelAggregate:
     write_draft_page_calls: int = 0
     log_insight_calls: int = 0
     absolute_path_rate: float = 0.0
+    # NEW HEADLINE metric (D1). Join-based, answers: "did the compile
+    # actually produce a content-type page citing this email?"
+    # Populated via messages JOIN message_touched_pages JOIN wiki_pages
+    # filtered by content-type page_type. Rendered as "-" when the
+    # touched-pages table is missing / empty so the scorecard still runs.
+    content_page_citation_rate: float | None = None
+    # DEPRECATED: kept for 2 weeks so dashboards don't regress on the
+    # day this lands. Supplanted by premature_check_my_work_attempt_rate
+    # (below), which measures the actual thing we care about (agent
+    # calling check_my_work before any write) instead of the proxy
+    # (first tool in the trace).
     check_my_work_first_call_rate: float = 0.0
+    # NEW (D1). Share of check_my_work calls whose ToolMessage was the
+    # gate's synthetic rejection — tells us how often the agent tries
+    # to call it prematurely. High values = agent still confused; low
+    # values = agent learned the new ordering.
+    premature_check_my_work_attempt_rate: float = 0.0
+    # NEW (D1). Share of traces with at least one check_my_work call
+    # NOT rejected by the gate. This is the happy-path health metric:
+    # did the agent eventually write something and then validate it?
+    first_accepted_check_my_work_rate: float = 0.0
     traces_included: int = 0
     # auto_correction_rate should trend DOWN as the LLM internalizes
     # the chroot — it's a friction metric, not a health metric.
@@ -338,6 +367,16 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
             metrics.write_draft_page_calls += 1
         elif name == "log_insight":
             metrics.log_insight_calls += 1
+        elif name == "check_my_work":
+            metrics.cmw_calls += 1
+            # The gate rejects premature calls with a synthetic ToolMessage
+            # carrying GATE_REJECT_MESSAGE. Anything else (including the
+            # normal "clean" / "blocked" critique result) counts as
+            # "accepted" — the gate let the call through.
+            if GATE_REJECT_PAT.search(raw_output):
+                metrics.cmw_rejected_calls += 1
+            else:
+                metrics.cmw_had_accepted = True
 
     # Traces sometimes carry a top-level error string outside the
     # observations (LiteLLM proxy failures before any tool call
@@ -487,6 +526,85 @@ def _migration_inflight_pct() -> float | None:
     return float(row["legacy"]) / float(row["total"])
 
 
+# Page types that count as "real content" for the citation-rate metric.
+# `entity` and `person` pages are explicitly excluded — the agent has a
+# bad habit of citing an email in an entity page's `sources:` list
+# without actually synthesizing topic/system/policy content from it.
+# That's the exact failure the headline metric is designed to catch.
+_CONTENT_PAGE_TYPES: frozenset[str] = frozenset(
+    {"topic", "system", "policy", "decision", "timeline", "conflict"}
+)
+
+
+def _content_page_citation_rate_by_model(
+    since: datetime,
+) -> dict[str, float | None]:
+    """Return ``{model: rate}`` + an ``'all'`` aggregate.
+
+    The "rate" is: of successful compile attempts (``outcome =
+    'compiled'``) for that model, what fraction had the message cited
+    in at least one content-type wiki page? The metric answers: "did
+    the agent actually produce real synthesis for this email, or did
+    it just write an entity stub and call it done?"
+
+    On a missing table or DB error, returns an empty dict — callers
+    render ``-`` so the scorecard stays runnable. This matches the
+    pattern for `_trivial_skip_rate` (Unit 9 rollout resilience).
+    """
+    # psycopg3 needs `= ANY(%s)` with a list parameter — `IN %s` with
+    # a tuple only works through the legacy pyformat-list fork.
+    # Sorted for deterministic query plans.
+    page_types = sorted(_CONTENT_PAGE_TYPES)
+    sql = """
+        WITH windowed_compiled AS (
+          SELECT DISTINCT ca.message_id, ca.compile_model
+            FROM compile_attempts ca
+           WHERE ca.attempted_at >= %(since)s
+             AND ca.outcome = 'compiled'
+        ),
+        with_content_page AS (
+          SELECT DISTINCT wc.message_id, wc.compile_model
+            FROM windowed_compiled wc
+            JOIN message_touched_pages mtp ON mtp.message_id = wc.message_id
+            JOIN wiki_pages wp               ON wp.page_id    = mtp.page_id
+           WHERE wp.page_type = ANY(%(page_types)s)
+        )
+        SELECT
+          COALESCE(wc.compile_model, 'unknown') AS model,
+          COUNT(*)                              AS compiled_total,
+          COUNT(cp.message_id)                  AS with_content_page
+          FROM windowed_compiled wc
+     LEFT JOIN with_content_page cp USING (message_id, compile_model)
+         GROUP BY 1
+    """
+    try:
+        with connect() as conn:
+            raw_rows = conn.execute(sql, {"since": since, "page_types": page_types}).fetchall()
+    except psycopg.Error as exc:
+        # Missing table / column → return empty so callers render "-"
+        # instead of crashing. Codepath is important during rollouts
+        # where the schema lags the script.
+        logger.warning("content_page_citation_rate_failed", error=str(exc))
+        return {}
+
+    rows = cast("list[dict[str, Any]]", raw_rows)
+    if not rows:
+        return {}
+
+    result: dict[str, float | None] = {}
+    total_compiled = 0
+    total_with_page = 0
+    for row in rows:
+        model = str(row["model"])
+        compiled = int(row["compiled_total"] or 0)
+        with_page = int(row["with_content_page"] or 0)
+        result[model] = with_page / compiled if compiled else None
+        total_compiled += compiled
+        total_with_page += with_page
+    result["all"] = total_with_page / total_compiled if total_compiled else None
+    return result
+
+
 def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tuple[str, str], str]:
     """Map ``(run_id, thread_id) → trace_id`` for every run in scope.
 
@@ -558,6 +676,7 @@ def _fetch_trace_metrics(
 def _aggregate(
     attempts: list[Attempt],
     batch_metrics: dict[tuple[str, str], TraceMetrics],
+    citation_rate_by_model: dict[str, float | None] | None = None,
 ) -> list[ModelAggregate]:
     """Build one scorecard row per model + an "all" aggregate.
 
@@ -566,6 +685,7 @@ def _aggregate(
     trace metrics ONCE per batch to avoid inflating tool-call totals
     when one thread happens to have several messages.
     """
+    citation_rate_by_model = citation_rate_by_model or {}
     # Group attempts by model so per-model counters are cheap.
     attempts_by_model: dict[str, list[Attempt]] = defaultdict(list)
     for a in attempts:
@@ -595,12 +715,18 @@ def _aggregate(
             model_attempts = attempts_by_model[name]
             traces = [batch_metrics[k] for k in batches_by_model[name] if k in batch_metrics]
 
-        rows.append(_build_row(name, model_attempts, traces))
+        rows.append(_build_row(name, model_attempts, traces, citation_rate_by_model))
     return rows
 
 
-def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) -> ModelAggregate:
+def _build_row(
+    model: str,
+    attempts: list[Attempt],
+    traces: list[TraceMetrics],
+    citation_rate_by_model: dict[str, float | None] | None = None,
+) -> ModelAggregate:
     """Compute one scorecard row from a slice of attempts + traces."""
+    citation_rate_by_model = citation_rate_by_model or {}
     total = len(attempts)
     succeeded = sum(1 for a in attempts if a.outcome == "compiled")
     failed = sum(1 for a in attempts if a.outcome in {"failed", "timeout"})
@@ -635,6 +761,16 @@ def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) 
     cmw_first = sum(1 for t in traces if t.first_tool == "check_my_work")
     cmw_first_rate = cmw_first / len(traces) if traces else 0.0
 
+    # D1 metrics. Denominator for `premature_rate` is the number of
+    # check_my_work CALLS (not traces) so batches with multiple calls
+    # contribute proportionally. `first_accepted_rate` uses traces as
+    # the denominator because it's a per-batch health signal.
+    cmw_total_calls = sum(t.cmw_calls for t in traces)
+    cmw_rejected = sum(t.cmw_rejected_calls for t in traces)
+    premature_rate = cmw_rejected / cmw_total_calls if cmw_total_calls else 0.0
+    cmw_accepted_traces = sum(1 for t in traces if t.cmw_had_accepted)
+    first_accepted_rate = cmw_accepted_traces / len(traces) if traces else 0.0
+
     # Rates are over traces (not attempts) because the signals live in
     # observations, one per batch — symmetric with recursion_timeout_rate.
     auto_corrected_count = sum(1 for t in traces if t.auto_corrected)
@@ -662,7 +798,10 @@ def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) 
         write_draft_page_calls=draft_calls,
         log_insight_calls=insight_calls,
         absolute_path_rate=abs_path_rate,
+        content_page_citation_rate=citation_rate_by_model.get(model),
         check_my_work_first_call_rate=cmw_first_rate,
+        premature_check_my_work_attempt_rate=premature_rate,
+        first_accepted_check_my_work_rate=first_accepted_rate,
         traces_included=len(traces),
         auto_correction_rate=auto_correction_rate,
         reviewer_verdicts_dist=verdicts_dist,
@@ -673,6 +812,18 @@ def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) 
 def _fmt_pct(value: float | None) -> str:
     if value is None:
         return "—"
+    return f"{value * 100:.1f}%"
+
+
+def _fmt_pct_dash(value: float | None) -> str:
+    """Like `_fmt_pct` but renders ``-`` (not em-dash) when None.
+
+    Used for metrics backed by tables whose population lags the
+    script's rollout — renders "data unavailable" distinctly from
+    "data is 0%". `-` is machine-parseable; the em-dash is not.
+    """
+    if value is None:
+        return "-"
     return f"{value * 100:.1f}%"
 
 
@@ -702,8 +853,15 @@ def _fmt_verdicts(value: dict[str, int] | None) -> str:
     return " ".join(parts)
 
 
-_TABLE_COLUMNS: list[tuple[str, str]] = [
+# Third tuple element (when present) overrides the header text — used to
+# suffix deprecated columns with "(deprecated)". "pct_dash" renders "-"
+# (not "—") when the underlying value is None, to flag "data unavailable"
+# vs "data is 0%". Distinction matters for content_page_citation_rate
+# during schema rollouts.
+_TABLE_COLUMNS: list[tuple[str, ...]] = [
     ("model", "str"),
+    # HEADLINE metric first — the one we actually steer by.
+    ("content_page_citation_rate", "pct_dash"),
     ("attempts", "num"),
     ("successes", "num"),
     ("failures", "num"),
@@ -716,11 +874,25 @@ _TABLE_COLUMNS: list[tuple[str, str]] = [
     ("write_draft_page_calls", "num"),
     ("log_insight_calls", "num"),
     ("absolute_path_rate", "pct"),
-    ("check_my_work_first_call_rate", "pct"),
+    # D1 gate metrics. `premature_...` should trend DOWN (agent learns);
+    # `first_accepted_...` should trend UP (agent calls it correctly).
+    ("premature_check_my_work_attempt_rate", "pct"),
+    ("first_accepted_check_my_work_rate", "pct"),
+    # Kept for 2 weeks so dashboards don't regress the day this lands.
+    (
+        "check_my_work_first_call_rate",
+        "pct",
+        "check_my_work_first_call_rate (deprecated)",
+    ),
     ("auto_correction_rate", "pct"),
     ("reviewer_verdicts_dist", "dist"),
     ("todo_adoption_rate", "pct"),
 ]
+
+
+def _column_header(column: tuple[str, ...]) -> str:
+    """Return the rendered header — third tuple element wins when present."""
+    return column[2] if len(column) >= 3 else column[0]
 
 
 def _render_markdown(
@@ -730,7 +902,7 @@ def _render_markdown(
     migration_inflight_pct: float | None,
 ) -> str:
     """Pretty-print the scorecard as a markdown table + summary line."""
-    headers = [c[0] for c in _TABLE_COLUMNS]
+    headers = [_column_header(c) for c in _TABLE_COLUMNS]
     lines = [
         "| " + " | ".join(headers) + " |",
         "|" + "|".join(["---"] * len(headers)) + "|",
@@ -738,12 +910,15 @@ def _render_markdown(
     for row in rows:
         cells: list[str] = []
         row_dict = asdict(row)
-        for key, kind in _TABLE_COLUMNS:
+        for column in _TABLE_COLUMNS:
+            key, kind = column[0], column[1]
             value = row_dict[key]
             if kind == "str":
                 cells.append(str(value))
             elif kind == "pct":
                 cells.append(_fmt_pct(value))
+            elif kind == "pct_dash":
+                cells.append(_fmt_pct_dash(value))
             elif kind == "dist":
                 cells.append(_fmt_verdicts(value))
             else:
@@ -780,7 +955,8 @@ def main(since: str, out_path: Path | None) -> None:
     logger.info("attempts_loaded", count=len(attempts))
 
     batch_metrics = _fetch_trace_metrics(attempts, env)
-    rows = _aggregate(attempts, batch_metrics)
+    citation_rate_by_model = _content_page_citation_rate_by_model(cutoff)
+    rows = _aggregate(attempts, batch_metrics, citation_rate_by_model)
     trivial_rate = _trivial_skip_rate(cutoff)
     migrated = _pages_migrated_per_run(cutoff)
     inflight_pct = _migration_inflight_pct()

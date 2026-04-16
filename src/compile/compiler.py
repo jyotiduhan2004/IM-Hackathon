@@ -2074,6 +2074,12 @@ def create_compiler(
     # The coordinator owns the compile queue and already passes the batch file
     # list in the user instruction. Letting the agent browse the whole queue
     # was pure context tax in Langfuse traces.
+    # Hard gate on `check_my_work`: live traces show the agent calls it
+    # before writing anything in 59-78% of batches, which makes the
+    # critique tool useless. The middleware short-circuits the tool when
+    # no content-page write has succeeded yet in this session.
+    from src.compile.middleware import CheckMyWorkGateMiddleware
+
     return create_deep_agent(
         model=model,
         tools=[
@@ -2091,6 +2097,7 @@ def create_compiler(
         ],
         system_prompt=system_prompt,
         backend=backend,
+        middleware=[CheckMyWorkGateMiddleware()],
     )
 
 
