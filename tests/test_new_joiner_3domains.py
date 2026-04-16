@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -33,7 +34,11 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.audit import WIKILINK_RE  # noqa: E402 — canonical wikilink pattern
+# Inline the wikilink pattern instead of importing from scripts.audit —
+# that module has top-level `src.config` / `src.db.messages` imports that
+# make this test carry an implicit DB dependency at import time. Keep in
+# sync with `scripts/audit.py::WIKILINK_RE` (canonical source).
+WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
 WIKI_DIR = REPO_ROOT / "wiki"
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "new_joiner" / "domains.json"
@@ -171,6 +176,8 @@ def test_new_joiner_question(q: Question) -> None:
             f"page for slug {q.expected_slug!r} exists but is not reachable from "
             f"wiki/home.md in <=2 hops (question: {q.question!r}, domain={q.domain})"
         )
+    # Both conditions hold: page exists on disk AND is reachable ≤2 hops from home.
+    assert page_exists and reachable
 
 
 def _baseline_threshold() -> int:
