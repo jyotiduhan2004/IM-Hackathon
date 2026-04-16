@@ -435,15 +435,17 @@ def main(limit: int) -> None:
 
     recent = _list_recent_traces(limit)
     if not recent:
+        # Use `_summarize([])` so the empty-traces summary has the same
+        # key set as the populated case — downstream consumers can
+        # always look up rate fields without a presence check.
         payload: dict[str, Any] = {
             "window": _window_label(now, 0),
             "traces": [],
-            "summary": {
-                "grades": {},
-                "common_issues": {},
-                "pages_migrated_per_run": pages_migrated,
-                "migration_inflight_pct": inflight_pct,
-            },
+            "summary": _summarize(
+                [],
+                pages_migrated_per_run=pages_migrated,
+                migration_inflight_pct=inflight_pct,
+            ),
             "error": "langfuse unreachable or returned no traces",
         }
         out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

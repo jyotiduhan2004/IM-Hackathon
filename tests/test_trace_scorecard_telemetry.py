@@ -390,6 +390,24 @@ def test_audit_summarize_empty_list_safe() -> None:
     assert summary["migration_inflight_pct"] is None
 
 
+def test_audit_summarize_schema_stable_across_empty_and_populated() -> None:
+    """Empty-rubrics summary must have the same key set as populated.
+
+    Downstream consumers (dashboards, alerts) shouldn't have to do
+    presence checks based on whether traces existed in the window.
+    """
+    populated = _summarize(
+        [
+            _score_trace(
+                _mk_trace([_mk_tool_obs("ls")], trace_id="a"),
+                tool_call_median=1.0,
+            )
+        ]
+    )
+    empty = _summarize([])
+    assert populated.keys() == empty.keys()
+
+
 def test_audit_summarize_accepts_migration_metrics() -> None:
     """The audit summary surfaces the DB-derived migration metrics."""
     summary = _summarize(
