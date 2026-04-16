@@ -67,6 +67,22 @@ class TestLogInsightTool:
             suggested_action=None,
         )
 
+    def test_already_captured_category_accepted_by_validator(self) -> None:
+        # 'already_captured' marks substantive emails whose facts are
+        # already on the topic page — distinct from 'trivial_skip' which
+        # marks non-substantive emails (OOO, one-line confirmations).
+        with patch("src.db.insights.record", return_value=99) as record:
+            result = _invoke(
+                category="already_captured",
+                message=(
+                    "Email restates Q4 revenue figures already captured on "
+                    "[[revenue-q4-2026]] from thread-root message."
+                ),
+                email_path="raw/2026-04-15_q4_revenue_followup_xyz.md",
+            )
+        assert result == {"ok": True, "id": 99}
+        record.assert_called_once()
+
 
 class TestInsightsRepoListForRun:
     """list_for_run hits real SQL via the test-schema fixture — the previous
@@ -122,6 +138,23 @@ class TestInsightsRepoListForRun:
         first = insights_repo.record(run_id=run, category="tool_gap", message="one")
         second = insights_repo.record(run_id=run, category="tool_gap", message="two")
         assert insights_repo.max_id_for_run(run) == max(first, second)
+
+    def test_already_captured_insert_passes_db_check(self, db_conn: Any) -> None:
+        # Guard against schema-vs-code drift. If the test-schema CHECK
+        # constraint in conftest.py omits 'already_captured', this insert
+        # raises psycopg.errors.CheckViolation and the test fails loudly
+        # — exactly the failure mode that bit Cycle 1 for trivial_skip.
+        from src.db import compile_runs as runs_repo
+        from src.db import insights as insights_repo
+
+        run = runs_repo.start_run(model="test", notes="already_captured test")
+        new_id = insights_repo.record(
+            run_id=run,
+            category="already_captured",
+            message="Thread reply restates facts already on [[topic-page]].",
+            email_path="raw/2026-04-15_followup_abc.md",
+        )
+        assert new_id > 0
 
 
 class TestPromptContainsLogInsightSection:

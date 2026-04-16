@@ -1369,6 +1369,7 @@ _VALID_INSIGHT_CATEGORIES = frozenset(
         "supersession_doubt",
         "structure_suggestion",
         "trivial_skip",
+        "already_captured",
     }
 )
 
@@ -1389,8 +1390,22 @@ def log_insight(
 
     Args:
         category: One of 'topic_merge_candidate', 'question_for_human',
-            'prompt_ambiguity', 'tool_gap', 'supersession_doubt', or
-            'structure_suggestion'.
+            'prompt_ambiguity', 'tool_gap', 'supersession_doubt',
+            'structure_suggestion', 'trivial_skip', or 'already_captured'.
+
+            Note the semantic split between the two "no page delta"
+            categories:
+
+            - ``trivial_skip``: the email is **not substantive** — e.g.
+              a one-line confirmation ("Yes, please"), out-of-office
+              auto-reply, calendar ack. There's no content worth
+              capturing anywhere.
+            - ``already_captured``: the email **is substantive** (real
+              stats, decisions, dates), but every fact it carries is
+              already on the existing topic page — typically because
+              a prior message in the same thread was already compiled.
+              No new page delta needed, but the signal is different
+              from ``trivial_skip`` and we want to preserve it.
         message: 1-2 sentence observation.
         email_path: Optional raw email this is about (e.g.
             ``raw/2026-04-11_subject_abc.md``).

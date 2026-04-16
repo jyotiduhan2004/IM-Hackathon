@@ -284,12 +284,14 @@ CREATE TABLE IF NOT EXISTS compile_insights (
     'tool_gap',
     'supersession_doubt',
     'structure_suggestion',
-    -- 'trivial_skip' added 2026-04-16 to match
-    -- src/compile/compiler.py::_VALID_INSIGHT_CATEGORIES. Cycle 1 caught
-    -- this drift: agent correctly classified one-line confirmations /
-    -- OOO auto-replies as trivial-skip but DB CHECK rejected them,
-    -- failing the whole batch.
-    'trivial_skip'
+    -- 'trivial_skip' added 2026-04-16 (PR #126) — non-substantive emails
+    -- (one-line confirmations, OOO auto-replies). Drift caught by Cycle 1.
+    'trivial_skip',
+    -- 'already_captured' added 2026-04-17 (PR #128) — substantive emails
+    -- whose content is already merged into the existing topic page from a
+    -- prior thread message; agent should log this rather than force an
+    -- empty edit. Distinct semantics from 'trivial_skip'.
+    'already_captured'
   )),
   message text NOT NULL,
   email_path text,
