@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import cast
 
 import structlog
 import yaml
@@ -1624,8 +1625,7 @@ def create_entities(raw_paths: list[str], entities: list[dict[str, Any]]) -> dic
 
 # === Browse / patch / validate tools (north-star recovery) ===
 
-
-_WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
+from src.compile.categories import WIKI_CATEGORIES as _WIKI_CATEGORIES  # noqa: E402
 
 
 def _find_page_by_slug(slug: str, wiki_dir: str = "wiki") -> Path | None:
@@ -1683,8 +1683,12 @@ def _extract_h2_headings(body: str) -> list[str]:
 
 @tool
 def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
-    """Return a summary for a wiki page. Prefer this over `read_file` when
-    you only need to know what a page is about.
+    """Return a summary for a wiki page.
+
+    WHEN TO USE: when you need to know what a wiki page is about
+      before deciding whether to merge or create a new page.
+    WHEN NOT TO USE: don't call when you need the full page body —
+      use `read_file` (then `patch_page` for targeted writes) instead.
 
     Scans `wiki/<category>/<slug>.md` across every wiki category, parses
     the frontmatter, and returns the fields an agent actually needs to
@@ -1731,26 +1735,29 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
 
 
 @tool
-def get_thread_context(thread_id: str) -> dict[str, Any]:
-    """Return all messages in a thread in chronological order with short previews.
-    Use when merging a new email into an existing topic page that spans multiple
-    emails.
+def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
+    """Return chronological messages in a thread with short previews.
 
-    Queries the Postgres `messages` table for every row matching `thread_id`,
-    ordered by `date` ASC, and attaches a 200-char body preview pulled from
-    the raw markdown. Missing raw files degrade gracefully — the preview
-    is an empty string rather than an exception.
+    WHEN TO USE: when merging a new email into an existing topic page that
+      spans multiple emails — gives you the conversation arc cheaply.
+    WHEN NOT TO USE: don't call when you only need one message
+      (use the email's raw_path directly) or when the thread isn't
+      relevant to the current concept.
+
+    Queries Postgres `messages` for every row matching `thread_id`, ordered
+    by `date` ASC, and attaches a 200-char body preview from the raw
+    markdown. Missing raw files degrade gracefully (empty preview).
+    Caps at `limit` rows to avoid flooding agent context on long threads.
 
     Args:
         thread_id: Gmail thread identifier.
+        limit: Maximum rows to return. Default 50.
 
     Returns:
         ``{"thread_id": str, "messages": [{"message_id", "subject", "from_addr",
-        "date", "raw_path", "first_200_chars", "compile_state"}, ...]}``.
-        Empty list when the thread is unknown.
+        "date", "raw_path", "first_200_chars", "compile_state"}, ...],
+        "truncated": bool}``. Empty list when the thread is unknown.
     """
-    from typing import cast
-
     from src.db import connect
 
     with connect() as conn:
@@ -1760,10 +1767,13 @@ def get_thread_context(thread_id: str) -> dict[str, Any]:
               FROM messages
              WHERE thread_id = %s
              ORDER BY date ASC NULLS LAST, message_id ASC
+             LIMIT %s
             """,
-            (thread_id,),
+            (thread_id, limit + 1),
         ).fetchall()
     rows = cast(list[dict[str, Any]], raw_rows)
+    truncated = len(rows) > limit
+    rows = rows[:limit]
 
     messages: list[dict[str, Any]] = []
     for row in rows:
@@ -1790,7 +1800,7 @@ def get_thread_context(thread_id: str) -> dict[str, Any]:
             }
         )
 
-    return {"thread_id": thread_id, "messages": messages}
+    return {"thread_id": thread_id, "messages": messages, "truncated": truncated}
 
 
 @tool
@@ -1800,8 +1810,13 @@ def patch_page(
     new_content: str,
     wiki_dir: str = "wiki",
 ) -> dict[str, Any]:
-    """Section-aware mutation. Use this for targeted updates instead of
-    read_file + edit_file loops. Creates the section if missing.
+    """Section-aware page mutation.
+
+    WHEN TO USE: when you have a targeted edit to one H2 section of a page
+      (e.g. updating "Current state" with new info from a new email).
+    WHEN NOT TO USE: don't call for whole-page rewrites or new pages
+      (use write_file). Don't call when the change crosses sections —
+      do separate patch_page calls per section.
 
     Loads `wiki/<category>/<slug>.md`, finds the H2 whose text matches
     `section` (case-insensitive, trimmed), and replaces everything under
@@ -1861,8 +1876,13 @@ def validate_page_draft(
     page_type: str | None = None,
     wiki_dir: str = "wiki",
 ) -> dict[str, Any]:
-    """Sanity-check a draft BEFORE writing it. Use when you're about to
-    `write_file` a new page but your confidence is low.
+    """Sanity-check a draft BEFORE writing it.
+
+    WHEN TO USE: before `write_file` on a new page when you're not sure
+      it'll pass `check_my_work` — cheaper to fix now than to rebuild later.
+    WHEN NOT TO USE: don't call for edits to existing pages (use
+      `check_my_work` after the edit) or for trivial drafts where you're
+      certain the structure is right.
 
     Applies four cheap checks that catch the compiler's most frequent
     failure modes:

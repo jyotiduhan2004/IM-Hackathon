@@ -193,12 +193,13 @@ def _langfuse_env() -> dict[str, str]:
     return env
 
 
-def _run_langfuse(args: list[str], env: dict[str, str]) -> dict[str, Any] | None:
+def _run_langfuse(args: list[str], env: dict[str, str]) -> Any | None:
     """Run ``npx langfuse-cli ... --json`` with timeout + retry.
 
-    Returns the parsed JSON body or None on persistent failure;
-    callers decide how to handle the miss. Logs one warning per
-    retry so we can spot Langfuse flakes without flooding structlog.
+    Returns the parsed JSON body (dict for ``traces get``, list for
+    ``traces list``) or None on persistent failure; callers decide how to
+    handle the miss. Logs one warning per retry so we can spot Langfuse
+    flakes without flooding structlog.
     """
     last_err: str | None = None
     for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
@@ -220,7 +221,7 @@ def _run_langfuse(args: list[str], env: dict[str, str]) -> dict[str, Any] | None
                 logger.warning("langfuse_nonzero", args=args, attempt=attempt, rc=result.returncode)
             else:
                 try:
-                    return dict(json.loads(result.stdout))
+                    return json.loads(result.stdout)
                 except json.JSONDecodeError as exc:
                     last_err = f"parse: {exc}"
                     logger.warning(
@@ -398,7 +399,12 @@ def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tu
         )
         if payload is None:
             continue
-        items = payload.get("body", {}).get("data") or payload.get("data") or []
+        # Langfuse returns either a list at top level OR a dict wrapping
+        # it; handle both. `traces list` is the list-shaped case in v0.0.8+.
+        if isinstance(payload, list):
+            items = payload
+        else:
+            items = payload.get("body", {}).get("data") or payload.get("data") or []
         for item in items:
             md = item.get("metadata") or {}
             thread_id = md.get("compile_thread_id") or ""

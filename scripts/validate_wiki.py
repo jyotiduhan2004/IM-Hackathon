@@ -52,8 +52,27 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import settings  # noqa: E402
 
 REQUIRED_FIELDS = {"title", "page_type", "status"}
-VALID_STATUSES = {"current", "superseded", "contested"}
-VALID_PAGE_TYPES = {"topic", "entity", "system", "policy", "timeline", "conflict", "index"}
+# Legacy (current/contested) + North-Star (active/superseded/archived). Both
+# are accepted during the migration; the rename to active/archived ships in
+# Workstream D Slice 2.
+VALID_STATUSES = {"current", "superseded", "contested", "active", "archived"}
+# Legacy types + North-Star generated-page types (domain hubs, glossary,
+# decision stubs, person pages). Generated pages live outside CATEGORY_TO_TYPE
+# today, but listing them keeps the validator honest if/when the generators
+# emit pages into a categorised subdir.
+VALID_PAGE_TYPES = {
+    "topic",
+    "entity",
+    "system",
+    "policy",
+    "timeline",
+    "conflict",
+    "index",
+    "domain",
+    "glossary",
+    "decision",
+    "person",
+}
 CATEGORY_TO_TYPE = {
     "topics": "topic",
     "entities": "entity",

@@ -221,6 +221,11 @@ def mark_skipped(message_id: str, reason: str) -> int:
     query filters to 'pending'/'failed' only). Use for trivial-filter
     matches where we've decided not to spend an LLM call on the email.
 
+    State guard: only flips ``pending`` or ``failed`` rows. ``compiled``
+    and ``claimed`` rows are left alone — overwriting them would lose
+    real work or race with an in-flight batch. Caller can detect a
+    no-op via ``rowcount == 0``.
+
     ``reason`` is stashed in ``last_error`` — overloaded but avoids a
     schema change for a field only operators read.
     """
@@ -231,6 +236,7 @@ def mark_skipped(message_id: str, reason: str) -> int:
                SET compile_state = 'skipped',
                    last_error = %s
              WHERE message_id = %s
+               AND compile_state IN ('pending', 'failed')
             """,
             (reason, message_id),
         )

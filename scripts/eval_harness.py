@@ -3,8 +3,7 @@
 Loads tests/fixtures/north_star_golden.yaml (30 pinned cases), snapshots
 wiki quality metrics via ``scripts.wiki_quality_metrics.collect_metrics``,
 and optionally recompiles the 30 golden messages end-to-end so each PR
-gets a same-day diff against a fixed baseline. See unit 1 in
-``/Users/amtagrwl/.claude/plans/sparkling-skipping-fiddle.md``.
+gets a same-day diff against a fixed baseline.
 """
 
 from __future__ import annotations
@@ -120,6 +119,11 @@ def _count_pages_citing(wiki_dir: Path, raw_paths: list[str]) -> dict[str, int]:
     Cheap substring scan — not a full YAML parse — because we only care
     whether the path appears anywhere in the file. Mirrors what the
     compile coordinator's citation-based reconcile does.
+
+    Caveat: this includes entity pages, which list source emails in
+    ``sources:`` without extracting content. Per CLAUDE.md guardrails,
+    citation alone is not evidence of content extraction — a high
+    ``pages_citing_raw`` value can be inflated by entity stubs.
     """
     counts: dict[str, int] = dict.fromkeys(raw_paths, 0)
     if not wiki_dir.exists() or not raw_paths:
@@ -158,7 +162,7 @@ def _snapshot(cases: list[dict[str, Any]], wiki_dir: Path) -> dict[str, Any]:
                 "thread_id": st.get("thread_id"),
                 "subject": st.get("subject"),
                 "raw_path": rp,
-                "wiki_metrics_before": {
+                "wiki_metrics": {
                     "compile_state": st.get("compile_state"),
                     "pages_citing_raw": cite_counts.get(rp, 0) if rp else 0,
                 },
@@ -351,7 +355,7 @@ def _sample_page_slugs(wiki_dir: Path, n: int) -> list[str]:
     candidates = [
         f"{p.parent.name}/{p.stem}"
         for p in wiki_dir.rglob("*.md")
-        if p.name not in {"index.md", "home.md", "about.md"}
+        if p.name not in {"index.md", "home.md", "about.md", "log.md"}
     ]
     if not candidates:
         return []

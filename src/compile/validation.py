@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from src.compile.categories import WIKI_CATEGORIES
 from src.utils import extract_frontmatter
 
 # Matches `tl;dr` or `tldr` as a standalone token (case-insensitive). Covers
@@ -148,8 +149,7 @@ def check_likely_duplicate(
     if not wiki_path.exists():
         return None
 
-    categories = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
-    for category in categories:
+    for category in WIKI_CATEGORIES:
         cat_dir = wiki_path / category
         if not cat_dir.exists():
             continue
