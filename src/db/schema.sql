@@ -176,12 +176,18 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
   slug                  TEXT NOT NULL UNIQUE,
   path                  TEXT NOT NULL UNIQUE,
   title                 TEXT NOT NULL,
+  -- Legacy + North-Star ontology coexist during migration; widened on
+  -- 2026-04-16 via src/db/migrations/202604161200_wiki_pages_new_ontology.sql.
+  -- See docs/NORTH-STAR.md.
   page_type             TEXT NOT NULL
                         CHECK (page_type IN
                           ('topic', 'entity', 'system', 'policy',
-                           'timeline', 'conflict')),
+                           'timeline', 'conflict',
+                           'domain', 'glossary', 'decision', 'person')),
   status                TEXT NOT NULL DEFAULT 'current'
-                        CHECK (status IN ('current', 'superseded', 'contested')),
+                        CHECK (status IN
+                          ('current', 'superseded', 'contested',
+                           'active', 'archived')),
   canonical_user_email  TEXT REFERENCES users(email),
   last_compiled_at      TIMESTAMPTZ,
   update_count          INT NOT NULL DEFAULT 0,

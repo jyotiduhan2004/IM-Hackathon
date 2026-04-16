@@ -170,13 +170,16 @@ def _load_messages_ddl() -> str:
       slug                  TEXT NOT NULL UNIQUE,
       path                  TEXT NOT NULL UNIQUE,
       title                 TEXT NOT NULL,
+      -- Mirrors post-migration shape in src/db/schema.sql.
       page_type             TEXT NOT NULL
                             CHECK (page_type IN
                               ('topic', 'entity', 'system', 'policy',
-                               'timeline', 'conflict')),
+                               'timeline', 'conflict',
+                               'domain', 'glossary', 'decision', 'person')),
       status                TEXT NOT NULL DEFAULT 'current'
                             CHECK (status IN
-                              ('current', 'superseded', 'contested')),
+                              ('current', 'superseded', 'contested',
+                               'active', 'archived')),
       canonical_user_email  TEXT REFERENCES {TEST_SCHEMA}.users(email),
       last_compiled_at      TIMESTAMPTZ,
       update_count          INT NOT NULL DEFAULT 0,
