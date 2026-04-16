@@ -559,9 +559,15 @@ def _content_page_citation_rate_by_model(
     # message_id — when a message is compiled under two models (rare
     # but possible), the per-model row counts each attempt, but the
     # "all" row counts the message once.
+    # COALESCE `compile_model` inside the CTE so both sides of the
+    # `USING (message_id, compile_model)` join are NON-NULL. SQL treats
+    # `NULL = NULL` as UNKNOWN (not TRUE), so without this coalesce the
+    # LEFT JOIN would drop NULL-model rows entirely — losing any message
+    # whose attempt row has no model stamped (schema lag / legacy data).
     sql = """
         WITH windowed_compiled AS (
-          SELECT DISTINCT ca.message_id, ca.compile_model
+          SELECT DISTINCT ca.message_id,
+                          COALESCE(ca.compile_model, 'unknown') AS compile_model
             FROM compile_attempts ca
            WHERE ca.attempted_at >= %(since)s
              AND ca.outcome = 'compiled'
@@ -574,9 +580,9 @@ def _content_page_citation_rate_by_model(
            WHERE wp.page_type = ANY(%(page_types)s)
         )
         SELECT
-          wc.message_id                         AS message_id,
-          COALESCE(wc.compile_model, 'unknown') AS model,
-          (cp.message_id IS NOT NULL)           AS has_content_page
+          wc.message_id                 AS message_id,
+          wc.compile_model              AS model,
+          (cp.message_id IS NOT NULL)   AS has_content_page
           FROM windowed_compiled wc
      LEFT JOIN with_content_page cp USING (message_id, compile_model)
     """

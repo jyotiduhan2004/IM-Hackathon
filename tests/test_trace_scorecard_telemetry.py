@@ -41,6 +41,7 @@ from scripts.nightly_trace_audit import _summarize  # noqa: E402
 from scripts.trace_scorecard import Attempt  # noqa: E402
 from scripts.trace_scorecard import TraceMetrics  # noqa: E402
 from scripts.trace_scorecard import _build_row  # noqa: E402
+from scripts.trace_scorecard import _content_page_citation_rate_by_model  # noqa: E402
 from scripts.trace_scorecard import _extract_trace_metrics  # noqa: E402
 from scripts.trace_scorecard import _fmt_verdicts  # noqa: E402
 from scripts.trace_scorecard import _migration_inflight_pct  # noqa: E402
@@ -579,3 +580,79 @@ def test_migration_inflight_pct_matches_plan_example(db_conn: psycopg.Connection
     for i in range(3):
         _seed_wiki_page(db_conn, slug=f"new-{i}", page_type="domain", status="active")
     assert _migration_inflight_pct() == pytest.approx(0.7)
+
+
+# -------- content-page citation rate: NULL compile_model regression --------
+
+
+def _seed_attempt(
+    conn: psycopg.Connection,
+    *,
+    message_id: str,
+    model: str | None,
+    with_content_page: bool,
+) -> None:
+    """Insert one message + one compile attempt (optionally w/ content page).
+
+    `model=None` exercises the NULL-join path the CTE now coalesces on;
+    `with_content_page=True` also inserts a topic page and a touch row
+    so the LEFT JOIN should flag this message as cited.
+    """
+    conn.execute(
+        """
+        INSERT INTO messages (message_id, raw_path, thread_id, subject, from_address, date)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (message_id, f"raw/{message_id}.md", "t1", "subj", "a@b.c", datetime.now(UTC)),
+    )
+    conn.execute(
+        """
+        INSERT INTO compile_attempts (message_id, compile_model, outcome, attempted_at, finished_at)
+        VALUES (%s, %s, 'compiled', now(), now())
+        """,
+        (message_id, model),
+    )
+    if with_content_page:
+        row = conn.execute(
+            """
+            INSERT INTO wiki_pages (slug, path, title, page_type)
+            VALUES (%s, %s, %s, 'topic')
+            RETURNING page_id
+            """,
+            (f"topic-{message_id}", f"wiki/topics/{message_id}.md", f"Topic {message_id}"),
+        ).fetchone()
+        assert row is not None
+        conn.execute(
+            "INSERT INTO message_touched_pages (message_id, page_id) VALUES (%s, %s)",
+            (message_id, row["page_id"]),
+        )
+
+
+def test_content_page_citation_rate_handles_null_compile_model(
+    db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NULL `compile_model` must bucket into 'unknown', not get dropped.
+
+    Regression guard: before this fix the final `LEFT JOIN ... USING
+    (message_id, compile_model)` evaluated `NULL = NULL` as UNKNOWN,
+    dropping the row entirely and understating citation coverage.
+    Coalescing `compile_model` to 'unknown' inside `windowed_compiled`
+    makes both sides of the USING clause non-null → the join matches.
+    """
+    # `trace_scorecard` imported `connect` at module-load time, before
+    # conftest's autouse fixture rebound it. Rebind on the scorecard
+    # module directly so the SQL lands in the test schema.
+    import src.db as db_pkg
+
+    monkeypatch.setattr(trace_scorecard, "connect", db_pkg.connect)
+
+    _seed_attempt(db_conn, message_id="m_null_cited", model=None, with_content_page=True)
+    _seed_attempt(db_conn, message_id="m_null_nocited", model=None, with_content_page=False)
+    db_conn.commit()
+
+    since = datetime.now(UTC) - timedelta(hours=1)
+    result = _content_page_citation_rate_by_model(since)
+
+    assert "unknown" in result, f"NULL-model row dropped; got {result}"
+    assert result["unknown"] == pytest.approx(0.5)
+    assert result["all"] == pytest.approx(0.5)
