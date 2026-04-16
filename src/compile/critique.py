@@ -27,6 +27,7 @@ from pathlib import Path
 
 import yaml
 
+from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
 
 # Broken pages (unparseable frontmatter) count as touched when their mtime
@@ -78,13 +79,33 @@ def _relpath(path: Path, root: Path) -> str:
         return str(path)
 
 
-def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
-    """Return wiki pages whose frontmatter `sources:` cites this raw email.
+def _read_raw_thread_id(raw_path: str) -> str | None:
+    """Best-effort: return the raw email's `thread_id:` frontmatter value.
 
-    Matches by basename so the caller doesn't have to normalize the
-    "raw/" prefix — `raw/foo.md`, `./raw/foo.md`, and `foo.md` all hit.
+    Phase A U5 introduces `source_threads:` on wiki pages — pages may cite
+    via thread_id only (no `sources:`). So `find_touched_pages` needs the
+    raw email's thread_id to match those pages. Any failure to resolve
+    (missing file, corrupt frontmatter, no thread_id field) returns None
+    and the caller falls back to the legacy `sources:` basename match only.
+    """
+    try:
+        content = Path(raw_path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    thread_id = extract_frontmatter(content).get("thread_id")
+    return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
+    """Return wiki pages whose frontmatter cites this raw email.
+
+    Matches `sources:` by basename (legacy citation) OR `source_threads:` by
+    thread_id (Phase A U5 page-level citation). Either shape counts; the
+    caller doesn't have to normalize the "raw/" prefix since the match
+    compares basenames — `raw/foo.md`, `./raw/foo.md`, and `foo.md` all hit.
     """
     raw_basename = Path(raw_path).name
+    raw_thread_id = _read_raw_thread_id(raw_path)
     pages: list[Path] = []
     broken: list[Path] = []
     if not wiki_dir.exists():
@@ -120,13 +141,25 @@ def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
             continue
         if not isinstance(fm, dict):
             continue
+
+        matched = False
         sources = fm.get("sources") or []
-        if not isinstance(sources, list):
-            continue
-        for s in sources:
-            if isinstance(s, str) and Path(s).name == raw_basename:
-                pages.append(md)
-                break
+        if isinstance(sources, list):
+            for s in sources:
+                if isinstance(s, str) and Path(s).name == raw_basename:
+                    matched = True
+                    break
+
+        if not matched and raw_thread_id:
+            source_threads = fm.get("source_threads") or []
+            if isinstance(source_threads, list):
+                for t in source_threads:
+                    if isinstance(t, str) and t == raw_thread_id:
+                        matched = True
+                        break
+
+        if matched:
+            pages.append(md)
     # Recently-broken pages go to the front so their blockers are obvious
     # in the audit output even when they don't cite this raw email.
     return broken + pages

@@ -293,3 +293,125 @@ def test_hook_omits_pill_when_status_missing() -> None:
     meta = {"title": "T", "page_type": "topic"}
     out = on_page_markdown("# T\n\nBody.\n", page=_page("topics/t.md", meta), config={}, files=[])
     assert "ns-status" not in out
+
+
+# --- source_threads rendering (Phase A U5) -------------------------------
+
+
+def test_hook_renders_threads_block_when_source_threads_present(monkeypatch) -> None:
+    """Page with `source_threads:` only → render as 'Threads' block, not 'Sources'."""
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")  # force frontmatter path
+    meta = {
+        "title": "Thread-Only Topic",
+        "page_type": "topic",
+        "status": "active",
+        "last_compiled": "2026-04-13",
+        "source_threads": ["19b59cdc863ac109", "19aee0c7cc330376"],
+    }
+    body = "# Thread-Only Topic\n\nBody text.\n"
+    out = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    # The threads block uses a thread emoji + "Threads" summary.
+    assert "🧵 Threads (2)" in out
+    # Each thread renders as a short-id tag (first 12 chars).
+    assert "- Thread: `19b59cdc863a`" in out
+    assert "- Thread: `19aee0c7cc33`" in out
+    # Banner switches to "thread(s)" noun in the top-of-page stamp.
+    assert "2 threads · last compiled 2026-04-13 · status: active" in out
+
+
+def test_hook_prefers_source_threads_over_legacy_sources(monkeypatch) -> None:
+    """Dual-write during migration: render threads, not the raw email block."""
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+    meta = {
+        "title": "Dual-Write Topic",
+        "page_type": "topic",
+        "status": "active",
+        "last_compiled": "2026-04-13",
+        "sources": ["raw/2026-04-01_hello_abc.md"],
+        "source_threads": ["19b59cdc863ac109"],
+    }
+    body = "# Dual-Write Topic\n\nBody.\n"
+    out = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    # Threads block wins.
+    assert "🧵 Threads (1)" in out
+    # Banner noun matches.
+    assert "1 thread · last compiled" in out
+    # Sources block must not duplicate the output.
+    assert "📚 Sources" not in out
+
+
+def test_hook_falls_back_to_sources_when_source_threads_absent(monkeypatch) -> None:
+    """Legacy-only page (sources: only, no source_threads:) still renders sources."""
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+    meta = {
+        "title": "Legacy Topic",
+        "page_type": "topic",
+        "status": "active",
+        "last_compiled": "2026-04-13",
+        "sources": ["raw/2026-04-01_hello_abc.md"],
+    }
+    body = "# Legacy Topic\n\nBody.\n"
+    out = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    assert "📚 Sources (1)" in out
+    # Old-style banner noun.
+    assert "1 source · last compiled" in out
+    assert "🧵 Threads" not in out
+
+
+def test_hook_skips_threads_block_when_list_empty(monkeypatch) -> None:
+    """Empty `source_threads:` AND empty `sources:` → no block rendered."""
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+    meta = {
+        "title": "Empty Topic",
+        "page_type": "topic",
+        "status": "active",
+        "last_compiled": "2026-04-13",
+        "source_threads": [],
+    }
+    body = "# Empty Topic\n\nBody.\n"
+    out = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    assert "🧵 Threads" not in out
+    assert "📚 Sources" not in out
+
+
+def test_hook_threads_banner_noun_pluralises_correctly(monkeypatch) -> None:
+    """Singular 'thread' for 1, plural 'threads' for 0 / 2+."""
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+
+    def _banner_with(count: int) -> str:
+        meta = {
+            "title": "T",
+            "page_type": "topic",
+            "status": "active",
+            "source_threads": [f"abcdef{i:010x}" for i in range(count)],
+        }
+        return on_page_markdown(
+            "# T\n", page=_page("topics/t.md", meta), config={}, files=[]
+        )
+
+    assert "1 thread · " in _banner_with(1)
+    assert "2 threads · " in _banner_with(2)
+
+
+def test_hook_banner_idempotent_with_source_threads(monkeypatch) -> None:
+    """Re-running the hook must not stack the top-of-page banner.
+
+    Mirrors the existing sources-path idempotency guarantee (see
+    test_hook_is_idempotent_on_rerun) — the banner block re-check is the
+    only current idempotency contract. The Sources/Threads collapsible
+    block stacking on re-entry is an existing behavior (MkDocs doesn't
+    invoke the hook twice in practice) and outside U5 scope.
+    """
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "active",
+        "last_compiled": "2026-04-13",
+        "source_threads": ["19b59cdc863ac109"],
+    }
+    body = "# Topic\n\nBody.\n"
+    once = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
+    twice = on_page_markdown(once, page=_page("topics/t.md", meta), config={}, files=[])
+    # The banner must not double up (mirrors the sources-path contract).
+    assert twice.count("last compiled 2026-04-13") == 1

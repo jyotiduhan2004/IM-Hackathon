@@ -13,6 +13,8 @@ Checks (ERROR severity — exit code 1):
 - No duplicate bodies (after hashing minus last_compiled)
 - No "orphan body" where frontmatter was destroyed (only last_compiled present)
 - status is one of the allowed values
+- Each `source_threads:` entry is a plausible Gmail thread_id (16-char hex).
+  Malformed entries are errors regardless of flags.
 
 Checks (WARN severity — stderr only, no exit-code effect):
 - Entity page has `email:` in frontmatter (entity-missing-email)
@@ -29,6 +31,9 @@ Checks (WARN severity — stderr only, no exit-code effect):
   the eight north-star domains (domain-missing / domain-unknown). Tier A
   will teach the agent to emit this; until then every legacy page fires
   the warning so we can see progress.
+- Page has legacy `sources:` with no `source_threads:` (legacy-sources-only).
+  Phase A U6 backfills the new field; until then existing pages fire this
+  warning. Promoted to ERROR with `--strict-no-sources` once U6 completes.
 
 Usage:
     uv run python scripts/validate_wiki.py                          # report + exit 1 on errors
@@ -36,6 +41,7 @@ Usage:
     uv run python scripts/validate_wiki.py --list-bad               # print bad file paths (errors only)
     uv run python scripts/validate_wiki.py --strict-sections        # promote missing-section warnings to errors
     uv run python scripts/validate_wiki.py --strict-new-ontology    # promote legacy-shape warnings to errors
+    uv run python scripts/validate_wiki.py --strict-no-sources      # promote legacy-sources warnings to errors (post-U6)
 """
 
 from __future__ import annotations
@@ -185,6 +191,11 @@ except ImportError:  # pragma: no cover - fallback only
 
 _EXPECTED_DOMAINS_HINT = ", ".join(sorted(CANONICAL_DOMAINS))
 
+# Gmail thread_id is a 16-char lowercase hex string (see src/db/schema.sql
+# threads.thread_id — TEXT but every observed value matches this shape).
+# Used for validating `source_threads:` frontmatter entries on wiki pages.
+_THREAD_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
 
 class _DuplicateKeyLoader(yaml.SafeLoader):
     """PyYAML loader that raises on duplicate mapping keys.
@@ -301,6 +312,33 @@ def validate_page(path: Path) -> list[Error]:
             errors.append(
                 Error(path, "page has email: field but lives in systems/; move to entities/")
             )
+
+    # `source_threads:` — Phase A U5 page-level citation field. Replaces the
+    # per-message `sources:` list (which the agent used to destructively
+    # overwrite every batch). Each entry must be a 16-char hex Gmail
+    # thread_id; malformed entries are errors regardless of any flag since
+    # they represent concrete corruption, not ontology drift.
+    raw_threads = fm.get("source_threads")
+    if raw_threads is not None:
+        if not isinstance(raw_threads, list):
+            errors.append(
+                Error(path, f"source_threads must be a list, got {type(raw_threads).__name__}")
+            )
+        else:
+            bad: list[str] = []
+            for t in raw_threads:
+                if not isinstance(t, str) or not _THREAD_ID_RE.match(t):
+                    bad.append(repr(t))
+            if bad:
+                preview = ", ".join(bad[:3])
+                more = f" (+{len(bad) - 3} more)" if len(bad) > 3 else ""
+                errors.append(
+                    Error(
+                        path,
+                        f"source_threads has {len(bad)} invalid thread_id(s) "
+                        f"(expected 16-char hex): {preview}{more}",
+                    )
+                )
 
     # Body exists (empty body is suspicious)
     if not body.strip():
@@ -875,11 +913,60 @@ def check_legacy_shape(
     return errors, warnings
 
 
+def check_legacy_sources_only(
+    wiki_dir: Path, *, strict: bool = False
+) -> tuple[list[Error], list[ValidationWarning]]:
+    """Surface pages still citing via legacy `sources:` with no `source_threads:`.
+
+    Phase A introduces `source_threads:` as the page-level citation field
+    (one entry per Gmail thread, not per message) to stop the destructive
+    overwrite bug Cycle-2 surfaced. Per-message evidence moves to the
+    `message_touched_pages` catalog table. Until the U6 backfill migrates
+    existing pages, their `sources:` list is the only citation we have — so
+    we warn (not error) here to preserve the current viewer path.
+
+    `strict=True` (via `--strict-no-sources`) promotes the warning to an
+    error. Intended for the post-U6 enforcement gate, when every page
+    should have been migrated and stragglers indicate regression.
+
+    A page with BOTH fields silently uses `source_threads:` (new takes
+    precedence on the viewer too) and stays clean — useful during the
+    migration window when the agent dual-writes.
+    """
+    errors: list[Error] = []
+    warnings: list[ValidationWarning] = []
+    for category in CATEGORY_TO_TYPE:
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in sorted(cat_dir.glob("*.md")):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm, _ = _extract_frontmatter(content)
+            if not fm:
+                # Frontmatter corruption is already an ERROR in validate_page.
+                continue
+            sources = fm.get("sources")
+            has_sources = isinstance(sources, list) and len(sources) > 0
+            threads = fm.get("source_threads")
+            has_threads = isinstance(threads, list) and len(threads) > 0
+            if has_sources and not has_threads:
+                reason = "legacy sources: with no source_threads: — page needs source_threads backfill (see U6)"
+                if strict:
+                    errors.append(Error(path, f"[legacy-sources-only] {reason}"))
+                else:
+                    warnings.append(ValidationWarning(path, reason, "legacy-sources-only"))
+    return errors, warnings
+
+
 def run(
     wiki_dir: Path,
     *,
     strict_sections: bool = False,
     strict_new_ontology: bool = False,
+    strict_no_sources: bool = False,
 ) -> tuple[list[Error], list[ValidationWarning]]:
     errors: list[Error] = []
     for category in CATEGORY_TO_TYPE:
@@ -905,6 +992,9 @@ def run(
     legacy_errors, legacy_warnings = check_legacy_shape(wiki_dir, strict=strict_new_ontology)
     errors.extend(legacy_errors)
     warnings.extend(legacy_warnings)
+    sources_errors, sources_warnings = check_legacy_sources_only(wiki_dir, strict=strict_no_sources)
+    errors.extend(sources_errors)
+    warnings.extend(sources_warnings)
     return errors, warnings
 
 
@@ -925,7 +1015,23 @@ def run(
         "post-batch validation hook."
     ),
 )
-def main(quiet: bool, list_bad: bool, strict_sections: bool, strict_new_ontology: bool) -> None:
+@click.option(
+    "--strict-no-sources",
+    is_flag=True,
+    help=(
+        "Promote legacy-sources-only warnings to errors. Intended for the "
+        "post-U6 enforcement gate — once every page has been backfilled to "
+        "`source_threads:`, any remaining `sources:`-only page represents "
+        "regression."
+    ),
+)
+def main(
+    quiet: bool,
+    list_bad: bool,
+    strict_sections: bool,
+    strict_new_ontology: bool,
+    strict_no_sources: bool,
+) -> None:
     """Validate wiki/; exit non-zero on ERRORs only (warnings are informational)."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
@@ -936,6 +1042,7 @@ def main(quiet: bool, list_bad: bool, strict_sections: bool, strict_new_ontology
         wiki_dir,
         strict_sections=strict_sections,
         strict_new_ontology=strict_new_ontology,
+        strict_no_sources=strict_no_sources,
     )
 
     if list_bad:

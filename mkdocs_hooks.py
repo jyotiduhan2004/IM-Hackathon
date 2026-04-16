@@ -254,7 +254,12 @@ def _replace_attachment_refs(body: str) -> str:
     return body
 
 
-def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None) -> str:
+def _page_metadata_banner(
+    fm: dict,
+    *,
+    sources_count_override: int | None = None,
+    count_noun: str = "source",
+) -> str:
     """One-line provenance banner at the top of each page.
 
     Renders: `N sources · last compiled YYYY-MM-DD · status: active`
@@ -275,6 +280,10 @@ def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None
     from a different source than the frontmatter (default-on catalog-driven
     path; opt out via `NS_CATALOG_SOURCES=0`) so the banner count matches
     the block.
+
+    `count_noun` controls the label: default "source" (pluralised "sources")
+    for raw-email citations, "thread" for source_threads-driven pages. Keeps
+    the banner semantically accurate during the Phase A U5 transition.
     """
     if sources_count_override is not None:
         sources_count = sources_count_override
@@ -286,7 +295,7 @@ def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None
 
     status = fm.get("status") or "active"
 
-    noun = "source" if sources_count == 1 else "sources"
+    noun = count_noun if sources_count == 1 else f"{count_noun}s"
     line = f"{sources_count} {noun} · last compiled {last_compiled_str} · status: {status}"
     return line + "\n\n"
 
@@ -373,16 +382,33 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     # Catalog path (flag ON) queries message_touched_pages and returns a
     # newest-first list. Frontmatter path (default or catalog miss/error)
     # is oldest-first by compiler convention.
+    #
+    # Phase A U5: `source_threads:` is the new page-level citation field.
+    # When present we render it as a lightweight thread list (actual thread
+    # summary expansion comes in U10). Catalog path still wins when flag ON,
+    # because catalog evidence is keyed per-message and that's the richer
+    # view during the thread-era transition. Pure-legacy pages (only
+    # `sources:`) keep working via the frontmatter fallback.
     catalog_sources: list[str] | None = None
     if _catalog_sources_enabled():
         catalog_sources = _fetch_catalog_sources(Path(src_path).stem)
 
+    source_threads = [t for t in (fm.get("source_threads") or []) if isinstance(t, str)]
+
     if catalog_sources is not None:
         sources_list = catalog_sources
         newest_first = True
+        render_mode = "raw"
+    elif source_threads:
+        # Prefer the new field when present. Render as thread links — U10
+        # will flesh these out into proper thread summaries.
+        sources_list = source_threads
+        newest_first = False
+        render_mode = "threads"
     else:
         sources_list = [s for s in (fm.get("sources") or []) if isinstance(s, str)]
         newest_first = False
+        render_mode = "raw"
 
     # Inject a metadata banner at the top. Splice right after the h1 when
     # there is one; otherwise prepend (entity pages rely on Material to
@@ -390,7 +416,10 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     # splice next to — the banner renders directly under the auto-h1).
     # Skip injection if a banner already exists at the top of the body —
     # MkDocs may invoke this hook more than once during plugin chains.
-    banner = _page_metadata_banner(fm, sources_count_override=len(sources_list))
+    banner_noun = "thread" if render_mode == "threads" else "source"
+    banner = _page_metadata_banner(
+        fm, sources_count_override=len(sources_list), count_noun=banner_noun
+    )
     body_head = "\n".join(body.splitlines()[:10])
     if "· last compiled " not in body_head:
         body_lines = body.splitlines(keepends=False)
@@ -439,6 +468,7 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         page_email=page_email,
         is_person_page=fm.get("page_type") in ("entity", "person"),
         newest_first=newest_first,
+        render_mode=render_mode,
     )
     return body.rstrip() + "\n" + sources_block + "\n"
 
@@ -449,6 +479,7 @@ def _render_sources_block(
     page_email: str | None,
     is_person_page: bool,
     newest_first: bool,
+    render_mode: str = "raw",
 ) -> str:
     """Render the collapsible `## Sources` block as a string.
 
@@ -457,6 +488,11 @@ def _render_sources_block(
     entity/person-page "show newest 10" cap slices the tail (or head, when
     newest_first). Keeping both paths in one renderer avoids drift between
     the flag-on and flag-off output.
+
+    `render_mode`:
+    - "raw": each entry is a `raw/*.md` path; render the email inline.
+    - "threads": each entry is a Gmail thread_id; render a short tag only.
+      Full thread expansion comes with Phase C U10 (`get_thread_summary`).
     """
     show_recent = 10
     cap_at = 20
@@ -469,25 +505,38 @@ def _render_sources_block(
             sources_to_render = sources_list[-show_recent:]
         older_count = len(sources_list) - show_recent
 
+    if render_mode == "threads":
+        summary_label = "🧵 Threads"
+        older_label = "older threads"
+    else:
+        summary_label = "📚 Sources"
+        older_label = "older sources"
+
     blocks = [
         "",
         "---",
         "",
         '<details markdown="1">',
-        f"<summary>📚 Sources ({len(sources_list)})</summary>",
+        f"<summary>{summary_label} ({len(sources_list)})</summary>",
         "",
     ]
-    for src in sources_to_render:
-        rendered = _render_raw_source(REPO_ROOT / src, page_email)
-        if rendered:
-            blocks.append(rendered)
-            blocks.append("")
-        else:
-            blocks.append(f"- `{src}` *(file missing)*")
+    if render_mode == "threads":
+        for thread_id in sources_to_render:
+            # Short-id display; U10 will swap in a proper thread summary.
+            short = thread_id[:12] if len(thread_id) > 12 else thread_id
+            blocks.append(f"- Thread: `{short}`")
+    else:
+        for src in sources_to_render:
+            rendered = _render_raw_source(REPO_ROOT / src, page_email)
+            if rendered:
+                blocks.append(rendered)
+                blocks.append("")
+            else:
+                blocks.append(f"- `{src}` *(file missing)*")
 
     if older_count:
         blocks.append("")
-        blocks.append(f"> *+{older_count} older sources not shown — expand above to see all.*")
+        blocks.append(f"> *+{older_count} {older_label} not shown — expand above to see all.*")
 
     blocks.append("")
     blocks.append("</details>")
