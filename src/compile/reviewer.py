@@ -52,7 +52,7 @@ decide:
 Blockers (verdict=block):
 - Empty body, or body is just "Email: foo@bar.com" with no synthesis.
 - Content that is not in the cited source emails (fabrication).
-- Duplicates a page you can see via `resolve_page` or `list_wiki_pages`.
+- Duplicates a page you can see via `resolve_page`.
 - Wrong page_type for the content (e.g. a product described on a people/ page).
 
 Warnings (verdict=revise):

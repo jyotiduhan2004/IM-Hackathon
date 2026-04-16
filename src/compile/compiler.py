@@ -1368,6 +1368,7 @@ _VALID_INSIGHT_CATEGORIES = frozenset(
         "tool_gap",
         "supersession_doubt",
         "structure_suggestion",
+        "trivial_skip",
     }
 )
 
