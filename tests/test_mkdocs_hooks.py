@@ -183,20 +183,55 @@ def test_hook_still_skips_unrelated_top_level_files() -> None:
 
 # --- NS_CATALOG_SOURCES flag coverage -------------------------------------
 #
-# When the env var is set, the hook replaces the frontmatter-driven sources
-# list with the result of `get_sources_for_slug(slug)`. When it's unset (or
-# set to anything other than 1/true/yes), the existing frontmatter path runs
-# unchanged. The fallback kicks in when the DB import fails or the query
-# raises — the build must never die on a viewer-side DB hiccup.
+# Default-on as of C3b: the catalog (message_touched_pages JOIN messages) owns
+# the full source history, so the hook calls `get_sources_for_slug(slug)` on
+# every page and falls back to frontmatter only when the DB is unreachable or
+# returns empty. Set `NS_CATALOG_SOURCES=0` / `false` / `no` to force the
+# legacy frontmatter-only path (e.g. a DB-less docs build).
 
 
 def _set_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NS_CATALOG_SOURCES", "1")
 
 
-def test_flag_off_reads_sources_from_frontmatter(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Default behavior — no env var set — renders the frontmatter list.
+def _set_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NS_CATALOG_SOURCES", "0")
+
+
+def test_default_is_catalog_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Unset env → catalog path runs (default-on as of C3b).
     monkeypatch.delenv("NS_CATALOG_SOURCES", raising=False)
+
+    called: list[str] = []
+
+    def _fake(slug: str, *, limit: int = 50) -> list[dict]:
+        called.append(slug)
+        return [
+            {"raw_path": "raw/msg-db.md", "subject": "s", "date": None, "from_address": ""},
+        ]
+
+    monkeypatch.setattr("src.db.touched_pages.get_sources_for_slug", _fake, raising=True)
+
+    meta = {
+        "title": "Topic",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/msg-fm.md"],  # stale; should be ignored
+        "last_compiled": "2026-04-15",
+    }
+    out = on_page_markdown(
+        "# Topic\n\nBody.\n", page=_page("topics/topic.md", meta), config={}, files=[]
+    )
+    assert called == ["topic"], "catalog lookup should run by default"
+    assert "raw/msg-db.md" in out
+    assert "raw/msg-fm.md" not in out
+
+
+def test_explicit_flag_off_reads_sources_from_frontmatter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # NS_CATALOG_SOURCES=0 forces the legacy frontmatter-only path.
+    _set_flag_off(monkeypatch)
 
     def _should_not_be_called(slug: str, *, limit: int = 50) -> list[dict]:
         raise AssertionError(f"catalog path ran despite flag off: slug={slug}")

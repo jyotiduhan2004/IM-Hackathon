@@ -5,11 +5,11 @@ Adds a "Sources" section at the bottom of every wiki page, pulling the
 <details> block showing the raw email's headers + body inline — so you can
 verify the compilation against the original without leaving the page.
 
-Frontmatter is still the default source of truth. Set
-``NS_CATALOG_SOURCES=1`` (or ``true``/``yes``) to instead pull sources via
-``message_touched_pages JOIN messages`` keyed on the page slug; the
-frontmatter path stays the fallback when the DB is unavailable or the slug
-has no rows yet.
+The catalog is the default source of truth: sources come from
+``message_touched_pages JOIN messages`` keyed on the page slug. Set
+``NS_CATALOG_SOURCES=0`` (or ``false``/``no``) to fall back to the
+frontmatter ``sources:`` list. The frontmatter path also kicks in
+automatically when the DB is unavailable or the slug has no rows yet.
 """
 
 from __future__ import annotations
@@ -28,11 +28,15 @@ REPO_ROOT = Path(__file__).parent
 def _catalog_sources_enabled() -> bool:
     """Is the DB-backed sources path turned on?
 
-    Read the env var on every call so tests can toggle via
+    Default-on as of C3b: the catalog (message_touched_pages JOIN messages)
+    owns the full source history, while the frontmatter list only captures
+    the raws the compiler touched this batch. Set ``NS_CATALOG_SOURCES=0``
+    / ``false`` / ``no`` to force the legacy frontmatter-only path (e.g. for
+    a DB-less docs build). Read on every call so tests can toggle via
     ``monkeypatch.setenv`` without reloading the module.
     """
     value = os.environ.get("NS_CATALOG_SOURCES", "").strip().lower()
-    return value in {"1", "true", "yes"}
+    return value not in {"0", "false", "no"}
 
 
 def _fetch_catalog_sources(slug: str) -> list[str] | None:
@@ -266,8 +270,9 @@ def _page_metadata_banner(fm: dict, *, sources_count_override: int | None = None
 
     When `sources_count_override` is not None, uses that value instead of the
     frontmatter length. Caller passes this when the Sources block is rendered
-    from a different source than the frontmatter (e.g. catalog-driven mode
-    under `NS_CATALOG_SOURCES=1`) so the banner count matches the block.
+    from a different source than the frontmatter (default-on catalog-driven
+    path; opt out via `NS_CATALOG_SOURCES=0`) so the banner count matches
+    the block.
     """
     if sources_count_override is not None:
         sources_count = sources_count_override

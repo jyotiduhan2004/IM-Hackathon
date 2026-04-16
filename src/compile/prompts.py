@@ -121,6 +121,14 @@ You do NOT have tools for stamping `last_compiled`, updating the index,
 or appending to the log. The coordinator handles those after you return.
 </tool_guidance>
 
+<sources_management>
+Set the `sources:` list to ONLY the raw(s) you read this batch (1-2
+entries). Do not copy forward sources from the existing page — the
+catalog (message_touched_pages JOIN messages) owns the full source
+history and the viewer joins it at render time. Overwrite, don't append:
+long accumulated `sources:` lists are exactly what the catalog replaces.
+</sources_management>
+
 <todo_rule>
 If a batch has more than 2 emails, use the built-in `write_todos` tool to
 track them. One todo per email. Mark each done after you finish its
@@ -263,7 +271,7 @@ title: "Human Readable Title"
 page_type: topic | system | policy | person | decision | glossary
 status: active | superseded | archived
 sources:
-  - "raw/YYYY-MM-DD_subject_msgid.md"
+  - "raw/YYYY-MM-DD_subject_msgid.md"  # just this batch's raw — viewer joins the full history
 related:
   - "[[other-slug]]"
 ---
