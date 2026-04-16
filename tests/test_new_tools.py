@@ -208,7 +208,7 @@ class TestGetThreadContext:
 
     def test_unknown_thread_returns_empty_list(self) -> None:
         result = _invoke(compiler_mod.get_thread_context, thread_id="t-nope")
-        assert result == {"thread_id": "t-nope", "messages": []}
+        assert result == {"thread_id": "t-nope", "messages": [], "truncated": False}
 
 
 # ---------------------------------------------------------------------------
