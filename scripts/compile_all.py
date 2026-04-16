@@ -243,10 +243,13 @@ _VALID_WIKI_STATUS = {"current", "superseded", "contested", "active", "archived"
 # Regenerated every run by `_regenerate_landing_surfaces`. Live outside
 # the category folders, so the per-batch `_sync_wiki_catalog` skips
 # them — `_sync_and_stamp_landing_surfaces` handles these separately.
-# All three get page_type='glossary' (the one CHECK-accepted type that
-# fits — home/changes generators write 'index' which the CHECK rejects).
-_TOP_LEVEL_LANDING_FILES: tuple[str, ...] = ("home.md", "glossary.md", "changes.md")
-_TOP_LEVEL_LANDING_PAGE_TYPE = "glossary"
+# Each maps to its semantic page_type (CHECK accepts all three after
+# 202604161300_wiki_pages_home_changes.sql).
+_TOP_LEVEL_LANDING_PAGE_TYPES: dict[str, str] = {
+    "home.md": "home",
+    "glossary.md": "glossary",
+    "changes.md": "changes",
+}
 
 
 def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
@@ -390,10 +393,10 @@ def _sync_and_stamp_landing_surfaces(wiki_dir: str, model_name: str) -> tuple[in
         return 0, 0
 
     candidates: list[tuple[Path, str]] = []
-    for name in _TOP_LEVEL_LANDING_FILES:
+    for name, page_type in _TOP_LEVEL_LANDING_PAGE_TYPES.items():
         path = wiki_path / name
         if path.exists():
-            candidates.append((path, _TOP_LEVEL_LANDING_PAGE_TYPE))
+            candidates.append((path, page_type))
     for folder in ("domains", "decisions"):
         folder_path = wiki_path / folder
         if not folder_path.exists():

@@ -175,7 +175,8 @@ def _load_messages_ddl() -> str:
                             CHECK (page_type IN
                               ('topic', 'entity', 'system', 'policy',
                                'timeline', 'conflict',
-                               'domain', 'glossary', 'decision', 'person')),
+                               'domain', 'glossary', 'decision', 'person',
+                               'home', 'changes')),
       status                TEXT NOT NULL DEFAULT 'current'
                             CHECK (status IN
                               ('current', 'superseded', 'contested',

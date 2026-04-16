@@ -1120,7 +1120,7 @@ def _generate_home(wiki_dir: Path) -> Path:
         ]
     )
 
-    fm = {"title": "Home", "page_type": "index", "status": "active"}
+    fm = {"title": "Home", "page_type": "home", "status": "active"}
     path = wiki_dir / "home.md"
     _atomic_write_text(path, _render_with_frontmatter(fm, "\n".join(lines)))
     logger.info("generated", kind="home", recent_count=len(recent))
@@ -1173,7 +1173,7 @@ def _generate_changes(wiki_dir: Path, db_conn: Any | None = None) -> Path:
 
     lines.extend([_GENERATED_MARKER, ""])
 
-    fm = {"title": "Changes", "page_type": "index", "status": "active"}
+    fm = {"title": "Changes", "page_type": "changes", "status": "active"}
     path = wiki_dir / "changes.md"
     _atomic_write_text(path, _render_with_frontmatter(fm, "\n".join(lines)))
     logger.info("generated", kind="changes", rows=len(rows))
@@ -1579,9 +1579,7 @@ class EntityRequest(BaseModel):
 
 
 @tool
-def create_entities(
-    raw_paths: list[str], entities: list[EntityRequest]
-) -> dict[str, Any]:
+def create_entities(raw_paths: list[str], entities: list[EntityRequest]) -> dict[str, Any]:
     """Resolve or create entity pages for the people mentioned in this batch.
 
     Always use this tool for entity pages — do NOT invent slugs or

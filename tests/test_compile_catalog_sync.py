@@ -1,17 +1,24 @@
-"""Tests for the post-batch catalog sync (scripts/compile_all.py::_sync_wiki_catalog).
+"""Tests for the post-batch catalog sync hooks in `scripts/compile_all.py`.
 
 Covers the gap surfaced by the 2026-04-15 trace audit: the compile agent
 created wiki pages but `wiki_pages` stayed empty, so `resolve_page`
 couldn't find anything and the agent burned calls on silent misses.
 
-These tests exercise the sync function directly against a tmp wiki + the
-shared test DB, covering:
+These tests exercise the sync hooks directly against a tmp wiki + the
+shared test DB:
 
+`_sync_wiki_catalog`:
 - topic / entity / system pages upsert
 - entity's canonical email auto-inserts into `users`
 - files outside a known category folder are ignored
 - missing / malformed frontmatter fallbacks to filename-based title
 - re-running is idempotent (row count doesn't grow)
+
+`_sync_and_stamp_landing_surfaces`:
+- top-level home/glossary/changes + domains/decisions get catalog rows
+- each top-level file maps to its semantic page_type (home/glossary/changes)
+- mtime stamping rewrites frontmatter with last_compiled + updated_by
+- absent wiki dir / no landing files → (0, 0) no-op
 """
 
 from __future__ import annotations
@@ -252,9 +259,9 @@ def test_landing_surfaces_sync_and_stamp(tmp_path: Path, db_conn: psycopg.Connec
     domain_row = find_by_slug("landing-test-agents")
     decision_row = find_by_slug("landing-test-adopt-x")
 
-    assert home_row is not None and home_row["page_type"] == "glossary"
+    assert home_row is not None and home_row["page_type"] == "home"
     assert glossary_row is not None and glossary_row["page_type"] == "glossary"
-    assert changes_row is not None and changes_row["page_type"] == "glossary"
+    assert changes_row is not None and changes_row["page_type"] == "changes"
     assert domain_row is not None and domain_row["page_type"] == "domain"
     assert decision_row is not None and decision_row["page_type"] == "decision"
 
