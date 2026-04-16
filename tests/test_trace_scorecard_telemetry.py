@@ -249,6 +249,31 @@ def test_audit_extract_tier_a_signals_matches_scorecard() -> None:
     assert todos is True
 
 
+def test_audit_extract_tier_a_signals_input_side_auto_correct() -> None:
+    """If middleware annotates input rather than output, audit also detects."""
+    obs = [
+        _mk_tool_obs("read_file", output="contents", inputs="auto_corrected_from='/.claude/x.md'"),
+    ]
+    auto, _verdict, _todos = _extract_tier_a_signals(obs)
+    assert auto is True
+
+
+def test_audit_extract_tier_a_signals_skips_unnamed_tool_events() -> None:
+    """Unnamed TOOL observations don't shift the write_todos window position.
+
+    Mirrors `_extract_trace_metrics` in scorecard, so audit and scorecard
+    agree on `wrote_todos_early` for malformed traces (Codex P2 on #98).
+    """
+    obs = [
+        {"type": "TOOL", "name": "", "output": "", "input": ""},  # unnamed
+        {"type": "TOOL", "name": "", "output": "", "input": ""},  # unnamed
+        _mk_tool_obs("write_todos", "[]"),  # would be index 2 if unnamed counted
+    ]
+    _auto, _verdict, todos = _extract_tier_a_signals(obs)
+    # Unnamed events skipped → write_todos at index 0 → counted as early
+    assert todos is True
+
+
 def test_audit_score_trace_populates_signals() -> None:
     """_score_trace surfaces the signals on the TraceRubric."""
     trace = _mk_trace(

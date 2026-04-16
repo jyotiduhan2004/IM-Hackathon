@@ -181,6 +181,12 @@ def _extract_tier_a_signals(
         if obs.get("type") != "TOOL":
             continue
         name = str(obs.get("name", ""))
+        # Skip unnamed TOOL events (malformed/partial Langfuse rows) so the
+        # tool index stays in sync with `_extract_trace_metrics` in
+        # `trace_scorecard.py`. Otherwise the audit and scorecard can disagree
+        # on `wrote_todos_early` for the same trace. Codex P2 on PR #98.
+        if not name:
+            continue
         raw_output = str(obs.get("output") or "")
         raw_input = str(obs.get("input") or "")
         # Scan input AND output — middleware may put the annotation in
