@@ -118,7 +118,13 @@ def test_display_name_slug_produces_mismatch_warning(mini_wiki: Path) -> None:
 
 
 def test_warnings_do_not_contribute_to_errors(mini_wiki: Path) -> None:
-    """run() splits errors from warnings — warnings must never bleed into errors."""
+    """run() splits errors from warnings — warnings must never bleed into errors.
+
+    A `status: current` page in `wiki/entities/` with `page_type: entity` is
+    legacy on every axis, so Phase 0 fires entity-missing-email plus the
+    three legacy-shape warnings. The important invariant here is that NONE
+    of them contribute to `errors`.
+    """
     _write_entity(mini_wiki / "entities", "amit-agarwal", email=None)
     # Other categories exist in real wiki but are empty here; run() should
     # still execute fine and report one warning, zero errors.
@@ -126,8 +132,8 @@ def test_warnings_do_not_contribute_to_errors(mini_wiki: Path) -> None:
         (mini_wiki / cat).mkdir()
     errors, warnings = validator.run(mini_wiki)
     assert errors == []
-    assert len(warnings) == 1
-    assert warnings[0].check == "entity-missing-email"
+    checks = {w.check for w in warnings}
+    assert "entity-missing-email" in checks
 
 
 # ---------------------------------------------------------------------------

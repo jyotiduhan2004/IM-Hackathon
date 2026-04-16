@@ -31,10 +31,11 @@ Checks (WARN severity — stderr only, no exit-code effect):
   the warning so we can see progress.
 
 Usage:
-    uv run python scripts/validate_wiki.py                    # report + exit 1 on errors
-    uv run python scripts/validate_wiki.py --quiet            # suppress warnings, only errors
-    uv run python scripts/validate_wiki.py --list-bad         # print bad file paths (errors only)
-    uv run python scripts/validate_wiki.py --strict-sections  # promote missing-section warnings to errors
+    uv run python scripts/validate_wiki.py                          # report + exit 1 on errors
+    uv run python scripts/validate_wiki.py --quiet                  # suppress warnings, only errors
+    uv run python scripts/validate_wiki.py --list-bad               # print bad file paths (errors only)
+    uv run python scripts/validate_wiki.py --strict-sections        # promote missing-section warnings to errors
+    uv run python scripts/validate_wiki.py --strict-new-ontology    # promote legacy-shape warnings to errors
 """
 
 from __future__ import annotations
@@ -792,8 +793,93 @@ def check_required_sections(
     return errors, warnings
 
 
+# Legacy-shape signals — pages still on pre-north-star ontology. Tolerant on
+# reads (warning-only by default) so Phase 0 can ship without re-flipping the
+# whole corpus; `--strict-new-ontology` promotes them to errors for the
+# post-batch hook compile_all will wire in Phase 3.
+_LEGACY_STATUSES = frozenset({"current", "contested"})
+
+
+def check_legacy_shape(
+    wiki_dir: Path, *, strict: bool = False
+) -> tuple[list[Error], list[ValidationWarning]]:
+    """Surface pages still on legacy ontology (status/page_type/directory).
+
+    Three WARN-level signals (promoted to ERRORs when `strict=True`):
+    - `legacy-status`: frontmatter.status is `current` or `contested` (north-star
+      set is `active` / `archived` / `superseded`)
+    - `legacy-page-type-entity`: frontmatter.page_type is `entity` (north-star is
+      `person` for humans)
+    - `legacy-entities-path`: file path lives under `wiki/entities/` (north-star
+      home is `wiki/people/`)
+
+    A page can trigger multiple signals — e.g. a page under `entities/` with
+    `page_type: entity` and `status: current` produces three entries. That's
+    intentional: each axis of migration drift is independently actionable.
+    """
+    errors: list[Error] = []
+    warnings: list[ValidationWarning] = []
+
+    # `people/` is added so person pages also get status-drift warnings — the
+    # migration can flip page_type/directory before status catches up.
+    for category in set(CATEGORY_TO_TYPE) | {"people"}:
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in sorted(cat_dir.glob("*.md")):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm, _ = _extract_frontmatter(content)
+            if not fm:
+                # Frontmatter corruption is already an ERROR in validate_page.
+                continue
+
+            signals: list[tuple[str, str]] = []
+
+            status = fm.get("status")
+            if isinstance(status, str) and status.strip().lower() in _LEGACY_STATUSES:
+                signals.append(
+                    (
+                        "legacy-status",
+                        f"legacy status {status!r} — migrate to active/archived/superseded",
+                    )
+                )
+
+            page_type = fm.get("page_type")
+            if isinstance(page_type, str) and page_type.strip().lower() == "entity":
+                signals.append(
+                    (
+                        "legacy-page-type-entity",
+                        "legacy page_type=entity — migrate to person",
+                    )
+                )
+
+            if path.parent.name == "entities":
+                signals.append(
+                    (
+                        "legacy-entities-path",
+                        "legacy entities/ path — migrate to wiki/people/",
+                    )
+                )
+
+            for check, reason in signals:
+                if strict:
+                    # Prefix check name because Error has no `check` field;
+                    # without it the coordinator can't tell which axis fired.
+                    errors.append(Error(path, f"[{check}] {reason}"))
+                else:
+                    warnings.append(ValidationWarning(path, reason, check))
+
+    return errors, warnings
+
+
 def run(
-    wiki_dir: Path, *, strict_sections: bool = False
+    wiki_dir: Path,
+    *,
+    strict_sections: bool = False,
+    strict_new_ontology: bool = False,
 ) -> tuple[list[Error], list[ValidationWarning]]:
     errors: list[Error] = []
     for category in CATEGORY_TO_TYPE:
@@ -816,6 +902,9 @@ def run(
     warnings.extend(section_warnings)
     warnings.extend(check_lead_paragraph(wiki_dir))
     warnings.extend(check_missing_domain(wiki_dir))
+    legacy_errors, legacy_warnings = check_legacy_shape(wiki_dir, strict=strict_new_ontology)
+    errors.extend(legacy_errors)
+    warnings.extend(legacy_warnings)
     return errors, warnings
 
 
@@ -827,14 +916,27 @@ def run(
     is_flag=True,
     help="Promote missing-H2-section warnings to errors",
 )
-def main(quiet: bool, list_bad: bool, strict_sections: bool) -> None:
+@click.option(
+    "--strict-new-ontology",
+    is_flag=True,
+    help=(
+        "Promote legacy-shape warnings (status=current/contested, page_type=entity, "
+        "entities/ path) to errors. Phase 3 wires this into compile_all's "
+        "post-batch validation hook."
+    ),
+)
+def main(quiet: bool, list_bad: bool, strict_sections: bool, strict_new_ontology: bool) -> None:
     """Validate wiki/; exit non-zero on ERRORs only (warnings are informational)."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
         click.echo(f"ERROR: {wiki_dir} not found", err=True)
         sys.exit(2)
 
-    errors, warnings = run(wiki_dir, strict_sections=strict_sections)
+    errors, warnings = run(
+        wiki_dir,
+        strict_sections=strict_sections,
+        strict_new_ontology=strict_new_ontology,
+    )
 
     if list_bad:
         for e in sorted({str(e.page) for e in errors}):
