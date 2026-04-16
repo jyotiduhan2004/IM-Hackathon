@@ -109,6 +109,7 @@ _FILE_PATH_PAT = re.compile(r"""["']file_path["']\s*:\s*["']([^"']+)["']""")
 # working with no migration churn.
 from src.observability.trace_signals import AUTO_CORRECT_PAT  # noqa: E402
 from src.observability.trace_signals import GATE_REJECT_PAT  # noqa: E402
+from src.observability.trace_signals import NOOP_INSIGHT_CATEGORIES  # noqa: E402
 from src.observability.trace_signals import REVIEWER_VERDICT_PAT  # noqa: E402
 from src.observability.trace_signals import REVIEWER_VERDICTS  # noqa: E402
 from src.observability.trace_signals import TODOS_EARLY_WINDOW  # noqa: E402
@@ -163,6 +164,55 @@ class Attempt:
 
 
 @dataclass
+class CitationCounts:
+    """Denominator breakdown for `content_page_citation_rate` carve-out (U7).
+
+    `compiled_total` = successful compile attempts in window.
+    `with_content_page` = subset whose message is cited in a content-type page.
+    `trivial_skip` / `already_captured` = counts of the respective
+    ``log_insight`` categories whose ``email_path`` matches a compiled
+    message's ``raw_path`` (via the same ``run_id``). Both are valid
+    no-op outcomes — the agent correctly chose not to write a page —
+    and must be excluded from the "effective" denominator so the metric
+    reflects synthesis performance, not filing-vs-skip ratio.
+    """
+
+    compiled_total: int = 0
+    with_content_page: int = 0
+    trivial_skip: int = 0
+    already_captured: int = 0
+
+    @property
+    def effective_denominator(self) -> int:
+        """Return `compiled_total - trivial_skip - already_captured`.
+
+        Clamped to 0 — negative arithmetic only happens under seriously
+        malformed data (a message with more insight rows than attempts).
+        """
+        return max(self.compiled_total - self.trivial_skip - self.already_captured, 0)
+
+    @property
+    def raw_rate(self) -> float | None:
+        """``with_content_page / compiled_total`` — the misleading rate."""
+        if not self.compiled_total:
+            return None
+        return self.with_content_page / self.compiled_total
+
+    @property
+    def effective_rate(self) -> float | None:
+        """Raw numerator over the trivial-skip-excluded denominator.
+
+        None when every compile in the window was a trivial-skip / already-
+        captured no-op (the agent correctly did nothing) — no denominator
+        to divide by, and forcing 0.0 or 100% would both mislead.
+        """
+        denom = self.effective_denominator
+        if not denom:
+            return None
+        return self.with_content_page / denom
+
+
+@dataclass
 class ModelAggregate:
     """One scorecard row — rendered as JSON + the markdown table."""
 
@@ -179,12 +229,27 @@ class ModelAggregate:
     write_draft_page_calls: int = 0
     log_insight_calls: int = 0
     absolute_path_rate: float = 0.0
-    # NEW HEADLINE metric (D1). Join-based, answers: "did the compile
+    # HEADLINE metric (D1). Join-based, answers: "did the compile
     # actually produce a content-type page citing this email?"
     # Populated via messages JOIN message_touched_pages JOIN wiki_pages
     # filtered by content-type page_type. Rendered as "-" when the
     # touched-pages table is missing / empty so the scorecard still runs.
+    #
+    # ``content_page_citation_rate`` is the RAW rate (no carve-out) —
+    # kept as the flat field for backward compatibility with dashboards
+    # that pin the name. New consumers should prefer the explicit
+    # ``_raw`` / ``_effective`` pair below, which carve out valid no-op
+    # outcomes (``trivial_skip`` + ``already_captured`` insights) from
+    # the denominator (U7).
     content_page_citation_rate: float | None = None
+    content_page_citation_rate_raw: float | None = None
+    content_page_citation_rate_effective: float | None = None
+    # Carve-out denominator bookkeeping — surfaced so the markdown render
+    # can show "Y of Z compiled" next to the rate.
+    compiled_total: int = 0
+    compiled_with_content_page: int = 0
+    trivial_skip_count: int = 0
+    already_captured_count: int = 0
     # DEPRECATED: kept for 2 weeks so dashboards don't regress on the
     # day this lands. Supplanted by premature_check_my_work_attempt_rate
     # (below), which measures the actual thing we care about (agent
@@ -539,36 +604,66 @@ _CONTENT_PAGE_TYPES: frozenset[str] = frozenset({"topic", "system", "policy", "d
 def _content_page_citation_rate_by_model(
     since: datetime,
 ) -> dict[str, float | None]:
-    """Return ``{model: rate}`` + an ``'all'`` aggregate.
+    """Return ``{model: raw_rate}`` + an ``'all'`` aggregate.
 
-    The "rate" is: of successful compile attempts (``outcome =
-    'compiled'``) for that model, what fraction had the message cited
-    in at least one content-type wiki page? The metric answers: "did
-    the agent actually produce real synthesis for this email, or did
-    it just write an entity stub and call it done?"
-
-    On a missing table or DB error, returns an empty dict — callers
-    render ``-`` so the scorecard stays runnable. This matches the
-    pattern for `_trivial_skip_rate` (Unit 9 rollout resilience).
+    Thin adapter over :func:`_citation_counts_by_model` kept for
+    backward compatibility — returns just the raw rates so older
+    callers / tests that pinned the ``dict[str, float | None]`` shape
+    keep working. New callers should prefer
+    :func:`_citation_counts_by_model` which also exposes the
+    trivial-skip / already-captured carve-out needed for the effective
+    rate (U7).
     """
-    # psycopg3 needs `= ANY(%s)` with a list parameter — `IN %s` with
-    # a tuple only works through the legacy pyformat-list fork.
-    # Sorted for deterministic query plans.
+    breakdown = _citation_counts_by_model(since)
+    return {model: counts.raw_rate for model, counts in breakdown.items()}
+
+
+def _citation_counts_by_model(
+    since: datetime,
+) -> dict[str, CitationCounts]:
+    """Return ``{model: CitationCounts}`` with carve-out bookkeeping (U7).
+
+    Counts per-model:
+
+    - ``compiled_total``: successful attempts (``outcome = 'compiled'``)
+    - ``with_content_page``: messages also cited in a content-type page
+    - ``trivial_skip``: messages whose ``raw_path`` appears as the
+      ``email_path`` on at least one ``log_insight(category='trivial_skip')``
+      row from the same ``run_id`` — the agent flagged the email as
+      not worth filing (OOO reply, junk, etc.).
+    - ``already_captured``: same join, ``category='already_captured'`` —
+      the email's content was already on an existing topic page (typically
+      a prior thread-mate already compiled).
+
+    The ``'all'`` bucket dedupes on ``message_id`` so a message compiled
+    under multiple models doesn't inflate the aggregate; per-model
+    buckets count each attempt separately.
+
+    Returns an empty dict when the query fails (missing schema columns,
+    DB down, etc.) so callers render ``-`` and the script keeps running.
+    """
     page_types = sorted(_CONTENT_PAGE_TYPES)
-    # Per-(message, model) rows so the "all" aggregate can dedupe on
-    # message_id — when a message is compiled under two models (rare
-    # but possible), the per-model row counts each attempt, but the
-    # "all" row counts the message once.
-    # COALESCE `compile_model` inside the CTE so both sides of the
-    # `USING (message_id, compile_model)` join are NON-NULL. SQL treats
-    # `NULL = NULL` as UNKNOWN (not TRUE), so without this coalesce the
-    # LEFT JOIN would drop NULL-model rows entirely — losing any message
-    # whose attempt row has no model stamped (schema lag / legacy data).
+    # The LEFT JOIN to `compile_insights` uses BOTH run_id and email_path
+    # so an insight only attaches to the message it was logged against
+    # in the same run — prevents leakage from unrelated messages that
+    # happen to share a run_id, and from re-runs of the same message
+    # under a different run_id.
+    #
+    # `insights_per_message` groups by `(message_id, compile_model, run_id)`
+    # because `windowed_compiled` has one row per attempt-run; collapsing
+    # on `(message_id, compile_model)` alone would `BOOL_OR`-merge a
+    # no-op insight from one run and fan it out to every other run of
+    # the same (message, model) — inflating `trivial_skip` /
+    # `already_captured` counts for recompiled messages (P1 review
+    # follow-up).
     sql = """
         WITH windowed_compiled AS (
           SELECT DISTINCT ca.message_id,
-                          COALESCE(ca.compile_model, 'unknown') AS compile_model
+                          ca.run_id,
+                          COALESCE(ca.compile_model, 'unknown') AS compile_model,
+                          m.raw_path
             FROM compile_attempts ca
+            JOIN messages m ON m.message_id = ca.message_id
            WHERE ca.attempted_at >= %(since)s
              AND ca.outcome = 'compiled'
         ),
@@ -578,17 +673,40 @@ def _content_page_citation_rate_by_model(
             JOIN message_touched_pages mtp ON mtp.message_id = wc.message_id
             JOIN wiki_pages wp               ON wp.page_id    = mtp.page_id
            WHERE wp.page_type = ANY(%(page_types)s)
+        ),
+        insights_per_message AS (
+          SELECT wc.message_id,
+                 wc.compile_model,
+                 wc.run_id,
+                 BOOL_OR(ci.category = 'trivial_skip')     AS had_trivial_skip,
+                 BOOL_OR(ci.category = 'already_captured') AS had_already_captured
+            FROM windowed_compiled wc
+            LEFT JOIN compile_insights ci
+                   ON ci.run_id = wc.run_id
+                  AND ci.email_path = wc.raw_path
+                  AND ci.category = ANY(%(noop_categories)s)
+           GROUP BY wc.message_id, wc.compile_model, wc.run_id
         )
         SELECT
-          wc.message_id                 AS message_id,
-          wc.compile_model              AS model,
-          (cp.message_id IS NOT NULL)   AS has_content_page
+          wc.message_id                              AS message_id,
+          wc.compile_model                           AS model,
+          (cp.message_id IS NOT NULL)                AS has_content_page,
+          COALESCE(ipm.had_trivial_skip, FALSE)      AS had_trivial_skip,
+          COALESCE(ipm.had_already_captured, FALSE)  AS had_already_captured
           FROM windowed_compiled wc
-     LEFT JOIN with_content_page cp USING (message_id, compile_model)
+     LEFT JOIN with_content_page cp       USING (message_id, compile_model)
+     LEFT JOIN insights_per_message ipm   USING (message_id, compile_model, run_id)
     """
     try:
         with connect() as conn:
-            raw_rows = conn.execute(sql, {"since": since, "page_types": page_types}).fetchall()
+            raw_rows = conn.execute(
+                sql,
+                {
+                    "since": since,
+                    "page_types": page_types,
+                    "noop_categories": list(NOOP_INSIGHT_CATEGORIES),
+                },
+            ).fetchall()
     except psycopg.Error as exc:
         # Missing table / column → return empty so callers render "-"
         # instead of crashing. Codepath is important during rollouts
@@ -600,31 +718,42 @@ def _content_page_citation_rate_by_model(
     if not rows:
         return {}
 
-    # Per-model tallies count every attempt (a message compiled under
-    # two models contributes to each). The "all" aggregate dedupes on
-    # message_id so the same message isn't double-counted when it
-    # shows up under multiple models — and a message counts as "with
-    # content page" if any of its attempts produced one.
-    per_model_compiled: dict[str, int] = defaultdict(int)
-    per_model_with_page: dict[str, int] = defaultdict(int)
-    message_has_page: dict[str, bool] = {}
+    per_model: dict[str, CitationCounts] = defaultdict(CitationCounts)
+    # For "all" we dedupe on message_id — a message compiled under two
+    # models should count once toward the cross-model total. Each of
+    # the four counters OR's across the message's per-model rows.
+    all_state: dict[str, dict[str, bool]] = {}
     for row in rows:
         model = str(row["model"])
         message_id = str(row["message_id"])
         has_page = bool(row["has_content_page"])
-        per_model_compiled[model] += 1
-        if has_page:
-            per_model_with_page[model] += 1
-        message_has_page[message_id] = message_has_page.get(message_id, False) or has_page
+        had_ts = bool(row["had_trivial_skip"])
+        had_ac = bool(row["had_already_captured"])
 
-    result: dict[str, float | None] = {
-        model: (per_model_with_page[model] / compiled if compiled else None)
-        for model, compiled in per_model_compiled.items()
-    }
-    all_compiled = len(message_has_page)
-    all_with_page = sum(1 for has_page in message_has_page.values() if has_page)
-    result["all"] = all_with_page / all_compiled if all_compiled else None
-    return result
+        counts = per_model[model]
+        counts.compiled_total += 1
+        if has_page:
+            counts.with_content_page += 1
+        if had_ts:
+            counts.trivial_skip += 1
+        if had_ac:
+            counts.already_captured += 1
+
+        state = all_state.setdefault(
+            message_id,
+            {"has_page": False, "had_ts": False, "had_ac": False},
+        )
+        state["has_page"] = state["has_page"] or has_page
+        state["had_ts"] = state["had_ts"] or had_ts
+        state["had_ac"] = state["had_ac"] or had_ac
+
+    all_counts = CitationCounts()
+    all_counts.compiled_total = len(all_state)
+    all_counts.with_content_page = sum(1 for s in all_state.values() if s["has_page"])
+    all_counts.trivial_skip = sum(1 for s in all_state.values() if s["had_ts"])
+    all_counts.already_captured = sum(1 for s in all_state.values() if s["had_ac"])
+    per_model["all"] = all_counts
+    return dict(per_model)
 
 
 def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tuple[str, str], str]:
@@ -698,7 +827,7 @@ def _fetch_trace_metrics(
 def _aggregate(
     attempts: list[Attempt],
     batch_metrics: dict[tuple[str, str], TraceMetrics],
-    citation_rate_by_model: dict[str, float | None] | None = None,
+    citation_counts_by_model: dict[str, CitationCounts] | None = None,
 ) -> list[ModelAggregate]:
     """Build one scorecard row per model + an "all" aggregate.
 
@@ -707,7 +836,7 @@ def _aggregate(
     trace metrics ONCE per batch to avoid inflating tool-call totals
     when one thread happens to have several messages.
     """
-    citation_rate_by_model = citation_rate_by_model or {}
+    citation_counts_by_model = citation_counts_by_model or {}
     # Group attempts by model so per-model counters are cheap.
     attempts_by_model: dict[str, list[Attempt]] = defaultdict(list)
     for a in attempts:
@@ -737,7 +866,7 @@ def _aggregate(
             model_attempts = attempts_by_model[name]
             traces = [batch_metrics[k] for k in batches_by_model[name] if k in batch_metrics]
 
-        rows.append(_build_row(name, model_attempts, traces, citation_rate_by_model))
+        rows.append(_build_row(name, model_attempts, traces, citation_counts_by_model))
     return rows
 
 
@@ -745,10 +874,10 @@ def _build_row(
     model: str,
     attempts: list[Attempt],
     traces: list[TraceMetrics],
-    citation_rate_by_model: dict[str, float | None] | None = None,
+    citation_counts_by_model: dict[str, CitationCounts] | None = None,
 ) -> ModelAggregate:
     """Compute one scorecard row from a slice of attempts + traces."""
-    citation_rate_by_model = citation_rate_by_model or {}
+    citation_counts_by_model = citation_counts_by_model or {}
     total = len(attempts)
     succeeded = sum(1 for a in attempts if a.outcome == "compiled")
     failed = sum(1 for a in attempts if a.outcome in {"failed", "timeout"})
@@ -806,6 +935,10 @@ def _build_row(
         key = t.reviewer_verdict if t.reviewer_verdict in REVIEWER_VERDICTS else "none"
         verdicts_dist[key] += 1
 
+    counts = citation_counts_by_model.get(model) or CitationCounts()
+    raw_rate = counts.raw_rate
+    effective_rate = counts.effective_rate
+
     return ModelAggregate(
         model=model,
         attempts=total,
@@ -820,7 +953,17 @@ def _build_row(
         write_draft_page_calls=draft_calls,
         log_insight_calls=insight_calls,
         absolute_path_rate=abs_path_rate,
-        content_page_citation_rate=citation_rate_by_model.get(model),
+        # `content_page_citation_rate` stays as the raw rate so dashboards
+        # that key on the flat name don't silently shift to the carved-out
+        # denominator. The explicit _raw / _effective fields are the
+        # new, unambiguous surface.
+        content_page_citation_rate=raw_rate,
+        content_page_citation_rate_raw=raw_rate,
+        content_page_citation_rate_effective=effective_rate,
+        compiled_total=counts.compiled_total,
+        compiled_with_content_page=counts.with_content_page,
+        trivial_skip_count=counts.trivial_skip,
+        already_captured_count=counts.already_captured,
         check_my_work_first_call_rate=cmw_first_rate,
         premature_check_my_work_attempt_rate=premature_rate,
         first_accepted_check_my_work_rate=first_accepted_rate,
@@ -882,8 +1025,19 @@ def _fmt_verdicts(value: dict[str, int] | None) -> str:
 # during schema rollouts.
 _TABLE_COLUMNS: list[tuple[str, ...]] = [
     ("model", "str"),
-    # HEADLINE metric first — the one we actually steer by.
-    ("content_page_citation_rate", "pct_dash"),
+    # HEADLINE metrics first — the ones we actually steer by. `_effective`
+    # excludes valid no-op outcomes (trivial_skip, already_captured) from
+    # the denominator; the breakdown block below shows the full split.
+    (
+        "content_page_citation_rate_effective",
+        "pct_dash",
+        "content_page_citation_rate (effective)",
+    ),
+    (
+        "content_page_citation_rate_raw",
+        "pct_dash",
+        "content_page_citation_rate (raw)",
+    ),
     ("attempts", "num"),
     ("successes", "num"),
     ("failures", "num"),
@@ -947,9 +1101,46 @@ def _render_markdown(
                 cells.append(_fmt_num(value))
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
+    lines.append(_render_citation_breakdown(rows))
     lines.append(f"**trivial_skip_rate**: {_fmt_pct(trivial_skip_rate)}")
     lines.append(f"**pages_migrated_per_run**: {_fmt_num(pages_migrated_per_run)}")
     lines.append(f"**migration_inflight_pct**: {_fmt_pct(migration_inflight_pct)}")
+    return "\n".join(lines)
+
+
+def _render_citation_breakdown(rows: list[ModelAggregate]) -> str:
+    """Per-model ``content_page_citation_rate`` raw + effective breakdown (U7).
+
+    Renders the "raw = X% (Y of Z), effective = A% (Y of B = compiled -
+    trivial_skip - already_captured)" block the audit (U7) asked for.
+    Skipped for models with zero compiled attempts so the block stays
+    short — the main table still shows ``-`` for those rows.
+    """
+    lines = ["**content_page_citation_rate** (raw vs trivial-skip-excluded):"]
+    has_any = False
+    for row in rows:
+        if row.compiled_total == 0:
+            continue
+        has_any = True
+        # Clamp to 0 so malformed data (more no-op insights than compiled
+        # attempts, e.g. duplicate insight rows) can't render a negative
+        # denominator like "1 of -1" — mirrors the guard on
+        # CitationCounts.effective_denominator (P2 review follow-up).
+        effective_denom = max(
+            row.compiled_total - row.trivial_skip_count - row.already_captured_count,
+            0,
+        )
+        lines.append(
+            f"- `{row.model}`: "
+            f"raw = {_fmt_pct_dash(row.content_page_citation_rate_raw)} "
+            f"({row.compiled_with_content_page} of {row.compiled_total} compiled), "
+            f"effective = {_fmt_pct_dash(row.content_page_citation_rate_effective)} "
+            f"({row.compiled_with_content_page} of {effective_denom} = "
+            f"compiled - trivial_skip({row.trivial_skip_count}) - "
+            f"already_captured({row.already_captured_count}))"
+        )
+    if not has_any:
+        lines.append("- _no compiled attempts in window_")
     return "\n".join(lines)
 
 
@@ -977,8 +1168,8 @@ def main(since: str, out_path: Path | None) -> None:
     logger.info("attempts_loaded", count=len(attempts))
 
     batch_metrics = _fetch_trace_metrics(attempts, env)
-    citation_rate_by_model = _content_page_citation_rate_by_model(cutoff)
-    rows = _aggregate(attempts, batch_metrics, citation_rate_by_model)
+    citation_counts = _citation_counts_by_model(cutoff)
+    rows = _aggregate(attempts, batch_metrics, citation_counts)
     trivial_rate = _trivial_skip_rate(cutoff)
     migrated = _pages_migrated_per_run(cutoff)
     inflight_pct = _migration_inflight_pct()

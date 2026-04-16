@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.observability import langfuse_scores  # noqa: E402
+from src.observability.langfuse_scores import _classify_compile_outcome  # noqa: E402
 from src.observability.langfuse_scores import _content_cited_lookup  # noqa: E402
 from src.observability.langfuse_scores import _extract_metric_values  # noqa: E402
 from src.observability.langfuse_scores import _is_content_page_cited  # noqa: E402
@@ -131,6 +132,95 @@ def test_extract_metric_values_auto_correct_in_input_side() -> None:
     assert values["auto_corrected"] is True
 
 
+# ============================ _classify_compile_outcome ========================
+
+
+def test_classify_outcome_content_page_wins() -> None:
+    """content_page_cited=True short-circuits — the trace wrote real content."""
+    # Even if the trace ALSO logged a trivial_skip (weird), content_page wins.
+    obs = [
+        _mk_tool_obs(
+            "log_insight",
+            inputs='{"category": "trivial_skip", "message": "OOO"}',
+        ),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=True) == "content_page"
+
+
+def test_classify_outcome_trivial_skip() -> None:
+    """No writes + trivial_skip insight => trivial_skip bin."""
+    obs = [
+        _mk_tool_obs(
+            "log_insight",
+            inputs='{"category": "trivial_skip", "message": "OOO"}',
+        ),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "trivial_skip"
+
+
+def test_classify_outcome_already_captured() -> None:
+    """No writes + already_captured insight => already_captured bin (U7)."""
+    obs = [
+        _mk_tool_obs(
+            "log_insight",
+            inputs='{"category": "already_captured", "message": "on topic page X"}',
+        ),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "already_captured"
+
+
+def test_classify_outcome_filing_cabinet_when_entity_write_only() -> None:
+    """Wrote an entity stub but not a content page => filing_cabinet."""
+    obs = [
+        _mk_tool_obs("create_entity"),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "filing_cabinet"
+
+
+def test_classify_outcome_filing_cabinet_when_draft_but_not_cited() -> None:
+    """Agent wrote a draft but the DB says no content-page citation => filing_cabinet."""
+    obs = [
+        _mk_tool_obs("write_draft_page"),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "filing_cabinet"
+
+
+def test_classify_outcome_ghost_when_no_writes_no_insight() -> None:
+    """No writes, no insight, no citation => ghost — worst outcome."""
+    obs = [_mk_tool_obs("read_file")]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "ghost"
+
+
+def test_classify_outcome_ghost_when_no_observations() -> None:
+    """Empty trace + no citation => ghost."""
+    assert _classify_compile_outcome([], content_page_cited=False) == "ghost"
+
+
+def test_classify_outcome_trivial_skip_wins_over_write() -> None:
+    """Weird trace with BOTH trivial_skip insight and a write => trivial_skip.
+
+    The explicit intent signal (log_insight category) is more specific than
+    the "did the agent call a writer tool" proxy.
+    """
+    obs = [
+        _mk_tool_obs(
+            "log_insight",
+            inputs='{"category": "trivial_skip"}',
+        ),
+        _mk_tool_obs("create_entity"),
+    ]
+    assert _classify_compile_outcome(obs, content_page_cited=False) == "trivial_skip"
+
+
+def test_classify_outcome_missing_content_page_flag_falls_back_to_obs() -> None:
+    """When content_page_cited is None, we rely on observation signals.
+
+    The content_page bin is unreachable in that case (we couldn't verify
+    the citation), so a ghost-shaped trace stays ghost.
+    """
+    assert _classify_compile_outcome([_mk_tool_obs("read_file")], None) == "ghost"
+
+
 # ============================ emit_scores_for_trace ============================
 
 
@@ -143,10 +233,10 @@ def _capture_scores(client: MagicMock) -> dict[str, dict[str, Any]]:
     return out
 
 
-def test_emit_scores_pushes_all_five_when_message_id_provided(
+def test_emit_scores_pushes_all_six_when_message_id_provided(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """All five score names land on Langfuse when message_id is supplied."""
+    """All six score names land on Langfuse when message_id is supplied (U7)."""
     # No DB hit needed — short-circuit the citation lookup with False.
     monkeypatch.setattr(langfuse_scores, "_is_content_page_cited", lambda _c, _m: True)
     client = MagicMock()
@@ -163,6 +253,7 @@ def test_emit_scores_pushes_all_five_when_message_id_provided(
         "auto_corrected",
         "wrote_todos_early",
         "reviewer_verdict",
+        "compile_outcome",
     }
     # content_page_cited honours the lookup — we stubbed True, expect 1.0
     assert scores["content_page_cited"]["value"] == 1.0
@@ -187,12 +278,13 @@ def test_emit_scores_omits_content_page_when_no_message_id() -> None:
     emit_scores_for_trace(client, "trace-2", [_mk_tool_obs("ls")], message_id=None)
     scores = _capture_scores(client)
     assert "content_page_cited" not in scores
-    # The other 4 still emit
+    # The other 5 still emit (includes compile_outcome added in U7)
     assert set(scores) == {
         "gate_rejected_check_my_work",
         "auto_corrected",
         "wrote_todos_early",
         "reviewer_verdict",
+        "compile_outcome",
     }
 
 
@@ -217,12 +309,14 @@ def test_emit_scores_swallows_create_score_failures() -> None:
         None,
         None,
         None,
+        None,
     ]
     observations = [_mk_tool_obs("ls")]
     # Must not raise
     emit_scores_for_trace(client, "trace-4", observations, message_id=None)
-    # All four push attempts made, even though the first failed
-    assert client.create_score.call_count == 4
+    # All five push attempts made (no message_id so content_page_cited is skipped),
+    # even though the first failed
+    assert client.create_score.call_count == 5
 
 
 def test_emit_scores_db_error_falls_back_to_false(
@@ -416,8 +510,8 @@ def test_emit_scores_for_run_pushes_one_trace_per_thread(
 
     result = emit_scores_for_run(uuid.uuid4())
     assert result == 1
-    # 5 score names per trace, 1 trace scored
-    assert client.create_score.call_count == 5
+    # 6 score names per trace (U7 added compile_outcome), 1 trace scored
+    assert client.create_score.call_count == 6
     client.flush.assert_called_once()
 
 

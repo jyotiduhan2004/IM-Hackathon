@@ -152,6 +152,25 @@ def test_scan_trace_detects_trivial_skip_insight() -> None:
     assert signals["log_insight_calls"] == 1
 
 
+def test_scan_trace_detects_already_captured_insight() -> None:
+    """log_insight(category='already_captured') must register in signals (U7)."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs=(
+                    '{"category": "already_captured", '
+                    '"message": "Already on [[topic-x]] from prior thread-mate"}'
+                ),
+            ),
+        ]
+    )
+    signals, _ = _scan_trace(trace)
+    assert signals["already_captured_calls"] == 1
+    assert signals["log_insight_calls"] == 1
+    assert signals["trivial_skip_calls"] == 0
+
+
 def test_scan_trace_skips_unnamed_and_non_tool_obs() -> None:
     trace = _mk_trace(
         [
@@ -299,6 +318,35 @@ def test_build_audit_trivial_skip_with_writes_is_not_trivial(
     assert a.attempted_content_page is True
 
 
+def test_build_audit_already_captured_excluded_from_no_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """already_captured trace must NOT be flagged as no_content_page_attempt (U7).
+
+    Correct no-op — the content was already on an existing topic page
+    (prior thread-mate was already compiled). Like trivial_skip, this
+    is carved out of the synthesis-failure denominator.
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs='{"category": "already_captured", "message": "on [[topic-x]]"}',
+            ),
+        ]
+    )
+    a = _build_audit(trace)
+    assert a.already_captured_trace is True
+    assert a.attempted_content_page is False
+    assert "already_captured" in a.flags
+    assert "no_content_page_attempt" not in a.flags
+
+
 # ------------------------------ _aggregate --------------------------------
 
 
@@ -354,6 +402,7 @@ def test_aggregate_empty_sample() -> None:
     assert agg["flag_counts"] == {}
     assert agg["mean_content_citation_rate"] is None
     assert agg["trivial_skip_count"] == 0
+    assert agg["already_captured_count"] == 0
     assert agg["non_trivial_total"] == 0
 
 
@@ -395,6 +444,50 @@ def test_aggregate_trivial_skip_count_exposed() -> None:
     # Trivial-skip traces don't carry no_content_page_attempt — they're
     # excluded from the synthesis-failure denominator by design.
     assert agg["flag_counts"].get("no_content_page_attempt", 0) == 0
+
+
+def test_aggregate_already_captured_count_exposed() -> None:
+    """already_captured traces must be counted separately and carved out (U7)."""
+    audits = [
+        TraceAudit(
+            trace_id="a",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            attempted_content_page=True,
+        ),
+        TraceAudit(
+            trace_id="b",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            already_captured_trace=True,
+            already_captured_calls=1,
+        ),
+        TraceAudit(
+            trace_id="c",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=1,
+        ),
+    ]
+    for a in audits:
+        a.flags = audit_50_traces._flag_labels(a)
+    agg = _aggregate(audits)
+    assert agg["trivial_skip_count"] == 1
+    assert agg["already_captured_count"] == 1
+    # Effective (non-trivial) total = 3 - 1 - 1 = 1
+    assert agg["non_trivial_total"] == 1
+    # Neither no-op trace fires no_content_page_attempt.
+    assert agg["flag_counts"].get("no_content_page_attempt", 0) == 0
+    # Both no-op labels fired once.
+    assert agg["flag_counts"]["trivial_skip"] == 1
+    assert agg["flag_counts"]["already_captured"] == 1
 
 
 def test_verdict_excludes_trivial_skips_from_synthesis_denominator() -> None:
@@ -440,7 +533,65 @@ def test_verdict_excludes_trivial_skips_from_synthesis_denominator() -> None:
     # The non-trivial denominator is 1; the one attempt is 100% of that.
     assert "1 non-trivial compile attempts" in verdict
     assert "(100%)" in verdict
-    assert "2 trivial-skip traces are excluded" in verdict
+    assert "2 trivial-skip traces" in verdict
+    assert "excluded from the synthesis denominator" in verdict
+
+
+def test_verdict_excludes_already_captured_from_synthesis_denominator() -> None:
+    """Verdict must ALSO carve out already_captured — not just trivial_skip (U7).
+
+    Two already_captured + one trivial_skip + one content attempt = 1/1
+    (100%) attempted, not 1/4 (25%). Before U7 the verdict would have
+    under-reported synthesis performance by counting correct no-ops as
+    missed synthesis attempts.
+    """
+    audits = [
+        TraceAudit(
+            trace_id="a",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            attempted_content_page=True,
+            content_citation_rate=1.0,
+        ),
+        TraceAudit(
+            trace_id="b",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=1,
+        ),
+        TraceAudit(
+            trace_id="c",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            already_captured_trace=True,
+            already_captured_calls=1,
+        ),
+        TraceAudit(
+            trace_id="d",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            already_captured_trace=True,
+            already_captured_calls=1,
+        ),
+    ]
+    for a in audits:
+        a.flags = audit_50_traces._flag_labels(a)
+    agg = _aggregate(audits)
+    verdict = audit_50_traces._verdict_paragraph(audits, agg)
+    # Effective denominator = 4 - 1 - 2 = 1. The one attempt is 100%.
+    assert "1 non-trivial compile attempts" in verdict
+    assert "(100%)" in verdict
+    assert "1 trivial-skip traces" in verdict
+    assert "2 already-captured traces" in verdict
 
 
 # ------------------------- _render_markdown -------------------------------

@@ -11,6 +11,11 @@ Score schema (one per trace):
 - ``auto_corrected``               BOOLEAN   1.0 / 0.0
 - ``wrote_todos_early``            BOOLEAN   1.0 / 0.0
 - ``reviewer_verdict``             CATEGORICAL  pass | revise | block | none
+- ``compile_outcome``              CATEGORICAL  content_page | trivial_skip |
+                                                already_captured | filing_cabinet |
+                                                ghost (U7 — single bucket per
+                                                trace, letting dashboards slice
+                                                cleanly by outcome class)
 
 Reuses extraction logic from ``scripts/trace_scorecard.py`` so score
 values match what the manual scorecard reports — single source of truth
@@ -23,7 +28,7 @@ The post-batch coordinator hook in ``scripts/compile_all.py`` calls
      ``compile_attempts`` joined to ``messages`` for this run
   2. resolves each ``(run_id, thread_id)`` to a ``trace_id`` via the
      Langfuse trace search API filtered on ``metadata.compile_run_id``
-  3. fetches each trace's full body, computes the 5 metrics, and
+  3. fetches each trace's full body, computes the 6 metrics, and
      pushes them via ``client.create_score(...)``
 
 Failures (Langfuse 524, missing trace, score push timeout) are logged
@@ -34,6 +39,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -50,6 +56,20 @@ from src.observability.trace_signals import REVIEWER_VERDICT_PAT
 from src.observability.trace_signals import TODOS_EARLY_WINDOW
 
 logger = structlog.get_logger(__name__)
+
+# U7: per-trace categorical outcome labels. Each trace falls into exactly
+# one bucket; Langfuse dashboards can group by this score to see the
+# content-vs-skip-vs-filing mix at a glance.
+COMPILE_OUTCOME_CONTENT_PAGE = "content_page"
+COMPILE_OUTCOME_TRIVIAL_SKIP = "trivial_skip"
+COMPILE_OUTCOME_ALREADY_CAPTURED = "already_captured"
+COMPILE_OUTCOME_FILING_CABINET = "filing_cabinet"
+COMPILE_OUTCOME_GHOST = "ghost"
+
+# Same shape as the audit script's category patterns — matches
+# `log_insight(category="...")` in the ToolCall's input payload.
+_TRIVIAL_SKIP_INSIGHT_PAT = re.compile(r"""["']category["']\s*:\s*["']trivial_skip["']""")
+_ALREADY_CAPTURED_INSIGHT_PAT = re.compile(r"""["']category["']\s*:\s*["']already_captured["']""")
 
 
 def _is_content_page_cited(conn: psycopg.Connection, message_id: str) -> bool:
@@ -183,6 +203,73 @@ def _extract_metric_values(observations: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _classify_compile_outcome(
+    observations: list[dict[str, Any]],
+    content_page_cited: bool | None,
+) -> str:
+    """Return one of the ``COMPILE_OUTCOME_*`` labels for this trace (U7).
+
+    Priority (tighter signal wins):
+
+    1. ``content_page`` — the message is cited in a content-type page.
+       The work landed; nothing else matters.
+    2. ``trivial_skip`` — the agent logged a ``trivial_skip`` insight on
+       this trace. Correct no-op.
+    3. ``already_captured`` — same, for the ``already_captured`` category.
+       Correct no-op.
+    4. ``filing_cabinet`` — agent wrote *something* (``write_draft_page``
+       or ``create_entity[ies]``) but the message isn't cited in a
+       content-type page. Usually an entity-only stub — the failure
+       mode the North Star metric is designed to catch.
+    5. ``ghost`` — no writes, no trivial-skip insight. Agent did nothing
+       useful; worst outcome.
+
+    Splitting trivial_skip from already_captured keeps the carve-out
+    visible — a dashboard shows "how often do we correctly skip vs
+    correctly dedupe" rather than collapsing them into one "no-op" bin.
+
+    When ``content_page_cited`` is ``None`` (couldn't be computed — no
+    message_id), we fall back to the observation-only signals; the
+    content-page bin is unreachable in that case.
+    """
+    if content_page_cited is True:
+        return COMPILE_OUTCOME_CONTENT_PAGE
+
+    has_trivial_skip = False
+    has_already_captured = False
+    has_write = False
+    for obs in observations:
+        if obs.get("type") != "TOOL":
+            continue
+        name = str(obs.get("name") or "")
+        if not name:
+            continue
+        raw_input = str(obs.get("input") or "")
+        if name == "log_insight":
+            if _TRIVIAL_SKIP_INSIGHT_PAT.search(raw_input):
+                has_trivial_skip = True
+            if _ALREADY_CAPTURED_INSIGHT_PAT.search(raw_input):
+                has_already_captured = True
+        # create_entity/create_entities and write_draft_page count as
+        # "wrote something" for the filing-cabinet fallback. If the
+        # agent only writes an entity stub without a content page,
+        # content_page_cited is False and we correctly label that
+        # trace as filing_cabinet.
+        if name == "write_draft_page" or name in {"create_entity", "create_entities"}:
+            has_write = True
+
+    # No-op wins over filing-cabinet — a trace with both a trivial_skip
+    # insight AND a filing-only write is weird, but the insight is the
+    # more specific signal (the agent explicitly declared intent).
+    if has_trivial_skip:
+        return COMPILE_OUTCOME_TRIVIAL_SKIP
+    if has_already_captured:
+        return COMPILE_OUTCOME_ALREADY_CAPTURED
+    if has_write:
+        return COMPILE_OUTCOME_FILING_CABINET
+    return COMPILE_OUTCOME_GHOST
+
+
 def _push_score(
     client: Any,
     *,
@@ -230,7 +317,7 @@ def emit_scores_for_trace(
     *,
     content_page_cited: bool | None = None,
 ) -> None:
-    """Compute the 5 headline scores for one trace and push them to Langfuse.
+    """Compute the 6 headline scores for one trace and push them to Langfuse.
 
     Args:
         client: Langfuse client (``langfuse.Langfuse`` instance).
@@ -248,7 +335,7 @@ def emit_scores_for_trace(
             :func:`emit_scores_for_run`) can compute every flag in one
             DB round-trip instead of opening one connection per trace.
 
-    All five scores are pushed independently — one push failing doesn't
+    All scores are pushed independently — one push failing doesn't
     block the others. Returns ``None``; failures are logged and swallowed.
     """
     metric_values = _extract_metric_values(observations)
@@ -309,6 +396,17 @@ def emit_scores_for_trace(
         trace_id=trace_id,
         name="reviewer_verdict",
         value=metric_values["reviewer_verdict"] or "none",
+        data_type="CATEGORICAL",
+    )
+    # U7: single-bucket outcome categorization so dashboards can slice
+    # traces into {content_page, trivial_skip, already_captured,
+    # filing_cabinet, ghost} at a glance without reconstructing the
+    # decision tree from the five boolean/numeric scores above.
+    _push_score(
+        client,
+        trace_id=trace_id,
+        name="compile_outcome",
+        value=_classify_compile_outcome(observations, cited),
         data_type="CATEGORICAL",
     )
 
@@ -474,7 +572,7 @@ def emit_scores_for_run(run_id: uuid.UUID) -> int:
 
     Driven from the coordinator post-batch hook. Walks
     ``compile_attempts``, resolves each ``(run_id, thread_id)`` to a
-    Langfuse trace_id, fetches the observations, and pushes the 5
+    Langfuse trace_id, fetches the observations, and pushes the 6
     headline scores per trace via :func:`emit_scores_for_trace`.
 
     Best-effort end-to-end: any of (Langfuse SDK missing, keys

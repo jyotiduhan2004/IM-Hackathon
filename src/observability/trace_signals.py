@@ -59,3 +59,11 @@ GATE_REJECT_PAT: re.Pattern[str] = re.compile(
 # A ``write_todos`` call within the first N tool calls counts as
 # adoption of the early-planning prompt nudge.
 TODOS_EARLY_WINDOW: int = 3
+
+# U7: `log_insight` categories the agent uses to declare a valid no-op
+# on an email — "nothing worth filing" (trivial_skip) or "already on
+# an existing topic page" (already_captured). The audit metric
+# denominator excludes these so correct skips don't look like synthesis
+# failures. Kept in sync with `_VALID_INSIGHT_CATEGORIES` in
+# `src/compile/compiler.py`.
+NOOP_INSIGHT_CATEGORIES: tuple[str, ...] = ("trivial_skip", "already_captured")
