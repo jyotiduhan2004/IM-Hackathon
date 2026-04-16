@@ -64,9 +64,8 @@ Lazy (created only when referenced):
 **decision** (`/wiki/decisions/{slug}.md`) — lazy stubs created by the
   coordinator when a topic wikilinks `[[decisions/foo]]`. You may enrich
   an existing decision page; you generally do not create new ones.
-**person** (currently filed as `entity` in `/wiki/entities/{slug}.md`;
-  migrating to `/wiki/people/`) — human contributors and owners. Always
-  go through `create_entities`.
+**person** (`/wiki/people/{slug}.md`) — human contributors and owners.
+  Always go through `create_entities`.
 
 Statuses: `active` (default for new pages), `superseded` (replaced by
 another page — set `superseded_by` in frontmatter), `archived` (no longer
