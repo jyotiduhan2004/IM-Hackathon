@@ -136,6 +136,22 @@ def test_scan_trace_counts_write_draft_and_entity_tools() -> None:
     assert counters["write_draft_page"] == 1
 
 
+def test_scan_trace_detects_trivial_skip_insight() -> None:
+    """log_insight(category='trivial_skip') must register in signals."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs=('{"category": "trivial_skip", "message": "OOO reply, nothing to extract"}'),
+            ),
+        ]
+    )
+    signals, _ = _scan_trace(trace)
+    assert signals["trivial_skip_calls"] == 1
+    # A trivial_skip call is still a log_insight call.
+    assert signals["log_insight_calls"] == 1
+
+
 def test_scan_trace_skips_unnamed_and_non_tool_obs() -> None:
     trace = _mk_trace(
         [
@@ -221,6 +237,68 @@ def test_build_audit_log_insight_missed_despite_friction(
     assert "log_insight_missed" in a.flags
 
 
+def test_build_audit_trivial_skip_excluded_from_no_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trace that trivially skips must not be flagged as no_content_page_attempt.
+
+    Agent called ``log_insight(category="trivial_skip")`` and no
+    write_draft_page / create_entity — that's a correct skip of a
+    non-substantive email (OOO, auto-reply). It must get the
+    ``trivial_skip`` flag but NOT the ``no_content_page_attempt`` flag,
+    so the synthesis-failure denominator isn't polluted.
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs='{"category": "trivial_skip", "message": "OOO"}',
+            ),
+        ]
+    )
+    a = _build_audit(trace)
+    assert a.trivial_skip_trace is True
+    assert a.attempted_content_page is False
+    assert "trivial_skip" in a.flags
+    assert "no_content_page_attempt" not in a.flags
+
+
+def test_build_audit_trivial_skip_with_writes_is_not_trivial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the trace ALSO wrote content, it's not a pure trivial skip.
+
+    The agent can call log_insight('trivial_skip') for ONE email in a
+    batch while still writing pages for others. In that case the trace
+    is NOT overall trivial — we only strip the failure flag when the
+    entire trace looks like a pure skip (no content / entity writes).
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs='{"category": "trivial_skip", "message": "one OOO"}',
+            ),
+            _mk_tool_obs("write_draft_page"),
+        ]
+    )
+    a = _build_audit(trace)
+    # trivial_skip_calls > 0 but writes happened → not a pure-skip trace.
+    assert a.trivial_skip_calls == 1
+    assert a.trivial_skip_trace is False
+    assert a.attempted_content_page is True
+
+
 # ------------------------------ _aggregate --------------------------------
 
 
@@ -275,6 +353,94 @@ def test_aggregate_empty_sample() -> None:
     assert agg["total"] == 0
     assert agg["flag_counts"] == {}
     assert agg["mean_content_citation_rate"] is None
+    assert agg["trivial_skip_count"] == 0
+    assert agg["non_trivial_total"] == 0
+
+
+def test_aggregate_trivial_skip_count_exposed() -> None:
+    """Trivial-skip traces must be counted separately in the aggregate."""
+    audits = [
+        TraceAudit(
+            trace_id="a",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            attempted_content_page=True,
+        ),
+        TraceAudit(
+            trace_id="b",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=1,
+        ),
+        TraceAudit(
+            trace_id="c",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=2,
+        ),
+    ]
+    for a in audits:
+        a.flags = audit_50_traces._flag_labels(a)
+    agg = _aggregate(audits)
+    assert agg["trivial_skip_count"] == 2
+    assert agg["non_trivial_total"] == 1
+    # Trivial-skip traces don't carry no_content_page_attempt — they're
+    # excluded from the synthesis-failure denominator by design.
+    assert agg["flag_counts"].get("no_content_page_attempt", 0) == 0
+
+
+def test_verdict_excludes_trivial_skips_from_synthesis_denominator() -> None:
+    """Verdict must base 'attempted share' on non-trivial total, not full sample.
+
+    Two trivial-skips and one content attempt = 1/1 (100%) attempted,
+    not 1/3 (33%). Catches the regression the F3 audit refinement
+    exists to prevent.
+    """
+    audits = [
+        TraceAudit(
+            trace_id="a",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            attempted_content_page=True,
+            content_citation_rate=1.0,
+        ),
+        TraceAudit(
+            trace_id="b",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=1,
+        ),
+        TraceAudit(
+            trace_id="c",
+            model="m1",
+            name=None,
+            created_at=None,
+            thread_id=None,
+            trivial_skip_trace=True,
+            trivial_skip_calls=1,
+        ),
+    ]
+    for a in audits:
+        a.flags = audit_50_traces._flag_labels(a)
+    agg = _aggregate(audits)
+    verdict = audit_50_traces._verdict_paragraph(audits, agg)
+    # The non-trivial denominator is 1; the one attempt is 100% of that.
+    assert "1 non-trivial compile attempts" in verdict
+    assert "(100%)" in verdict
+    assert "2 trivial-skip traces are excluded" in verdict
 
 
 # ------------------------- _render_markdown -------------------------------

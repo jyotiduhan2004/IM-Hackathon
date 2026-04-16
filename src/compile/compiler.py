@@ -2342,6 +2342,67 @@ def _extract_raw_paths_from_instruction(instruction: str) -> list[str]:
     return list(seen)
 
 
+def _preflight_raw_paths_exist(raw_paths: list[str]) -> None:
+    """Assert every batch raw_path exists on disk before agent invocation.
+
+    Catches the "agent didn't write anything" failure mode from 2026-04-16
+    where ``find_new_sources`` returned valid raw_paths from the DB but the
+    filesystem mount was empty (worktree with only ``.gitkeep`` under raw/).
+    In that case every `read_file` silently failed and traces looked like
+    synthesis failures — this guard turns it into an unambiguous
+    environment/config error BEFORE any LLM cost is incurred.
+
+    Empty ``raw_paths`` is not an error here — run_compilation is sometimes
+    invoked without a batch list (e.g. free-form queries). The guard fires
+    only when the caller explicitly passes paths that should exist.
+    """
+    missing = [p for p in raw_paths if not Path(p).exists()]
+    if missing:
+        raise FileNotFoundError(
+            "environment/config error — raw files missing from disk: "
+            + ", ".join(missing[:5])
+            + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
+        )
+
+
+def _count_view_raw_md_files(view_root: Path) -> int:
+    """Count ``.md`` files at top-level of ``view_root/raw``.
+
+    Reported as ``mounted_raw_file_count`` in trace metadata so Langfuse
+    can correlate "agent wrote nothing" traces with a zero-file mount.
+    Top-level-only — attachments/ holds binaries the agent can't read.
+    """
+    raw_root = view_root / "raw"
+    if not raw_root.exists():
+        return 0
+    return sum(1 for _ in raw_root.glob("*.md"))
+
+
+def _preflight_view_resolves_paths(view_root: Path, raw_paths: list[str]) -> None:
+    """Assert every batch raw_path resolves inside ``view_root``.
+
+    The agent's filesystem is chrooted to ``view_root`` (FilesystemBackend's
+    ``root_dir`` with ``virtual_mode=True``). If a batch path lives outside
+    the view, every `read_file("/raw/...md")` the agent tries will
+    silently fail because the chroot rejects it. Count mismatches and
+    abort with a clear error so we don't waste an LLM call discovering it.
+    """
+    view_root_abs = view_root.resolve()
+    missing = []
+    for p in raw_paths:
+        resolved = Path(p).resolve()
+        try:
+            resolved.relative_to(view_root_abs)
+        except ValueError:
+            missing.append(p)
+    if missing:
+        raise RuntimeError(
+            f"view-root /raw is missing {len(missing)} of {len(raw_paths)} "
+            f"expected raw paths (view_root={view_root_abs}); "
+            f"first few: {missing[:3]}"
+        )
+
+
 def run_compilation(
     instruction: str = "Compile all uncompiled raw emails into wiki pages.",
     model_name: str | None = None,
@@ -2375,10 +2436,33 @@ def run_compilation(
     so `create_entities` can use them without the LLM threading them
     through. When None, we grep them out of the instruction string.
     """
+    raw_dir_abs = Path(raw_dir).resolve()
+    wiki_dir_abs = Path(wiki_dir).resolve()
     # Build the view-root here so cleanup is paired with this run's
     # lifecycle, not the cached agent graph.
     view_root = _build_compile_view(Path(raw_dir), Path(wiki_dir))
     try:
+        effective_raw_paths = raw_paths or _extract_raw_paths_from_instruction(instruction)
+
+        # Per-batch preflight: fail fast if the filesystem mount doesn't
+        # contain the files the DB says we should read. F3 fix — live
+        # Tier-A traces on 2026-04-16 silently failed because
+        # ``find_new_sources`` returned DB paths but read_file saw an
+        # empty /raw mount.
+        if effective_raw_paths:
+            _preflight_raw_paths_exist(effective_raw_paths)
+            _preflight_view_resolves_paths(view_root, effective_raw_paths)
+
+        mounted_raw_count = _count_view_raw_md_files(view_root)
+        logger.info(
+            "run_compilation_preflight",
+            raw_dir=str(raw_dir_abs),
+            wiki_dir=str(wiki_dir_abs),
+            view_root=str(view_root),
+            mounted_raw_file_count=mounted_raw_count,
+            batch_raw_paths=len(effective_raw_paths),
+        )
+
         agent = create_compiler(
             model_name=model_name,
             raw_dir=raw_dir,
@@ -2395,18 +2479,26 @@ def run_compilation(
         if tool_log is not None:
             callbacks.append(tool_log)
 
+        # Enrich trace metadata with mount-sanity info so Langfuse can
+        # surface the infra-vs-synthesis distinction. Deterministic —
+        # safe to add to every trace.
+        enriched_metadata: dict[str, Any] = dict(trace_metadata) if trace_metadata else {}
+        enriched_metadata.setdefault("cwd", str(Path.cwd()))
+        enriched_metadata.setdefault("raw_dir", str(raw_dir_abs))
+        enriched_metadata.setdefault("wiki_dir", str(wiki_dir_abs))
+        enriched_metadata.setdefault("view_root", str(view_root))
+        enriched_metadata.setdefault("mounted_raw_file_count", mounted_raw_count)
+        enriched_metadata.setdefault("missing_raw_paths_count", 0)
+
         config: dict[str, Any] = {}
         if callbacks:
             config["callbacks"] = callbacks
         config["recursion_limit"] = recursion_limit
         if run_name:
             config["run_name"] = run_name
-        if trace_metadata:
-            config["metadata"] = trace_metadata
+        config["metadata"] = enriched_metadata
         if trace_tags:
             config["tags"] = trace_tags
-
-        effective_raw_paths = raw_paths or _extract_raw_paths_from_instruction(instruction)
 
         logger.info(
             "running compilation",

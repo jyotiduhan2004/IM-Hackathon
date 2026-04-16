@@ -548,6 +548,36 @@ _LOG_HEADER = (
 )
 
 
+def _preflight_mount_sanity(raw_dir: Path, wiki_dir: Path) -> int:
+    """Verify raw_dir + wiki_dir look like a populated corpus before compiling.
+
+    Returns the raw ``.md`` file count so the caller can log it. Aborts via
+    ``click.ClickException`` on:
+
+    - ``raw_dir`` missing on disk
+    - ``raw_dir`` has zero ``.md`` files (the 2026-04-16 failure mode where a
+      codex worktree pointed at an empty mount with only ``.gitkeep`` +
+      attachments)
+    - ``wiki_dir`` missing or lacking a ``topics/`` subdir (not a real wiki)
+
+    Runs BEFORE any LLM or DB work so a bad mount costs nothing. The
+    ``attachments/`` subtree is automatically excluded because ``glob("*.md")``
+    only matches top-level ``raw_dir`` and attachments are always binaries.
+    """
+    if not raw_dir.exists():
+        raise click.ClickException(f"raw_dir={raw_dir} does not exist; check cwd and --raw-dir")
+    md_count = sum(1 for _ in raw_dir.glob("*.md"))
+    if md_count == 0:
+        raise click.ClickException(f"raw_dir={raw_dir} has 0 .md files; check cwd and --raw-dir")
+    if not wiki_dir.exists():
+        raise click.ClickException(f"wiki_dir={wiki_dir} does not exist; check cwd and --wiki-dir")
+    if not (wiki_dir / "topics").exists():
+        raise click.ClickException(
+            f"wiki_dir={wiki_dir} has no topics/ subdir; is it a real wiki tree?"
+        )
+    return md_count
+
+
 BatchOutcome = Literal["compiled", "failed", "partial"]
 
 
@@ -1134,6 +1164,28 @@ def main(
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
     resolved_model = model or settings.llm_model
+
+    # Preflight: fail fast if the raw/wiki mounts look wrong. Catches the
+    # 2026-04-16 failure mode where a codex worktree had an empty /raw
+    # mount (just .gitkeep + attachments), read_file silently failed,
+    # and traces looked like synthesis failures. See F3 in the plan.
+    raw_dir_path = Path(raw_dir).resolve()
+    wiki_dir_path = Path(wiki_dir).resolve()
+    raw_md_count = _preflight_mount_sanity(raw_dir_path, wiki_dir_path)
+    # topics/ is guaranteed to exist post-preflight.
+    topics_count = sum(1 for _ in (wiki_dir_path / "topics").glob("*.md"))
+    click.echo(
+        f"Preflight OK: cwd={Path.cwd()} raw_dir={raw_dir_path} "
+        f"wiki_dir={wiki_dir_path} raw_md={raw_md_count} topics={topics_count}"
+    )
+    logger.info(
+        "preflight_mount_ok",
+        cwd=str(Path.cwd()),
+        raw_dir=str(raw_dir_path),
+        wiki_dir=str(wiki_dir_path),
+        raw_dir_md_count=raw_md_count,
+        wiki_dir_topics_count=topics_count,
+    )
 
     # Parse --model-pool. CLI flag overrides settings.model_pool. Empty
     # final list = no pool (use `resolved_model` for every batch); a list

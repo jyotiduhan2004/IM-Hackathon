@@ -79,6 +79,20 @@ def test_run_compilation_passes_trace_config(monkeypatch: Any) -> None:
     assert result == {"ok": True}
     assert captured["payload"]["messages"][0]["content"] == "Compile this batch."
     assert captured["config"]["run_name"] == "compile:z-ai-glm-5:t1"
-    assert captured["config"]["metadata"] == {"compile_model": "z-ai/glm-5"}
+    # Metadata is now ENRICHED with F3 mount-sanity keys (cwd / raw_dir /
+    # wiki_dir / view_root / mounted_raw_file_count / missing_raw_paths_count)
+    # alongside whatever the caller passed. Assert caller keys survive and
+    # the mount keys are present.
+    metadata = captured["config"]["metadata"]
+    assert metadata["compile_model"] == "z-ai/glm-5"
+    for expected_key in (
+        "cwd",
+        "raw_dir",
+        "wiki_dir",
+        "view_root",
+        "mounted_raw_file_count",
+        "missing_raw_paths_count",
+    ):
+        assert expected_key in metadata
     assert captured["config"]["tags"] == ["email-kb", "compile"]
     assert captured["config"]["callbacks"] == ["lf-handler", "cache-handler", "tool-handler"]

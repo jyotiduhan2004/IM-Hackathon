@@ -83,6 +83,11 @@ _CREATE_ENTITIES_EMPTY_PAT = re.compile(
     r"""["']entities["']\s*:\s*\[\s*\]|["']raw_paths["']\s*:\s*\[\s*\]"""
 )
 
+# log_insight(category="trivial_skip", ...) in the input payload. The agent
+# uses this category to flag OOO/auto-reply/junk emails as not worth
+# filing — a correct outcome we must not count as synthesis failure.
+_TRIVIAL_SKIP_PAT = re.compile(r"""["']category["']\s*:\s*["']trivial_skip["']""")
+
 # Verdict-paragraph thresholds. Both must clear for the sample to point
 # "toward" the North Star. Tuned against PR #81's manual audit baseline.
 _VERDICT_ATTEMPTED_SHARE = 0.5
@@ -105,6 +110,13 @@ class TraceAudit:
     resolve_page_abs: bool = False
     create_entities_empty: bool = False
     log_insight_absent_despite_friction: bool = False
+    # Trivial-skip trace: agent called `log_insight(category="trivial_skip")`
+    # and made zero content/entity writes. These are GOOD outcomes (agent
+    # correctly identified an email as not worth filing — OOO reply,
+    # automated notification, etc.) and must NOT count as synthesis
+    # failures. Excluded from the `no_content_page_attempt` aggregate and
+    # reported on a separate line in the verdict.
+    trivial_skip_trace: bool = False
     # Per-trace citation rate: (content-cited messages / touched messages).
     # None when no messages are attributable to this trace (run_id/thread_id
     # missing or no touches recorded).
@@ -116,6 +128,7 @@ class TraceAudit:
     write_draft_page_calls: int = 0
     create_entity_calls: int = 0
     log_insight_calls: int = 0
+    trivial_skip_calls: int = 0
     # Human-readable note — 1 short sentence.
     note: str = ""
     # Rubric labels that fired — populated from the bits. Sorted for
@@ -185,6 +198,7 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
     resolve_abs = False
     create_empty = False
     tool_friction = False
+    trivial_skip_calls = 0
 
     for obs in observations:
         name = _observation_tool_name(obs)
@@ -200,6 +214,8 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
             resolve_abs = True
         if name in ENTITY_TOOLS and _CREATE_ENTITIES_EMPTY_PAT.search(raw_input):
             create_empty = True
+        if name == "log_insight" and _TRIVIAL_SKIP_PAT.search(raw_input):
+            trivial_skip_calls += 1
         # log_insight itself reports friction; treating its error-shaped
         # output as friction would double-count and defeat the metric.
         if (obs.get("level") or "").upper() == "ERROR" or (
@@ -216,6 +232,7 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
         "write_draft_page_calls": counters.get("write_draft_page", 0),
         "create_entity_calls": sum(counters.get(n, 0) for n in ENTITY_TOOLS),
         "log_insight_calls": counters.get("log_insight", 0),
+        "trivial_skip_calls": trivial_skip_calls,
     }
     return signals, dict(counters)
 
@@ -296,6 +313,15 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
 
     log_insight_absent = bool(signals["tool_friction"] and signals["log_insight_calls"] == 0)
 
+    # Trivial-skip: agent explicitly flagged this batch's emails as not
+    # worth filing AND made zero content/entity writes. Correct outcome
+    # — must be excluded from the synthesis-failure denominator.
+    trivial_skip = bool(
+        signals["trivial_skip_calls"] > 0
+        and signals["write_draft_page_calls"] == 0
+        and signals["create_entity_calls"] == 0
+    )
+
     audit = TraceAudit(
         trace_id=trace_id,
         model=model,
@@ -308,6 +334,7 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
         resolve_page_abs=bool(signals["resolve_page_abs"]),
         create_entities_empty=bool(signals["create_entities_empty"]),
         log_insight_absent_despite_friction=log_insight_absent,
+        trivial_skip_trace=trivial_skip,
         content_citation_rate=rate,
         touched_messages=touched,
         content_cited_messages=cited,
@@ -315,6 +342,7 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
         write_draft_page_calls=int(signals["write_draft_page_calls"]),
         create_entity_calls=int(signals["create_entity_calls"]),
         log_insight_calls=int(signals["log_insight_calls"]),
+        trivial_skip_calls=int(signals["trivial_skip_calls"]),
     )
     audit.flags = _flag_labels(audit)
     audit.note = _note_for(audit)
@@ -322,11 +350,22 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
 
 
 def _flag_labels(a: TraceAudit) -> list[str]:
-    """Turn the rubric bits into stable string labels for aggregate counts."""
+    """Turn the rubric bits into stable string labels for aggregate counts.
+
+    Note the trivial-skip carve-out: a trace where the agent explicitly
+    tagged ``log_insight(category="trivial_skip")`` and then declined to
+    write any page is doing the right thing, NOT failing at synthesis.
+    We flag it separately (``trivial_skip``) so the operator can see the
+    count, and we suppress ``no_content_page_attempt`` on those traces so
+    the headline metric isn't polluted by correct-skip traces.
+    """
     out: list[str] = []
+    if a.trivial_skip_trace:
+        out.append("trivial_skip")
     if a.filing_cabinet_signal:
         out.append("filing_cabinet")
-    if not a.attempted_content_page:
+    # Correct trivial-skip traces are not synthesis failures.
+    if not a.attempted_content_page and not a.trivial_skip_trace:
         out.append("no_content_page_attempt")
     if a.abs_path_violation:
         out.append("abs_path")
@@ -349,6 +388,11 @@ def _note_for(a: TraceAudit) -> str:
         return "No major rubric flags fired in this snapshot."
     lead = a.flags[0]
     match lead:
+        case "trivial_skip":
+            return (
+                f"Trivial skip: {a.trivial_skip_calls} trivial_skip insight(s), "
+                "zero page writes — correct outcome, not a synthesis failure."
+            )
         case "filing_cabinet":
             return (
                 f"Filing-cabinet: {a.content_cited_messages}/{a.touched_messages} "
@@ -372,7 +416,13 @@ def _note_for(a: TraceAudit) -> str:
 
 
 def _aggregate(audits: list[TraceAudit]) -> dict[str, Any]:
-    """Compute aggregate counts + per-model breakdown for the markdown header."""
+    """Compute aggregate counts + per-model breakdown for the markdown header.
+
+    ``trivial_skip_count`` and ``non_trivial_total`` are exposed so the
+    verdict paragraph can report synthesis share over the non-trivial
+    denominator rather than the full sample (otherwise correct-skip
+    traces artificially depress the attempted-content-page share).
+    """
     counts: Counter[str] = Counter()
     per_model: dict[str, Counter[str]] = {}
     per_model_totals: Counter[str] = Counter()
@@ -389,6 +439,8 @@ def _aggregate(audits: list[TraceAudit]) -> dict[str, Any]:
     mean_citation = sum(rates) / len(rates) if rates else None
 
     attempted = sum(1 for a in audits if a.attempted_content_page)
+    trivial_skip_count = sum(1 for a in audits if a.trivial_skip_trace)
+    non_trivial_total = len(audits) - trivial_skip_count
     return {
         "total": len(audits),
         "flag_counts": dict(counts),
@@ -397,6 +449,8 @@ def _aggregate(audits: list[TraceAudit]) -> dict[str, Any]:
         "attempted_content_page": attempted,
         "mean_content_citation_rate": mean_citation,
         "traces_with_citation_data": len(rates),
+        "trivial_skip_count": trivial_skip_count,
+        "non_trivial_total": non_trivial_total,
     }
 
 
@@ -422,6 +476,10 @@ def _render_markdown(
     lines.append(f"- Fetched: {len(audits)} / {limit} (fetch failures: {fetch_failures})")
     lines.append(
         f"- Attempted content page: **{aggregate['attempted_content_page']} / {len(audits)}**"
+    )
+    lines.append(
+        f"- Trivial-skip traces (excluded from synthesis denominator): "
+        f"**{aggregate['trivial_skip_count']} / {len(audits)}**"
     )
     lines.append(
         "- Mean `content_page_citation_rate` (over traces with touches): "
@@ -480,9 +538,19 @@ def _render_markdown(
 
 
 def _verdict_paragraph(audits: list[TraceAudit], aggregate: dict[str, Any]) -> str:
-    """Single-paragraph 'are we moving toward the North Star?' readout."""
+    """Single-paragraph 'are we moving toward the North Star?' readout.
+
+    Uses the non-trivial denominator (total - trivial_skip_count) for the
+    synthesis-share computation so correct trivial-skip traces don't
+    artificially depress the headline metric. The synthesis verdict fires
+    ONLY on non-trivial traces; trivial skips get their own dedicated
+    sentence so operators see the count without attributing it to the
+    model's synthesis performance.
+    """
     total = len(audits) or 1
     attempted = aggregate["attempted_content_page"]
+    trivial_skip = aggregate["trivial_skip_count"]
+    non_trivial = aggregate["non_trivial_total"] or 1  # avoid /0 on all-trivial sample
     mean_rate = aggregate["mean_content_citation_rate"]
     filing = aggregate["flag_counts"].get("filing_cabinet", 0)
     no_attempt = aggregate["flag_counts"].get("no_content_page_attempt", 0)
@@ -490,16 +558,18 @@ def _verdict_paragraph(audits: list[TraceAudit], aggregate: dict[str, Any]) -> s
     insight_missed = aggregate["flag_counts"].get("log_insight_missed", 0)
 
     toward = (
-        attempted / total >= _VERDICT_ATTEMPTED_SHARE
+        attempted / non_trivial >= _VERDICT_ATTEMPTED_SHARE
         and (mean_rate or 0.0) >= _VERDICT_MEAN_CITATION
     )
     direction = "toward" if toward else "away from"
     rate_str = _fmt_pct(mean_rate) if mean_rate is not None else "n/a"
     return (
         f"Sample of {total} traces points **{direction}** the North Star. "
-        f"{attempted} ({attempted / total * 100:.0f}%) attempted a content page; "
-        f"mean `content_page_citation_rate` = {rate_str}. "
-        f"{no_attempt} traces made no `write_draft_page` call, "
+        f"Of {non_trivial} non-trivial compile attempts, "
+        f"{attempted} ({attempted / non_trivial * 100:.0f}%) attempted a content page; "
+        f"{trivial_skip} trivial-skip traces are excluded from the synthesis denominator. "
+        f"Mean `content_page_citation_rate` = {rate_str}. "
+        f"{no_attempt} non-trivial traces made no `write_draft_page` call, "
         f"{filing} showed filing-cabinet behaviour (emails touched without content-type "
         f"citation), {abs_path} used absolute paths, and "
         f"{insight_missed} had visible friction but no `log_insight` call. "

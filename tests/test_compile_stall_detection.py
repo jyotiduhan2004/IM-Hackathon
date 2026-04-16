@@ -159,6 +159,11 @@ def _patch_main_dependencies(
     We keep ``_append_batch_log`` real — it writes ``wiki/log.md`` into
     ``tmp_path`` and is the assertion surface for these tests.
     """
+    # Satisfy the F3 preflight (wiki_dir needs topics/) and redirect
+    # REPO_ROOT so each test's pre-compile snapshot lands in tmp_path.
+    (wiki_dir / "topics").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mod, "REPO_ROOT", wiki_dir.parent)
+
     # Redirect settings to tmp_path.
     monkeypatch.setattr(mod.settings, "raw_dir", raw_dir)
     monkeypatch.setattr(mod.settings, "wiki_dir", wiki_dir)

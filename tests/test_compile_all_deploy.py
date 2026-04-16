@@ -77,6 +77,13 @@ def _patch_main_dependencies(
     ``subprocess_calls`` is the mutable list we append each ``subprocess.run``
     invocation to — tests assert against it.
     """
+    # Satisfy the F3 preflight: wiki_dir needs a topics/ subdir.
+    (wiki_dir / "topics").mkdir(parents=True, exist_ok=True)
+    # Redirect REPO_ROOT so each test's pre-compile snapshot lands in
+    # its own tmp dir (parallel tests share a clock second and would
+    # collide on the real .snapshots/ dir without this).
+    monkeypatch.setattr(mod, "REPO_ROOT", wiki_dir.parent)
+
     monkeypatch.setattr(mod.settings, "raw_dir", raw_dir)
     monkeypatch.setattr(mod.settings, "wiki_dir", wiki_dir)
 
