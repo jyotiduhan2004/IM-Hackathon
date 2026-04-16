@@ -1014,6 +1014,25 @@ def _record_attempts_outcome(
         logger.warning("attempt_outcome_db_error", error=str(exc))
 
 
+def _emit_langfuse_scores_for_run(run_id: UUID) -> None:
+    """Push per-trace Langfuse Scores for the headline north-star metrics.
+
+    Best-effort end-to-end: any failure (Langfuse 524, missing keys,
+    SDK import error, DB blip) logs a warning and returns. Observability
+    must never break the compile coordinator.
+    """
+    try:
+        from src.observability.langfuse_scores import emit_scores_for_run
+
+        emit_scores_for_run(run_id)
+    except Exception as exc:  # noqa: BLE001 — observability is best-effort
+        logger.warning(
+            "langfuse_scores_emit_failed",
+            run_id=str(run_id),
+            error=str(exc)[:200],
+        )
+
+
 @click.command()
 @click.option(
     "--batch-size",
@@ -1525,6 +1544,12 @@ def main(
             f"Landing surfaces: stamped {landing_stamped}, "
             f"catalog synced {landing_synced} (home/glossary/changes + domains + decisions)"
         )
+
+    # Push per-trace Langfuse Scores for the headline north-star metrics
+    # so they show up in dashboards without re-running trace_scorecard.py.
+    # Best-effort: any Langfuse failure logs a warning and the compile
+    # finishes normally — observability never blocks the writer.
+    _emit_langfuse_scores_for_run(run_id)
 
     # Run validator and warn (but don't fail) if integrity is broken. Pre-compile
     # snapshot is already captured above for rollback.

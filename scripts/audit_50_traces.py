@@ -44,6 +44,7 @@ from scripts.trace_scorecard import ENTITY_TOOLS  # noqa: E402
 from scripts.trace_scorecard import _langfuse_env  # noqa: E402
 from scripts.trace_scorecard import _run_langfuse  # noqa: E402
 from src.db import connect  # noqa: E402
+from src.observability.trace_signals import CONTENT_PAGE_TYPES  # noqa: E402
 
 structlog.configure(
     processors=[
@@ -59,18 +60,10 @@ logger = structlog.get_logger(__name__)
 # partial progress before the nonzero exit.)
 FETCH_FAILURE_ABORT_RATIO = 0.20
 
-# Content-type pages — the North-Star measure. An email cited ONLY in an
-# entity page does not count as "the compiler extracted knowledge".
-# Matches ``scripts/reconcile_compile_state.py::CONTENT_CATEGORIES`` +
-# the new ontology types from the 4+2 taxonomy.
-CONTENT_PAGE_TYPES: tuple[str, ...] = (
-    "topic",
-    "system",
-    "policy",
-    "decision",
-    "timeline",
-    "conflict",
-)
+# `CONTENT_PAGE_TYPES` is imported from `src.observability.trace_signals`
+# so the audit, scorecard, and Langfuse Score paths can never disagree on
+# what counts as content-type. Matches `scripts/reconcile_compile_state.py
+# ::CONTENT_CATEGORIES` plus the new ontology types from the 4+2 taxonomy.
 
 # Absolute-path detection for resolve_page output. A resolve_page miss
 # that returns "/wiki/topics/foo.md" is a tool-contract violation

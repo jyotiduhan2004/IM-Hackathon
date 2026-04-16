@@ -102,23 +102,16 @@ _RECURSION_PAT = re.compile(
 # default — both count as "abs".
 _FILE_PATH_PAT = re.compile(r"""["']file_path["']\s*:\s*["']([^"']+)["']""")
 
-# Tier A telemetry patterns. Shared: nightly_trace_audit imports these
-# to keep the two reports in sync. Match only the key (not the exact
-# punctuation) so middleware-owned formatting can drift.
-AUTO_CORRECT_PAT = re.compile(r"auto_corrected_from", re.IGNORECASE)
-
-# Match key + literal verdict value so we don't fire on stray "verdict"
-# prose appearing outside a ReviewReport payload.
-REVIEWER_VERDICT_PAT = re.compile(
-    r"""['"]verdict['"]\s*:\s*['"](pass|revise|block)['"]""",
-    re.IGNORECASE,
-)
-
-# Tuple for deterministic iteration order when building the dist dict.
-REVIEWER_VERDICTS: tuple[str, ...] = ("pass", "revise", "block")
-
-# write_todos called within the first N tool calls counts as adoption.
-TODOS_EARLY_WINDOW = 3
+# Tier A + D1 telemetry patterns. Shared with `nightly_trace_audit.py`
+# and `src/observability/langfuse_scores.py` via the `trace_signals`
+# module so all three pipelines agree on what counts as a hit. Re-
+# exported here so existing imports (tests, audit scripts) keep
+# working with no migration churn.
+from src.observability.trace_signals import AUTO_CORRECT_PAT  # noqa: E402
+from src.observability.trace_signals import GATE_REJECT_PAT  # noqa: E402,F401
+from src.observability.trace_signals import REVIEWER_VERDICT_PAT  # noqa: E402
+from src.observability.trace_signals import REVIEWER_VERDICTS  # noqa: E402
+from src.observability.trace_signals import TODOS_EARLY_WINDOW  # noqa: E402
 
 # Retry policy for the trace-fetch subprocess. Linear backoff is fine
 # — the self-hosted instance just needs a bit of breathing room, and
