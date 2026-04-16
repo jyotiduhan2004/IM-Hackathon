@@ -801,9 +801,20 @@ def _group_by_thread(
 # Auto-exclusion thresholds. If you tune these, update the matching
 # comment block in src/config.py::llm_model_pool so future reviewers can
 # reason about "why did my model get dropped?" without grepping.
+#
+# Two windows, both gated by _HEALTH_MIN_ATTEMPTS:
+# - 24h window: the historical guard — catches persistent offenders with
+#   a moderate threshold (>50% fail OR >=10 absolute failures).
+# - 4h window: aggressive short-window quarantine — catches "hot" breakage
+#   (LiteLLM proxy starts 400-ing a model mid-day) before the 24h window
+#   dilutes the signal with earlier successes. Threshold is higher (>80%)
+#   because 4h is noisy; we only pull the trigger when the model is
+#   clearly broken *right now*.
 _HEALTH_WINDOW_HOURS = 24
+_HEALTH_SHORT_WINDOW_HOURS = 4
 _HEALTH_MIN_ATTEMPTS = 5
 _HEALTH_FAIL_RATE_THRESHOLD = 0.5
+_HEALTH_SHORT_WINDOW_FAIL_RATE_THRESHOLD = 0.80
 _HEALTH_ABS_FAILURE_CAP = 10
 
 
@@ -853,34 +864,64 @@ def _filter_pool_to_available_models(
 def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
     """Filter ``pool`` by recent ``compile_attempts`` outcomes.
 
-    Drops models where ``(fail_rate > 0.5 AND total >= 5) OR failed >= 10``
-    over the last 24h. Fails open — on DB errors, missing stats, or a
-    filter that would empty the pool, returns the unfiltered pool (with
-    a warning when all models would be excluded, so we never deadlock).
+    Two-window quarantine:
+    - 24h window (persistent): drops models where
+      ``(fail_rate > 0.5 AND total >= 5) OR failed >= 10``. Catches models
+      that have drifted broken over the day.
+    - 4h window (short): drops models where
+      ``fail_rate > 0.80 AND total >= 5``. Catches "hot" breakage that
+      hasn't accumulated enough 24h signal yet (e.g. LiteLLM proxy starts
+      400-ing a model an hour ago). Higher threshold because 4h is noisy.
 
-    Returns ``(kept_models, exclusion_records)``. ``exclusion_records``
-    is a list of the ``model_health_stats`` dicts we dropped, so the
-    caller can surface them to the operator.
+    Fails open — on DB errors, missing stats, or a filter that would
+    empty the pool, returns the unfiltered pool (with a warning when all
+    models would be excluded, so we never deadlock).
+
+    Returns ``(kept_models, exclusion_records)``. Each exclusion record
+    is a ``model_health_stats`` dict augmented with ``reason`` and
+    ``window_hours`` so the caller can tell the operator which guard
+    fired. If a model trips both windows, the 24h record wins (persistent
+    offenders are the more damning signal).
     """
+    long_stats: dict[str, dict[str, Any]] = {}
+    short_stats: dict[str, dict[str, Any]] = {}
     try:
-        stats = model_health_stats(since_hours=_HEALTH_WINDOW_HOURS)
+        long_stats = {
+            s["compile_model"]: s for s in model_health_stats(since_hours=_HEALTH_WINDOW_HOURS)
+        }
+        short_stats = {
+            s["compile_model"]: s
+            for s in model_health_stats(since_hours=_HEALTH_SHORT_WINDOW_HOURS)
+        }
     except psycopg.Error as exc:
         logger.warning("healthy_pool_db_error", error=str(exc))
         return pool, []
 
-    by_model = {s["compile_model"]: s for s in stats}
     kept: list[str] = []
     excluded: list[dict[str, Any]] = []
     for m in pool:
-        s = by_model.get(m)
-        if s is None:
-            kept.append(m)
-            continue
-        should_drop = (
-            s["fail_rate"] > _HEALTH_FAIL_RATE_THRESHOLD and s["total"] >= _HEALTH_MIN_ATTEMPTS
-        ) or s["failed"] >= _HEALTH_ABS_FAILURE_CAP
-        if should_drop:
-            excluded.append(s)
+        long = long_stats.get(m)
+        short = short_stats.get(m)
+        long_drop = long is not None and (
+            (
+                long["fail_rate"] > _HEALTH_FAIL_RATE_THRESHOLD
+                and long["total"] >= _HEALTH_MIN_ATTEMPTS
+            )
+            or long["failed"] >= _HEALTH_ABS_FAILURE_CAP
+        )
+        short_drop = (
+            short is not None
+            and short["fail_rate"] > _HEALTH_SHORT_WINDOW_FAIL_RATE_THRESHOLD
+            and short["total"] >= _HEALTH_MIN_ATTEMPTS
+        )
+        # Narrowing note: mypy can't propagate the `is not None` guard from
+        # `*_drop` (compound-bool local) into the branch body, so we re-assert.
+        if long_drop:
+            assert long is not None
+            excluded.append({**long, "reason": "quarantined (24h)", "window_hours": 24})
+        elif short_drop:
+            assert short is not None
+            excluded.append({**short, "reason": "quarantined (4h)", "window_hours": 4})
         else:
             kept.append(m)
 
@@ -1074,11 +1115,28 @@ def main(
     # Parse --model-pool. CLI flag overrides settings.model_pool. Empty
     # final list = no pool (use `resolved_model` for every batch); a list
     # = sample one at random per batch (sticky for the batch).
+    #
+    # `pool_source` is load-bearing for diagnosis: the last-4h trace showed
+    # a known-broken model appearing via env/CLI override even though
+    # src/config.py had dropped it from the default. The run-start log line
+    # below lets us see immediately whether the pool came from the default
+    # list, LLM_MODEL_POOL env var, or a CLI flag.
+    import os
+
     pool: list[str]
+    pool_source: str
     if model_pool is not None:
         pool = [m.strip() for m in model_pool.split(",") if m.strip()]
+        pool_source = "cli:--model-pool"
     else:
         pool = settings.model_pool if len(settings.model_pool) > 1 else []
+        # pydantic-settings fills `llm_model_pool` from env when set,
+        # otherwise from the class default. Presence of LLM_MODEL_POOL in
+        # os.environ is the cheapest, most reliable distinguisher.
+        pool_source = "env:LLM_MODEL_POOL" if "LLM_MODEL_POOL" in os.environ else "default"
+    logger.info(
+        "effective_model_pool", pool=pool, source=pool_source, resolved_model=resolved_model
+    )
 
     if not dry_run:
         try:
@@ -1107,13 +1165,20 @@ def main(
     # don't spend a run rediscovering the same 401/400/recursion-loop
     # failure. Fails open on DB errors so a Postgres blip can't block
     # compile. See `_healthy_pool` for the rule.
+    #
+    # Note: this is short-window *quarantine*, not permanent removal.
+    # Permanent removal from the default pool lives in `src/config.py`.
+    # A quarantined model re-appears next run if the window has cleared
+    # — a config-removed model does not.
     if pool:
         pool, excluded = _healthy_pool(pool)
         if excluded:
             click.echo(
                 "Auto-exclusion dropped "
                 + ", ".join(
-                    f"{s['compile_model']} ({s['failed']}/{s['total']} failed)" for s in excluded
+                    f"{s['compile_model']} [{s.get('reason', 'quarantined')}] "
+                    f"({s['failed']}/{s['total']} failed)"
+                    for s in excluded
                 )
             )
     if pool:
@@ -1205,8 +1270,6 @@ def main(
     # Expose the run id to in-process tools (see
     # `src/compile/compiler.py::log_insight`) so every insight the agent
     # records can be joined back to this run.
-    import os
-
     os.environ["COMPILE_RUN_ID"] = str(run_id)
 
     processed = 0
