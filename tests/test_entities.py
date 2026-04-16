@@ -126,7 +126,8 @@ class TestCreateEntityPage:
         assert path.exists()
         content = path.read_text(encoding="utf-8")
         assert "title: Amit Jain" in content
-        assert "page_type: entity" in content
+        assert "page_type: person" in content
+        assert "status: active" in content
         assert "email: amit@indiamart.com" in content
         assert "is_external: false" in content
         assert "Email: amit@indiamart.com" in content
@@ -266,6 +267,38 @@ class TestFindEntityByEmail:
     def test_returns_none_when_dir_missing(self, tmp_path: Path) -> None:
         absent = tmp_path / "does-not-exist"
         assert find_entity_by_email("x@y.com", entities_dir=absent) is None
+
+    def test_dual_scan_prefers_people_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Production path (entities_dir=None): hit in `wiki/people/` wins."""
+        (tmp_path / "people").mkdir()
+        (tmp_path / "entities").mkdir()
+        person_page = tmp_path / "people" / "new-slug.md"
+        person_page.write_text("---\nemail: a@b.com\npage_type: person\n---\n", encoding="utf-8")
+        (tmp_path / "entities" / "legacy-slug.md").write_text(
+            "---\nemail: a@b.com\npage_type: entity\n---\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(entities_module.settings, "wiki_dir", tmp_path)
+        assert find_entity_by_email("a@b.com") == person_page
+
+    def test_dual_scan_falls_back_to_legacy_entities_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Production path (entities_dir=None): legacy `wiki/entities/`
+        stubs still resolve when nothing in `wiki/people/` matches. This
+        is the shim that lets the compiler reach un-migrated stragglers
+        until C1 is fully rolled out.
+        """
+        (tmp_path / "people").mkdir()
+        (tmp_path / "entities").mkdir()
+        legacy = tmp_path / "entities" / "old-slug.md"
+        legacy.write_text(
+            "---\nemail: legacy@indiamart.com\npage_type: entity\n---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(entities_module.settings, "wiki_dir", tmp_path)
+        assert find_entity_by_email("legacy@indiamart.com") == legacy
 
 
 def _patch_evidence(monkeypatch: pytest.MonkeyPatch, counts: dict[str, int]) -> None:
@@ -408,9 +441,7 @@ class TestCreateEntityPagesBatch:
         assert result["ok"] is True
         assert result["evidence_level"] == "strong"
 
-    def test_db_failure_falls_through_to_zero_counts(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_db_failure_falls_through_to_zero_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """psycopg.Error degrades to zero counts instead of raising.
 
         Re-import the module so the autouse fixture's stub of
@@ -425,9 +456,7 @@ class TestCreateEntityPagesBatch:
         def boom(_email: str) -> dict[str, int]:
             raise psycopg.OperationalError("connection lost")
 
-        monkeypatch.setattr(
-            "src.db.participants.count_appearances_by_role", boom, raising=False
-        )
+        monkeypatch.setattr("src.db.participants.count_appearances_by_role", boom, raising=False)
         fresh = importlib.reload(entities_module)
         counts = fresh._evidence_counts("anyone@nowhere.com")
         assert counts == {

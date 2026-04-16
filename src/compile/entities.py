@@ -88,38 +88,42 @@ def is_valid_email(email: str) -> bool:
 
 
 def find_entity_by_email(email: str, entities_dir: Path | None = None) -> Path | None:
-    """Return the existing entity page whose frontmatter `email` matches.
+    """Return the existing person/entity page whose frontmatter `email` matches.
 
-    This is the compatibility shim for legacy display-name slugs
-    (`amit-agarwal.md` with `email: amit@indiamart.com`). New pages use
-    `email_to_slug` directly; but until we migrate the whole wiki, the
-    agent must be able to reach existing pages too.
+    Reads are tolerant across the ontology migration: when ``entities_dir`` is
+    None (production path), scan ``wiki/people/`` first (post-C1 canonical),
+    then ``wiki/entities/`` as legacy fallback. When a caller passes an
+    explicit dir (tests), scan only that.
 
     Returns the Path if found, else None.
     """
     email_lc = email.strip().lower()
+    search_dirs: list[Path]
     if entities_dir is None:
-        entities_dir = settings.wiki_dir / "entities"
-    if not entities_dir.exists():
-        return None
-    for md in entities_dir.glob("*.md"):
-        try:
-            fm = extract_frontmatter(md.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
+        search_dirs = [settings.wiki_dir / "people", settings.wiki_dir / "entities"]
+    else:
+        search_dirs = [entities_dir]
+    for d in search_dirs:
+        if not d.exists():
             continue
-        fm_email = fm.get("email")
-        if isinstance(fm_email, str) and fm_email.strip().lower() == email_lc:
-            return md
+        for md in d.glob("*.md"):
+            try:
+                fm = extract_frontmatter(md.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm_email = fm.get("email")
+            if isinstance(fm_email, str) and fm_email.strip().lower() == email_lc:
+                return md
     return None
 
 
 def _stub_markdown(email: str, display_name: str | None) -> str:
-    """Minimal valid entity page. The agent enriches it on later mentions."""
+    """Minimal valid person page. The agent enriches it on later mentions."""
     title = display_name.strip() if display_name and display_name.strip() else email
     frontmatter: dict[str, Any] = {
         "title": title,
-        "page_type": "entity",
-        "status": "current",
+        "page_type": "person",
+        "status": "active",
         "email": email,
         "is_external": is_external_email(email),
         "sources": [],
@@ -202,7 +206,7 @@ def create_entity_page(
 
     Returns a dict ready for an LLM tool response. On success:
         {"ok": True, "slug": "amit-indiamart-com",
-         "path": "wiki/entities/amit-indiamart-com.md",
+         "path": "wiki/people/amit-indiamart-com.md",
          "created": True|False, "email": "amit@indiamart.com",
          "evidence_level": "strong"|"medium"|"forced"}
     On weak-evidence refusal (force=False):
@@ -217,11 +221,19 @@ def create_entity_page(
     if not is_valid_email(email_lc):
         return {"ok": False, "error": f"invalid email: {email!r}"}
 
+    caller_specified_dir = entities_dir is not None
     if entities_dir is None:
-        entities_dir = settings.wiki_dir / "entities"
+        entities_dir = settings.wiki_dir / "people"
     entities_dir.mkdir(parents=True, exist_ok=True)
 
-    existing = find_entity_by_email(email_lc, entities_dir=entities_dir)
+    # Lookup strategy: if caller passed an explicit dir (tests), search only
+    # there. If None (production), `find_entity_by_email` scans both
+    # `wiki/people/` (canonical) and `wiki/entities/` (legacy fallback), so
+    # a tool call still resolves straggler stubs until the shim is removed.
+    if caller_specified_dir:
+        existing = find_entity_by_email(email_lc, entities_dir=entities_dir)
+    else:
+        existing = find_entity_by_email(email_lc)
     if existing is not None:
         return {
             "ok": True,
@@ -392,9 +404,7 @@ def create_entity_pages(
             continue
 
         email_lc = email_value.strip().lower()
-        matched_raw_paths = [
-            path for path, content in raw_contents.items() if email_lc in content
-        ]
+        matched_raw_paths = [path for path, content in raw_contents.items() if email_lc in content]
         if not matched_raw_paths:
             results.append(
                 {
