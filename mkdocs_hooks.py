@@ -264,10 +264,23 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     src_path = str(page.file.src_path)
     if src_path in ("index.md", "log.md"):
         return markdown
-    if not any(
+    # Decorate: legacy 6 dirs + new north-star dirs + generated top-level pages.
+    # `log.md` (legacy chronological log) stays skipped above; `changes.md`
+    # (new generated changelog) gets decorated via the top-level allowlist.
+    in_wiki_dir = any(
         src_path.startswith(p + "/")
-        for p in ("topics", "entities", "systems", "policies", "timelines", "conflicts")
-    ):
+        for p in (
+            "topics",
+            "entities",
+            "systems",
+            "policies",
+            "timelines",
+            "conflicts",
+            "domains",
+            "decisions",
+        )
+    )
+    if not in_wiki_dir and src_path not in {"home.md", "glossary.md", "changes.md"}:
         return markdown
 
     # MkDocs strips YAML frontmatter before calling this hook; the parsed

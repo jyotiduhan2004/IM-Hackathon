@@ -34,10 +34,7 @@ def _page(src_path: str, meta: dict | None = None) -> _FakePage:
     return _FakePage(file=_FakeFile(src_path=src_path), meta=meta or {})
 
 
-BADGE_HTML = (
-    '<span class="ext-badge" '
-    'title="External contact (not @indiamart.com)">external</span>'
-)
+BADGE_HTML = '<span class="ext-badge" title="External contact (not @indiamart.com)">external</span>'
 
 
 def test_external_badge_renders_for_entity_with_is_external_true() -> None:
@@ -106,3 +103,77 @@ def test_badge_skipped_for_non_wiki_pages() -> None:
     body = "# Index\n"
     out = on_page_markdown(body, page=_page("index.md", meta), config={}, files=[])
     assert "ext-badge" not in out
+
+
+# --- north-star decoration coverage ---------------------------------------
+#
+# The hook decorates pages under `domains/` and `decisions/` as well as the
+# generated top-level pages (`home.md`, `glossary.md`, `changes.md`).
+# `log.md` and other top-level files stay bare.
+
+
+def test_hook_decorates_domains_pages() -> None:
+    meta = {
+        "title": "Engineering Domain",
+        "page_type": "domain",
+        "status": "active",
+        "sources": ["raw/a.md"],
+        "last_compiled": "2026-04-15",
+    }
+    body = "# Engineering Domain\n\nHub.\n"
+    out = on_page_markdown(
+        body, page=_page("domains/engineering/index.md", meta), config={}, files=[]
+    )
+    assert "ns-status-active" in out
+    assert "1 source · last compiled 2026-04-15" in out
+
+
+def test_hook_decorates_decisions_pages() -> None:
+    meta = {
+        "title": "Decision",
+        "page_type": "decision",
+        "status": "active",
+        "sources": [],
+        "last_compiled": "2026-04-15",
+    }
+    body = "# Decision\n\nBody.\n"
+    out = on_page_markdown(
+        body, page=_page("decisions/001-some-decision.md", meta), config={}, files=[]
+    )
+    assert "ns-status-active" in out
+    assert "0 sources · last compiled 2026-04-15" in out
+
+
+def test_hook_decorates_top_level_home_glossary_changes() -> None:
+    # home.md / glossary.md / changes.md are generated top-level pages; the
+    # north-star viewer wants status + banner on them too.
+    for src_path in ("home.md", "glossary.md", "changes.md"):
+        meta = {
+            "title": "Top",
+            "page_type": "index",
+            "status": "active",
+            "sources": [],
+            "last_compiled": "2026-04-15",
+        }
+        body = "# Top\n\nBody.\n"
+        out = on_page_markdown(body, page=_page(src_path, meta), config={}, files=[])
+        assert "ns-status-active" in out, f"status pill missing on {src_path}"
+        assert "last compiled 2026-04-15" in out, f"banner missing on {src_path}"
+
+
+def test_hook_still_skips_legacy_log_md() -> None:
+    # log.md is the legacy chronological log — still skipped. changes.md
+    # (new generated changelog) is the one that should decorate.
+    meta = {"title": "Log", "status": "active", "sources": []}
+    out = on_page_markdown("# Log\n", page=_page("log.md", meta), config={}, files=[])
+    assert "ns-status-" not in out
+    assert "last compiled" not in out
+
+
+def test_hook_still_skips_unrelated_top_level_files() -> None:
+    # about.md (hand-written) is not in the allowlist — decoration would be
+    # surprising on pages humans write directly.
+    meta = {"title": "About", "status": "active", "sources": []}
+    out = on_page_markdown("# About\n", page=_page("about.md", meta), config={}, files=[])
+    assert "ns-status-" not in out
+    assert "last compiled" not in out
