@@ -246,3 +246,40 @@ def test_workflow_has_terminal_decision_check() -> None:
     workflow = COMPILER_SYSTEM_PROMPT[start:end]
     assert "Before returning" in workflow
     assert "terminal outcome" in workflow
+
+
+def test_wikilink_recovery_guidance_present() -> None:
+    """Cycle 4 Bug E: when `check_my_work` returns blocked with a
+    `broken-wikilink` issue, the agent must recover by calling
+    `create_entities` to create the missing person stub, then re-run
+    `check_my_work`. Three clauses must co-occur: the blocker name,
+    the recovery tool, and the retry instruction — otherwise the agent
+    just bails after 3-9 iterations as in Cycle 4."""
+    prompt = COMPILER_SYSTEM_PROMPT
+    assert "broken-wikilink" in prompt
+    assert "create_entities" in prompt
+    # "retry" co-occurs with create_entities guidance — the model must
+    # see "retry" / "re-run" semantics near the recovery instruction.
+    lowered = prompt.lower()
+    assert "retry" in lowered or "re-run" in lowered
+
+
+def test_wikilink_recovery_budget_named() -> None:
+    """The recovery loop needs a budget so the agent doesn't spin
+    forever. Prompt must mention the 3-retry cap explicitly."""
+    assert "3 retry" in COMPILER_SYSTEM_PROMPT or "up to 3" in COMPILER_SYSTEM_PROMPT
+
+
+def test_wikilink_recovery_example_present() -> None:
+    """Cycle 4 Bug E: the few-shots must model the recovery flow end-to-
+    end (write_file → reviewer blocks → create_entities → retry review).
+    Without a worked example the guidance is abstract and the model
+    defaults to its priors (bail)."""
+    assert "Example 9" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("### Example 9")
+    end = COMPILER_SYSTEM_PROMPT.find("</few_shots>", start)
+    example = COMPILER_SYSTEM_PROMPT[start:end]
+    # The worked flow must show the block, the recovery, and the retry.
+    assert "broken-wikilink" in example or "broken wikilink" in example
+    assert "create_entities" in example
+    assert "retry" in example.lower() or "re-run" in example.lower()

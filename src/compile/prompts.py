@@ -155,6 +155,9 @@ Batch / people:
 - `create_entities(entities=[{email, display_name}])` — resolve or create
   people pages. Coordinator injects `raw_paths`; you just pass the people.
   Tool refuses weak evidence (CC-only single-thread) unless `force=True`.
+  If a wikilink fails validation because the person page doesn't exist,
+  **always** call `create_entities` — don't strip the wikilink or
+  rewrite it as plain text. Person references should be linked.
 
 Quality:
 - `validate_page_draft(slug, body, title, page_type)` — cheap pre-check
@@ -211,6 +214,44 @@ Before marking a page done:
 Never catch bare Exceptions in your head — when a tool returns an error,
 READ the message and course-correct. Don't retry with the same args.
 </self_review>
+
+<recovering_from_blockers>
+When the reviewer subagent (`task(subagent_type="reviewer", ...)`) or
+`check_my_work` gate returns `{"ok": false, "status": "blocked",
+"issues": [...]}`, read the `issues` list — each entry is a concrete
+problem to fix. For each blocker:
+
+- **`broken-wikilink` on a person slug** (ends in `-indiamart-com`,
+  `-gmail-com`, etc.): the person stub doesn't exist yet. To recover:
+  1. Call `resolve_page(<slug>)` — the person may already live under a
+     different slug. If found, update your draft to use the existing
+     slug instead.
+  2. If not found, look up the real email address in the raw email's
+     frontmatter (`from:` / `to:` / `cc:` fields — these are
+     authoritative and name-matched against the display name you're
+     wikilinking). Then call
+     `create_entities(entities=[{email: "<from raw>", display_name: "..."}])`.
+     NEVER guess the email by reversing the slug — segment boundaries
+     are ambiguous (`raj-kumar-singh` could be many things) and wrong
+     emails create duplicate stubs.
+  3. Re-run the reviewer. Do NOT bail.
+- **`broken-wikilink` on a non-person slug** (concept reference like
+  `[[some-topic]]`): the target page doesn't exist. Resolve via
+  `resolve_page` and either (a) use the existing slug if you find a
+  close match, or (b) `write_file` the new page in this batch. Do NOT
+  silently strip the wikilink — that loses information; see the hard
+  rules.
+- **Other blockers** (frontmatter issues, duplicate headings, stray
+  brackets, etc.): fix the specific file cited in the blocker, then
+  re-run the reviewer.
+
+Budget: allow up to 3 retry cycles with the reviewer. If after 3
+retries the draft still has blockers, the page drifted too far — log
+`already_captured` (if the content is covered by a sibling page) or
+`trivial_skip` (if the email didn't warrant a page at all). This is a
+terminal outcome; the coordinator will not re-queue. Prefer to get
+the fix right within 3 retries.
+</recovering_from_blockers>
 
 <few_shots>
 
@@ -351,6 +392,33 @@ The agent investigated thoroughly and DID NOT edit — because the
 decision was `already_captured`, NOT because it ran out of ideas.
 Reading the thread, resolving the page, and comparing facts is
 enough evidence to commit. Log the decisive insight and move on.
+
+### Example 9 — Blocked by broken wikilink, recover via create_entities
+
+Context: Agent drafts a topic page that wikilinks two people whose
+person stubs don't exist yet (C1 migration dropped the stubs). The
+reviewer blocks; the agent must recover rather than bail.
+
+```
+# draft includes [[jain-swati-indiamart-com]], [[ankur-raj-indiamart-com]]
+write_file("/wiki/topics/pns-ab-test.md", ...)
+task(subagent_type="reviewer", description="review page pns-ab-test")
+# reviewer returns: {"ok": false, "issues":
+#   [{check: "broken-wikilink", slug: "jain-swati-indiamart-com"},
+#    {check: "broken-wikilink", slug: "ankur-raj-indiamart-com"}]}
+# Recovery: look up authoritative emails in the raw email's frontmatter
+# (to:/cc: fields), NOT by reversing the slug — slug segmentation is
+# ambiguous (e.g. `raj-kumar-singh` could be several emails).
+read_file("/raw/2026-01-13_pns-ab-test_abc123.md")
+# raw frontmatter cc: includes "Swati Jain <swati.jain@indiamart.com>",
+# "Ankur Raj <ankur.raj@indiamart.com>"
+create_entities(entities=[
+  {"email": "swati.jain@indiamart.com", "display_name": "Swati Jain"},
+  {"email": "ankur.raj@indiamart.com", "display_name": "Ankur Raj"},
+])
+task(subagent_type="reviewer", description="review page pns-ab-test")  # retry
+# reviewer passes
+```
 
 </few_shots>
 
