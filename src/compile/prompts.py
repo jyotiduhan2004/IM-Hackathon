@@ -57,6 +57,10 @@ compile.
    - `trivial_skip` for non-substantive emails (OOO, "Thanks!", acks).
    - `already_captured` for substantive emails whose facts the topic
      page already covers (typically a later reply in the same thread).
+10. **Before returning**, verify each email has a terminal outcome
+    (step 5 content edit OR step 9 decisive insight). Investigatory
+    insights like `topic_merge_candidate` do NOT count. Unclassified
+    emails stay pending and the queue re-claims them next cycle.
 
 After you return, the coordinator flips `messages.compile_state`, stamps
 timestamps, writes the `message_touched_pages` catalog rows, and
@@ -64,23 +68,33 @@ regenerates landing pages. You do not call tools for that bookkeeping.
 </workflow>
 
 <decision_tree>
-For each email, pick ONE outcome:
+**You MUST commit to one terminal outcome per email before returning.**
+Every email ends with EXACTLY ONE of these three:
 
-- **Edit / create a page** — the email adds concept-level evidence
-  (new decisions, stats, rollout state, policy changes, previously
-  undocumented systems or people). Do the wiki work.
+- **Edit / create a page** that cites this email's thread — the email
+  adds concept-level evidence (decisions, stats, rollout state, policy
+  changes, previously undocumented systems or people). Write to a
+  content page (topic, system, policy, decision, glossary).
 - **`log_insight("trivial_skip", ...)`** — the email is not
-  substantive. One-line confirmations ("Yes, please"), out-of-office
-  auto-replies, calendar acks, "Thanks!" replies, re-circulated links
-  with no commentary. Nothing to extract.
+  substantive. OOO auto-replies, "Thanks!", calendar acks, one-line
+  confirmations, re-circulated links with no commentary.
 - **`log_insight("already_captured", ...)`** — the email IS
-  substantive (real content: stats, decisions, dates, rationale) but
-  the existing topic page ALREADY covers those facts. This is the
-  common case for later messages in a thread that restate or confirm
-  what an earlier message established. No new page delta is warranted.
+  substantive but the existing topic page ALREADY covers those facts.
+  The common case for later messages in a thread restating earlier
+  content. No new page delta warranted.
 
-Both `trivial_skip` and `already_captured` are valid, expected
-outcomes. Do NOT force a topic edit just to "leave evidence" — the
+Investigatory insights (`topic_merge_candidate`, `structure_suggestion`,
+`question_for_human`, `prompt_ambiguity`, `tool_gap`,
+`supersession_doubt`) are INVESTIGATORY only — they flag meta-
+observations for humans and do NOT close the loop on compile-state.
+Fine to log alongside a terminal outcome; never as a substitute.
+
+If uncertain, err toward `already_captured` (substantive) or
+`trivial_skip` (non-substantive). Investigating thoroughly then NOT
+deciding is the "waffle" anti-pattern — it leaves the email pending
+and the queue re-claims it next cycle.
+
+Don't force a topic edit just to "leave evidence" — the
 `message_touched_pages` catalog records the message→page link
 automatically. Your job is content, not bookkeeping.
 </decision_tree>
@@ -315,6 +329,28 @@ create_entities(entities=[
 # The CC'd name without an email doesn't get a page; just mention in
 # prose without a wikilink.
 ```
+
+### Example 8 — Fully investigated, no new delta
+
+Context: Email is a substantive status update but the topic page
+already has all the facts from earlier thread messages.
+
+```
+get_thread_context("19b7e2682d15163d")
+resolve_page("q1-campaign-rollout") → {exists: true, slug: "q1-campaign-rollout"}
+get_page_summary("q1-campaign-rollout")
+read_file("/raw/2026-04-15_q1_status_xyz.md")   # confirm facts are identical
+log_insight(
+    "already_captured",
+    "Status update echoes already-merged content on q1-campaign-rollout",
+    email_path="raw/2026-04-15_q1_status_xyz.md",
+)
+```
+
+The agent investigated thoroughly and DID NOT edit — because the
+decision was `already_captured`, NOT because it ran out of ideas.
+Reading the thread, resolving the page, and comparing facts is
+enough evidence to commit. Log the decisive insight and move on.
 
 </few_shots>
 

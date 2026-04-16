@@ -168,3 +168,81 @@ def test_people_pages_live_at_wiki_people() -> None:
     assert "/wiki/people/" in COMPILER_SYSTEM_PROMPT
     assert "/wiki/entities/" not in COMPILER_SYSTEM_PROMPT
     assert "currently filed as" not in COMPILER_SYSTEM_PROMPT
+
+
+def test_terminal_decision_requirement_named() -> None:
+    """Cycle 3 Bug D (waffle fix): prompt must explicitly require the
+    agent to commit to one terminal outcome per email. "Investigate
+    thoroughly then bail" is the anti-pattern to kill."""
+    assert "commit to one terminal outcome" in COMPILER_SYSTEM_PROMPT
+    # `waffle` names the anti-pattern — naming it helps the model recognise it.
+    assert "waffle" in COMPILER_SYSTEM_PROMPT.lower()
+
+
+def test_three_terminal_outcomes_listed() -> None:
+    """The three allowed terminal outcomes must be listed clearly in
+    the decision tree so the agent can map its work onto one of them:
+      1) content-page write/edit that cites the thread
+      2) `log_insight("trivial_skip", ...)`
+      3) `log_insight("already_captured", ...)`
+    """
+    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
+    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
+    assert start != -1 and end != -1 and end > start
+    tree = COMPILER_SYSTEM_PROMPT[start:end]
+    # All three terminal outcomes named in the decision tree.
+    assert "trivial_skip" in tree
+    assert "already_captured" in tree
+    # Content edit terminal outcome — phrased as a write/edit/patch
+    # that cites the thread. "cites this email's thread" is the test
+    # anchor because that exact phrasing rules out "investigatory"
+    # tool calls like get_thread_context or log_insight.
+    assert "cites this email's thread" in tree
+
+
+def test_investigatory_insights_marked_non_terminal() -> None:
+    """Investigatory insight categories (topic_merge_candidate,
+    structure_suggestion, question_for_human, prompt_ambiguity,
+    tool_gap, supersession_doubt) must be explicitly labelled as
+    non-terminal in the decision tree. Otherwise the agent treats
+    logging a `topic_merge_candidate` as "done" and the email stays
+    pending."""
+    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
+    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
+    tree = COMPILER_SYSTEM_PROMPT[start:end]
+
+    # The investigatory categories are named in the decision tree,
+    # not just in <tool_guidance>, so the agent sees them at decision
+    # time.
+    investigatory = (
+        "topic_merge_candidate",
+        "structure_suggestion",
+        "question_for_human",
+        "prompt_ambiguity",
+        "tool_gap",
+        "supersession_doubt",
+    )
+    missing = [cat for cat in investigatory if cat not in tree]
+    assert not missing, (
+        f"decision tree should name investigatory categories to mark them "
+        f"non-terminal; missing: {missing}"
+    )
+
+    # And there must be explicit language calling them investigatory /
+    # non-terminal so the model doesn't read the list as a menu of
+    # terminal options.
+    lowered_tree = tree.lower()
+    assert "investigatory" in lowered_tree
+    assert "do not close the loop" in lowered_tree or "do not satisfy" in lowered_tree
+
+
+def test_workflow_has_terminal_decision_check() -> None:
+    """Workflow step 10 (the pre-return check) must tell the agent to
+    verify each email has a terminal outcome before returning.
+    Without this step the <decision_tree> guidance is advisory; with
+    it the agent has an explicit self-audit hook."""
+    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
+    workflow = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "Before returning" in workflow
+    assert "terminal outcome" in workflow
