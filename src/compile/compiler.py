@@ -2172,6 +2172,7 @@ def create_compiler(
     from deepagents.backends import FilesystemBackend
 
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
+    from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
     from src.compile.reviewer import build_reviewer_subagent
 
@@ -2221,6 +2222,8 @@ def create_compiler(
     #   glob, grep) from FilesystemMiddleware auto-added by create_deep_agent.
     # - Middleware: path_autoheal (rewrites host-path leaks) +
     #   entity_write_autoheal (nudges raw entity writes toward create_entities)
+    #   + legacy_page_hint (touch-it-fix-it annotation on reads of
+    #   legacy-ontology wiki pages — once-per-page-per-run)
     #   + check_my_work_gate (short-circuits check_my_work calls made before
     #   any content-page write succeeds — live traces show 59-78% of
     #   batches hit the validator before writing anything).
@@ -2255,6 +2258,7 @@ def create_compiler(
         middleware=[
             PathAutohealMiddleware(),
             EntityWriteAutohealMiddleware(),
+            LegacyPageHintMiddleware(),
             CheckMyWorkGateMiddleware(),
         ],
         subagents=[cast(Any, reviewer_spec)],
