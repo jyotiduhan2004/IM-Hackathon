@@ -424,6 +424,76 @@ def _trivial_skip_rate(since: datetime) -> float | None:
     return float(row["skipped"]) / float(row["total"])
 
 
+# The "new ontology" side of the 4+2 taxonomy (docs/NORTH-STAR.md).
+# Legacy = status='current' OR page_type='entity'. Anything page-typed
+# into this set AND status IN ('active', 'archived') is considered
+# migrated. Kept module-level so the test can pin the definition.
+NEW_ONTOLOGY_PAGE_TYPES: frozenset[str] = frozenset(
+    {"domain", "glossary", "decision", "person", "home", "changes"}
+)
+NEW_ONTOLOGY_STATUSES: frozenset[str] = frozenset({"active", "archived"})
+
+
+def _pages_migrated_per_run(since: datetime) -> int | None:
+    """Count wiki_pages updated in-window that now sit on the new ontology.
+
+    D4 / C1 / C2 will start flipping legacy pages (``page_type=entity``
+    or ``status=current``) to the 4+2 taxonomy (domain/glossary/
+    decision/person/home/changes with status active/archived). Until
+    the migration scripts ship this returns 0 — a valid "no migrations
+    ran" answer. Returns None only on a hard query error so the caller
+    can render ``—``.
+    """
+    sql = """
+        SELECT COUNT(*) AS n
+          FROM wiki_pages
+         WHERE updated_at >= %s
+           AND page_type = ANY(%s)
+           AND status = ANY(%s)
+    """
+    try:
+        with connect() as conn:
+            raw_row = conn.execute(
+                sql,
+                (since, list(NEW_ONTOLOGY_PAGE_TYPES), list(NEW_ONTOLOGY_STATUSES)),
+            ).fetchone()
+    except psycopg.Error as exc:
+        logger.warning("pages_migrated_query_failed", error=str(exc))
+        return None
+    row = cast("dict[str, Any] | None", raw_row)
+    if not row:
+        return 0
+    return int(row["n"])
+
+
+def _migration_inflight_pct() -> float | None:
+    """Snapshot: fraction of wiki pages still on the legacy ontology.
+
+    Legacy = ``status='current'`` OR ``page_type='entity'``. Independent
+    of the scorecard time window — it's a "where's the migration at"
+    gauge, not a per-run count. Returns None on DB error (rendered as
+    ``—``); returns 0.0 when the table is empty.
+    """
+    sql = """
+        SELECT
+          COUNT(*) FILTER (
+            WHERE status = 'current' OR page_type = 'entity'
+          ) AS legacy,
+          COUNT(*) AS total
+        FROM wiki_pages
+    """
+    try:
+        with connect() as conn:
+            raw_row = conn.execute(sql).fetchone()
+    except psycopg.Error as exc:
+        logger.warning("migration_inflight_query_failed", error=str(exc))
+        return None
+    row = cast("dict[str, Any] | None", raw_row)
+    if not row or not row["total"]:
+        return 0.0
+    return float(row["legacy"]) / float(row["total"])
+
+
 def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tuple[str, str], str]:
     """Map ``(run_id, thread_id) → trace_id`` for every run in scope.
 
@@ -660,7 +730,12 @@ _TABLE_COLUMNS: list[tuple[str, str]] = [
 ]
 
 
-def _render_markdown(rows: list[ModelAggregate], trivial_skip_rate: float | None) -> str:
+def _render_markdown(
+    rows: list[ModelAggregate],
+    trivial_skip_rate: float | None,
+    pages_migrated_per_run: int | None,
+    migration_inflight_pct: float | None,
+) -> str:
     """Pretty-print the scorecard as a markdown table + summary line."""
     headers = [c[0] for c in _TABLE_COLUMNS]
     lines = [
@@ -683,6 +758,8 @@ def _render_markdown(rows: list[ModelAggregate], trivial_skip_rate: float | None
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
     lines.append(f"**trivial_skip_rate**: {_fmt_pct(trivial_skip_rate)}")
+    lines.append(f"**pages_migrated_per_run**: {_fmt_num(pages_migrated_per_run)}")
+    lines.append(f"**migration_inflight_pct**: {_fmt_pct(migration_inflight_pct)}")
     return "\n".join(lines)
 
 
@@ -712,8 +789,10 @@ def main(since: str, out_path: Path | None) -> None:
     batch_metrics = _fetch_trace_metrics(attempts, env)
     rows = _aggregate(attempts, batch_metrics)
     trivial_rate = _trivial_skip_rate(cutoff)
+    migrated = _pages_migrated_per_run(cutoff)
+    inflight_pct = _migration_inflight_pct()
 
-    click.echo(_render_markdown(rows, trivial_rate))
+    click.echo(_render_markdown(rows, trivial_rate, migrated, inflight_pct))
 
     if out_path is not None:
         payload = {
@@ -724,6 +803,8 @@ def main(since: str, out_path: Path | None) -> None:
             },
             "rows": [asdict(row) for row in rows],
             "trivial_skip_rate": trivial_rate,
+            "pages_migrated_per_run": migrated,
+            "migration_inflight_pct": inflight_pct,
             "attempts_total": len(attempts),
             "traces_fetched": len(batch_metrics),
         }

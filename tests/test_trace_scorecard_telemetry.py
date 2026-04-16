@@ -8,19 +8,33 @@ The three signals under test are passive: before Tier A's
 PathAutoHealMiddleware / reviewer subagent / todo nudging land, every
 trace should score all-off (False/None/False) and the aggregate rates
 should be zero — the scorecard must not break on pre-Tier-A data.
+
+Also covers the E3 migration metrics
+(``pages_migrated_per_run`` / ``migration_inflight_pct``) which are
+DB-backed — those tests use the ``db_conn`` fixture and seed wiki_pages
+rows directly.
 """
 
 from __future__ import annotations
 
 import sys
 import uuid
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import psycopg
+import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts import trace_scorecard  # noqa: E402
 from scripts.nightly_trace_audit import _extract_tier_a_signals  # noqa: E402
 from scripts.nightly_trace_audit import _score_trace  # noqa: E402
 from scripts.nightly_trace_audit import _summarize  # noqa: E402
@@ -29,6 +43,8 @@ from scripts.trace_scorecard import TraceMetrics  # noqa: E402
 from scripts.trace_scorecard import _build_row  # noqa: E402
 from scripts.trace_scorecard import _extract_trace_metrics  # noqa: E402
 from scripts.trace_scorecard import _fmt_verdicts  # noqa: E402
+from scripts.trace_scorecard import _migration_inflight_pct  # noqa: E402
+from scripts.trace_scorecard import _pages_migrated_per_run  # noqa: E402
 
 
 def _mk_tool_obs(
@@ -369,3 +385,179 @@ def test_audit_summarize_empty_list_safe() -> None:
         "block": 0,
         "none": 0,
     }
+    # E3: migration fields default to None when caller didn't supply them.
+    assert summary["pages_migrated_per_run"] is None
+    assert summary["migration_inflight_pct"] is None
+
+
+def test_audit_summarize_accepts_migration_metrics() -> None:
+    """The audit summary surfaces the DB-derived migration metrics."""
+    summary = _summarize(
+        [],
+        pages_migrated_per_run=12,
+        migration_inflight_pct=0.37,
+    )
+    assert summary["pages_migrated_per_run"] == 12
+    assert summary["migration_inflight_pct"] == pytest.approx(0.37)
+
+
+# ----------------------- E3 migration metrics ------------------------
+
+
+@pytest.fixture(autouse=True)
+def _repoint_scorecard_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repoint ``trace_scorecard.connect`` at the test-schema connect.
+
+    The scorecard does ``from src.db import connect`` at module load, so
+    the conftest's ``monkeypatch.setattr(db_pkg, "connect", …)`` doesn't
+    reach it — the binding is already captured. Without this the DB
+    queries fall through to the production schema and find unrelated
+    rows. Harmless for the non-DB tests in this file.
+    """
+    from src.db import connect as db_connect
+
+    monkeypatch.setattr(trace_scorecard, "connect", db_connect)
+
+
+def _seed_wiki_page(
+    conn: psycopg.Connection,
+    *,
+    slug: str,
+    page_type: str,
+    status: str,
+    updated_at: datetime | None = None,
+) -> None:
+    """Insert a wiki_pages row, optionally backdating ``updated_at``.
+
+    Direct INSERT (not ``upsert_wiki_page``) because the BEFORE UPDATE
+    trigger ``wiki_pages_set_updated_at`` rewrites ``updated_at`` to
+    ``now()``, defeating any post-insert UPDATE. INSERT fires the same
+    trigger but most variants fire BEFORE UPDATE only; the schema.sql
+    here uses BEFORE UPDATE so an explicit ``updated_at`` on INSERT is
+    preserved.
+    """
+    conn.execute(
+        """
+        INSERT INTO wiki_pages
+          (slug, path, title, page_type, status, updated_at)
+        VALUES (%s, %s, %s, %s, %s, COALESCE(%s, now()))
+        """,
+        (
+            slug,
+            f"wiki/{page_type}s/{slug}.md",
+            slug.replace("-", " ").title(),
+            page_type,
+            status,
+            updated_at,
+        ),
+    )
+    conn.commit()
+
+
+def test_pages_migrated_per_run_counts_new_ontology_updates(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Pages with new-ontology page_type + active/archived status in-window count."""
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=24)
+    # In-window, new ontology — counted (3 matching rows).
+    _seed_wiki_page(db_conn, slug="authn", page_type="domain", status="active")
+    _seed_wiki_page(db_conn, slug="whatsapp-api", page_type="decision", status="archived")
+    _seed_wiki_page(db_conn, slug="glossary-one", page_type="glossary", status="active")
+    # In-window, legacy ontology — NOT counted.
+    _seed_wiki_page(db_conn, slug="old-topic", page_type="topic", status="current")
+    _seed_wiki_page(db_conn, slug="alice", page_type="entity", status="current")
+    # Out-of-window, new ontology — NOT counted.
+    _seed_wiki_page(
+        db_conn,
+        slug="ancient-domain",
+        page_type="domain",
+        status="active",
+        updated_at=now - timedelta(days=3),
+    )
+    # New ontology but status='current' — NOT counted; migration flips status too.
+    _seed_wiki_page(db_conn, slug="weird-person", page_type="person", status="current")
+
+    assert _pages_migrated_per_run(cutoff) == 3
+
+
+def test_pages_migrated_per_run_zero_when_only_legacy(db_conn: psycopg.Connection) -> None:
+    """Before any migration ships, everything is legacy → metric stays 0."""
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    _seed_wiki_page(db_conn, slug="topic-a", page_type="topic", status="current")
+    _seed_wiki_page(db_conn, slug="alice", page_type="entity", status="current")
+    _seed_wiki_page(db_conn, slug="system-b", page_type="system", status="current")
+    assert _pages_migrated_per_run(cutoff) == 0
+
+
+def test_pages_migrated_per_run_db_failure_returns_none() -> None:
+    """Hard query error → None, not a crash; caller renders as ``—``."""
+    # Simulate connect() raising by pointing it at a broken URL via mock.
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__ = MagicMock(side_effect=psycopg.OperationalError("boom"))
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    with patch.object(trace_scorecard, "connect", return_value=mock_ctx):
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+        assert _pages_migrated_per_run(cutoff) is None
+
+
+def test_migration_inflight_pct_exact_ratio(db_conn: psycopg.Connection) -> None:
+    """legacy / total = 2 / 5 → 40% inflight.
+
+    Legacy = status='current' OR page_type='entity'.
+    """
+    # 2 legacy rows.
+    _seed_wiki_page(db_conn, slug="legacy-topic", page_type="topic", status="current")
+    _seed_wiki_page(db_conn, slug="alice", page_type="entity", status="active")
+    # 3 new-ontology, non-legacy rows.
+    _seed_wiki_page(db_conn, slug="authn", page_type="domain", status="active")
+    _seed_wiki_page(db_conn, slug="bob-person", page_type="person", status="archived")
+    _seed_wiki_page(db_conn, slug="migrations", page_type="decision", status="active")
+
+    # 2 legacy / 5 total = 0.4
+    assert _migration_inflight_pct() == pytest.approx(0.4)
+
+
+def test_migration_inflight_pct_legacy_union_counts_entity_even_when_active(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Entity pages count as legacy even with status='active' — ontology, not status.
+
+    Encodes the "status=current OR page_type=entity" rule so a migration
+    that flips an entity row's status but doesn't rename the page_type
+    still registers as "inflight".
+    """
+    _seed_wiki_page(db_conn, slug="alice", page_type="entity", status="active")
+    _seed_wiki_page(db_conn, slug="new-domain", page_type="domain", status="active")
+    # 1/2 legacy because alice's page_type keeps her in the legacy bucket.
+    assert _migration_inflight_pct() == pytest.approx(0.5)
+
+
+def test_migration_inflight_pct_empty_table_returns_zero(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Empty wiki_pages → 0.0 (no division by zero)."""
+    # db_conn fixture wipes wiki_pages before each test, so the table
+    # is empty without any seeding here.
+    assert _migration_inflight_pct() == 0.0
+
+
+def test_migration_inflight_pct_db_failure_returns_none() -> None:
+    """Hard query error → None, not a crash."""
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__ = MagicMock(side_effect=psycopg.OperationalError("boom"))
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    with patch.object(trace_scorecard, "connect", return_value=mock_ctx):
+        assert _migration_inflight_pct() is None
+
+
+def test_migration_inflight_pct_matches_plan_example(db_conn: psycopg.Connection) -> None:
+    """Plan's E3 e2e recipe: legacy=700, total=1000 → 70%.
+
+    Scaled down to (legacy=7, total=10) for speed — same ratio.
+    """
+    for i in range(7):
+        _seed_wiki_page(db_conn, slug=f"legacy-{i}", page_type="topic", status="current")
+    for i in range(3):
+        _seed_wiki_page(db_conn, slug=f"new-{i}", page_type="domain", status="active")
+    assert _migration_inflight_pct() == pytest.approx(0.7)

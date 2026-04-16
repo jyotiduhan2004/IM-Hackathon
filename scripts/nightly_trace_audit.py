@@ -27,6 +27,7 @@ import sys
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -46,6 +47,8 @@ from scripts.trace_scorecard import AUTO_CORRECT_PAT  # noqa: E402
 from scripts.trace_scorecard import REVIEWER_VERDICT_PAT  # noqa: E402
 from scripts.trace_scorecard import REVIEWER_VERDICTS  # noqa: E402
 from scripts.trace_scorecard import TODOS_EARLY_WINDOW  # noqa: E402
+from scripts.trace_scorecard import _migration_inflight_pct  # noqa: E402
+from scripts.trace_scorecard import _pages_migrated_per_run  # noqa: E402
 from src.config import settings  # noqa: E402
 
 logger = structlog.get_logger(__name__)
@@ -350,7 +353,20 @@ def _score_trace(
     )
 
 
-def _summarize(rubrics: list[TraceRubric]) -> dict[str, Any]:
+def _summarize(
+    rubrics: list[TraceRubric],
+    *,
+    pages_migrated_per_run: int | None = None,
+    migration_inflight_pct: float | None = None,
+) -> dict[str, Any]:
+    """Aggregate per-trace rubrics + (optional) wiki-wide migration metrics.
+
+    ``pages_migrated_per_run`` and ``migration_inflight_pct`` come from the
+    ``wiki_pages`` table, not from traces — they're snapshot / window DB
+    gauges surfaced here so the nightly report is a single-pane view. Pass
+    ``None`` (the default) when the caller couldn't reach Postgres so the
+    summary renders ``None`` rather than a misleading ``0``.
+    """
     grades: dict[str, int] = {}
     common_issues: dict[str, int] = {}
     issue_total_counts: dict[str, int] = {}
@@ -381,7 +397,16 @@ def _summarize(rubrics: list[TraceRubric]) -> dict[str, Any]:
         "auto_correction_rate": auto_corrected_n / total,
         "reviewer_verdicts_dist": verdicts_dist,
         "todo_adoption_rate": todos_early_n / total,
+        "pages_migrated_per_run": pages_migrated_per_run,
+        "migration_inflight_pct": migration_inflight_pct,
     }
+
+
+# How far back to count "recently migrated" pages for
+# `pages_migrated_per_run`. Matches trace_scorecard's default `--since 24h`
+# default so the two reports line up unless callers explicitly widen the
+# window.
+MIGRATION_WINDOW_HOURS = 24
 
 
 def _audit_path(out_dir: Path, today: datetime) -> Path:
@@ -401,12 +426,24 @@ def main(limit: int) -> None:
     now = datetime.now(UTC)
     out_path = _audit_path(out_dir, now)
 
+    # Wiki-migration gauges come from Postgres, not Langfuse — they
+    # stay populated even when langfuse is unreachable and the trace
+    # block below short-circuits.
+    migration_cutoff = now - timedelta(hours=MIGRATION_WINDOW_HOURS)
+    pages_migrated = _pages_migrated_per_run(migration_cutoff)
+    inflight_pct = _migration_inflight_pct()
+
     recent = _list_recent_traces(limit)
     if not recent:
         payload: dict[str, Any] = {
             "window": _window_label(now, 0),
             "traces": [],
-            "summary": {"grades": {}, "common_issues": {}},
+            "summary": {
+                "grades": {},
+                "common_issues": {},
+                "pages_migrated_per_run": pages_migrated,
+                "migration_inflight_pct": inflight_pct,
+            },
             "error": "langfuse unreachable or returned no traces",
         }
         out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -437,7 +474,11 @@ def main(limit: int) -> None:
     payload = {
         "window": _window_label(now, len(rubrics)),
         "traces": rubrics,
-        "summary": _summarize(rubrics),
+        "summary": _summarize(
+            rubrics,
+            pages_migrated_per_run=pages_migrated,
+            migration_inflight_pct=inflight_pct,
+        ),
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     logger.info(
