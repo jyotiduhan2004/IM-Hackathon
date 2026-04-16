@@ -108,7 +108,7 @@ _FILE_PATH_PAT = re.compile(r"""["']file_path["']\s*:\s*["']([^"']+)["']""")
 # exported here so existing imports (tests, audit scripts) keep
 # working with no migration churn.
 from src.observability.trace_signals import AUTO_CORRECT_PAT  # noqa: E402
-from src.observability.trace_signals import GATE_REJECT_PAT  # noqa: E402,F401
+from src.observability.trace_signals import GATE_REJECT_PAT  # noqa: E402
 from src.observability.trace_signals import REVIEWER_VERDICT_PAT  # noqa: E402
 from src.observability.trace_signals import REVIEWER_VERDICTS  # noqa: E402
 from src.observability.trace_signals import TODOS_EARLY_WINDOW  # noqa: E402
