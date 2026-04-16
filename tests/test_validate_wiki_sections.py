@@ -101,7 +101,7 @@ def test_headings_inside_fenced_code_blocks_do_not_count(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    errors, warnings = validator.check_required_sections(tmp_path, strict=True)
+    errors, _warnings = validator.check_required_sections(tmp_path, strict=True)
     flagged = {e.page.name for e in errors}
     assert "only-fenced.md" in flagged
 

@@ -73,13 +73,17 @@ def test_tool_invoke_rejects_all_empty_array() -> None:
     LangChain's @tool validates args against the Pydantic schema before
     invoking the function body. The LLM sees the error via LangGraph's
     ToolNode and can correct course instead of retrying with more empty
-    dicts."""
+    dicts.
+
+    Note: `raw_paths` is no longer a tool arg — the coordinator injects it
+    via ContextVar. The tool's public schema only exposes `entities`.
+    """
     # Match "email" or "validation" to guard against unrelated exceptions of
     # the same type slipping through. The tuple covers LangChain versions that
     # surface coercion failures as ValueError/TypeError rather than ValidationError.
     with pytest.raises((ValidationError, ValueError, TypeError), match=r"email|validation"):
         create_entities.invoke(
-            {"raw_paths": ["raw/fake.md"], "entities": [{}]},
+            {"entities": [{}]},
         )
 
 
@@ -90,10 +94,22 @@ def test_tool_invoke_rejects_mixed_valid_and_empty() -> None:
     with pytest.raises((ValidationError, ValueError, TypeError), match=r"email|validation"):
         create_entities.invoke(
             {
-                "raw_paths": ["raw/fake.md"],
                 "entities": [
                     {"email": "amit@indiamart.com"},
                     {},
                 ],
             },
         )
+
+
+def test_tool_schema_no_longer_has_raw_paths() -> None:
+    """The coordinator injects raw_paths via ContextVar — the tool's public
+    schema only exposes `entities`. Keep this test green as a tripwire if
+    someone reintroduces raw_paths as an LLM-visible arg."""
+    schema = create_entities.args_schema.model_json_schema()
+    properties = schema.get("properties", {})
+    assert "entities" in properties
+    assert "raw_paths" not in properties, (
+        "raw_paths should no longer appear in the tool's LLM-visible schema — "
+        "the coordinator injects it via ContextVar in run_compilation."
+    )

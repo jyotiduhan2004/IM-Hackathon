@@ -106,12 +106,8 @@ class TestInsightsRepoListForRun:
         from src.db import insights as insights_repo
 
         run = runs_repo.start_run(model="test", notes="since_id test")
-        first_id = insights_repo.record(
-            run_id=run, category="tool_gap", message="batch 1"
-        )
-        second_id = insights_repo.record(
-            run_id=run, category="tool_gap", message="batch 2"
-        )
+        first_id = insights_repo.record(run_id=run, category="tool_gap", message="batch 1")
+        second_id = insights_repo.record(run_id=run, category="tool_gap", message="batch 2")
 
         # since_id = first_id → only rows with id > first_id (i.e., second_id).
         rows = insights_repo.list_for_run(run, limit=10, since_id=first_id)
@@ -129,8 +125,11 @@ class TestInsightsRepoListForRun:
 
 
 class TestPromptContainsLogInsightSection:
-    def test_section_header_present(self) -> None:
-        assert "## When to log_insight" in COMPILER_SYSTEM_PROMPT
+    def test_log_insight_is_mentioned(self) -> None:
+        # After the Tier A wholesale rewrite the guidance is inline in
+        # <tool_guidance> rather than a standalone `## When to log_insight`
+        # section — just assert the tool is named.
+        assert "log_insight" in COMPILER_SYSTEM_PROMPT
 
     def test_all_six_category_names_mentioned(self) -> None:
         required = {

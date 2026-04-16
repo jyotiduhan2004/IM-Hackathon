@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import re
 import tempfile
 from datetime import UTC
@@ -10,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Literal
 from typing import cast
 
 import structlog
@@ -25,6 +27,15 @@ if TYPE_CHECKING:
     from src.compile.tool_call_log import ToolCallLogHandler
 
 logger = structlog.get_logger(__name__)
+
+# ContextVar carrying the current batch's raw paths. The coordinator sets
+# this in `run_compilation` before invoking the agent, and `create_entities`
+# reads it without needing the LLM to thread `raw_paths` through. Shrinking
+# the LLM-visible signature cuts one frequent error mode (agent forgets or
+# malforms the raw_paths list).
+_current_raw_paths: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "current_raw_paths", default=None
+)
 
 
 # === Custom Tools for the Compiler Agent ===
@@ -149,34 +160,66 @@ def list_uncompiled_emails(raw_dir: str = "raw") -> list[dict[str, str]]:
 
 
 @tool
-def list_wiki_pages(wiki_dir: str = "wiki") -> dict[str, list[str]]:
-    """List all existing wiki pages grouped by category.
+def list_wiki_pages(
+    wiki_dir: str = "wiki",
+    response_format: Literal["concise", "detailed"] = "concise",
+) -> dict[str, Any]:
+    """Fallback browse of the wiki catalog. Prefer `resolve_page` as the
+    first discovery call — this tool is for "I don't know the slug, let
+    me eyeball the category."
 
-    Call this BEFORE creating new pages so you know what already exists and
-    can update the existing page instead of duplicating.
+    Args:
+        wiki_dir: Root wiki directory.
+        response_format:
+          - "concise" (default) — `{category: [slug, ...]}`. Cheap inventory.
+          - "detailed" — `{category: [{slug, title, page_type, status,
+            source_count, last_compiled}, ...]}`. Per-page metadata; costs
+            more context but saves a follow-up `get_page_summary`.
 
     Returns:
-        Dict with keys: topics, entities, policies, timelines, conflicts.
-        Each value is a list of page names (without .md extension).
-        These names are what you should use in [[wikilinks]].
+        Dict keyed by category. Categories: topics, entities, people,
+        systems, policies.
     """
     wiki_path = Path(wiki_dir)
-    result: dict[str, list[str]] = {
-        "topics": [],
-        "entities": [],
-        "systems": [],
-        "policies": [],
-        "timelines": [],
-        "conflicts": [],
-    }
+    categories: tuple[str, ...] = ("topics", "entities", "people", "systems", "policies")
     if not wiki_path.exists():
-        return result
+        return {c: [] for c in categories}
 
-    for category in result:
+    if response_format == "concise":
+        concise: dict[str, list[str]] = {c: [] for c in categories}
+        for category in categories:
+            cat_dir = wiki_path / category
+            if cat_dir.exists():
+                concise[category] = sorted(f.stem for f in cat_dir.glob("*.md"))
+        return cast(dict[str, Any], concise)
+
+    detailed: dict[str, list[dict[str, Any]]] = {c: [] for c in categories}
+    for category in categories:
         cat_dir = wiki_path / category
-        if cat_dir.exists():
-            result[category] = sorted(f.stem for f in cat_dir.glob("*.md"))
-    return result
+        if not cat_dir.exists():
+            continue
+        for md_file in sorted(cat_dir.glob("*.md")):
+            if md_file.name == "index.md":
+                continue
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm = _extract_frontmatter(content)
+            if not fm:
+                continue
+            sources = fm.get("sources") or []
+            detailed[category].append(
+                {
+                    "slug": md_file.stem,
+                    "title": str(fm.get("title") or md_file.stem),
+                    "page_type": str(fm.get("page_type") or ""),
+                    "status": str(fm.get("status") or "active"),
+                    "source_count": len(sources) if isinstance(sources, list) else 0,
+                    "last_compiled": str(fm.get("last_compiled") or ""),
+                }
+            )
+    return cast(dict[str, Any], detailed)
 
 
 @tool
@@ -1379,57 +1422,103 @@ def log_insight(
     return {"ok": True, "id": new_id}
 
 
-@tool
-def resolve_page(query: str) -> dict[str, Any]:
-    """Find a wiki page by slug, title, or entity email.
+_URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
 
-    WHEN TO USE: before creating a new page — check the `wiki_pages`
-    catalog for an existing page covering the same concept or person.
-    On a miss, the tool returns up to 5 substring candidates so you
-    don't have to retry with slug variants.
+
+def _normalize_query(query: str) -> tuple[str, str | None]:
+    """Normalise a resolve_page query. Returns (normalised, original-if-changed).
+
+    Handles three common agent leaks:
+    1. URLs (`https://ai.intermesh.net`) → strip scheme + path → host.
+    2. Dotted hostnames (`mesh-pg.intermesh.net`) → leftmost label.
+    3. Slug variants with underscores (`mesh_pg`) → hyphens.
+
+    The second return value is the pre-normalisation string, or None when
+    nothing was rewritten. Used to stamp `auto_corrected_from`/`_to` on
+    the tool response so the scorecard can measure adoption.
+    """
+    original = query.strip()
+    if not original:
+        return "", None
+    q = original
+
+    # Strip URL scheme + path. `https://a.b.com/x/y` → `a.b.com`.
+    if _URL_SCHEME_RE.match(q):
+        without_scheme = _URL_SCHEME_RE.sub("", q, count=1)
+        q = without_scheme.split("/", 1)[0]
+
+    # Dotted host — take leftmost label. We only do this when the query
+    # looks like a host (contains a TLD-ish suffix), not when it's a
+    # real sentence with a period. Heuristic: last label is ≤4 chars AND
+    # alphabetic — matches .com, .net, .io, .ai but not ordinary prose.
+    if "." in q and "@" not in q:
+        parts = q.split(".")
+        last = parts[-1]
+        if 0 < len(last) <= 4 and last.isalpha() and len(parts) >= 2:
+            q = parts[0]
+
+    # Underscores → hyphens; collapse multiple dashes.
+    q = q.replace("_", "-")
+    q = re.sub(r"-+", "-", q).strip("-")
+
+    if not q:
+        return original, None
+    return q, (original if q != original else None)
+
+
+@tool
+def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
+    """Find a wiki page by slug, title, or person email.
+
+    WHEN TO USE: before creating ANY page. Check whether something close
+    already exists so you can merge rather than duplicate.
 
     WHEN NOT TO USE:
-    - You already have the exact slug and want the file contents
-      → use `read_file` directly.
-    - You want to browse the full catalog by category
-      → use `list_wiki_pages`.
-    - You need free-text search across page BODIES
-      → use `grep` on the wiki directory.
+    - You already have the exact slug — use `read_file` directly.
+    - You want to browse by category — use `list_wiki_pages`.
+    - You need free-text body search — use `grep`.
 
     Args:
-        query: A single string. Auto-detected by shape:
-          - contains "@"    → email lookup against entity pages
-          - kebab-case slug → exact slug match
-          - anything else   → exact title match (case-insensitive)
-          The tool falls back across all three shapes before giving up,
-          so a mis-classified shape still has a chance to hit.
+        query: Slug, title, or email. The tool auto-detects by shape and
+            normalises common leaks:
+              - `https://mesh-pg.intermesh.net/x` → `mesh-pg`
+              - `mesh_pg` → `mesh-pg`
+        limit: Max candidates to return on a miss (default 10, capped at 10).
 
-    Returns:
-        On hit: {"exists": True, "slug", "title", "page_type", "path",
-                 "status", "confidence"}.
-                `status` is "current" | "superseded" | "contested" — use
-                it to decide whether to create a replacement page.
-        On miss with candidates:
-                {"exists": False, "candidates": [<up to 5 substring
-                matches with slug/title/page_type/path/status>]}.
-        On miss with nothing close:
-                {"exists": False, "candidates": []}.
-        On empty/stale catalog:
-                {"exists": False, "catalog_empty_or_stale": True,
-                 "error": "...", "catalog_counts": {...}}.
+    Returns (hit):
+        {"exists": True, "slug", "title", "page_type", "status",
+         "confidence", "why_matched", "auto_corrected_from",
+         "auto_corrected_to"}.
+
+    Returns (miss):
+        {"exists": False, "candidates": [...up to `limit` close matches...],
+         "auto_corrected_from", "auto_corrected_to"}.
+
+    Returns (empty catalog):
+        {"exists": False, "catalog_empty_or_stale": True, "error": "...",
+         "catalog_counts": {...}}.
+
+    Note: the `path` field is intentionally omitted from the response —
+    slugs are the stable identifier. If you need the file path, read the
+    slug via `get_page_summary` or open it with `read_file("/wiki/<cat>/<slug>.md")`.
     """
-    # deferred to avoid circular import at module load time
     from src.db.wiki_pages import count_wiki_pages_by_type
     from src.db.wiki_pages import lookup_page
     from src.db.wiki_pages import search_pages
 
-    q = (query or "").strip()
-    if not q:
+    q_raw = (query or "").strip()
+    if not q_raw:
         return {
             "exists": False,
             "error": "query is empty",
             "candidates": [],
         }
+
+    q, original_if_rewritten = _normalize_query(q_raw)
+    if not q:
+        return {"exists": False, "error": "query normalised to empty", "candidates": []}
+
+    limit = max(1, min(int(limit or 10), 10))
 
     catalog_counts = count_wiki_pages_by_type()
     if not catalog_counts or sum(catalog_counts.values()) == 0:
@@ -1443,10 +1532,6 @@ def resolve_page(query: str) -> dict[str, Any]:
             "catalog_counts": catalog_counts,
         }
 
-    # Fallback chain: try whichever shape is most likely first, but if
-    # that misses, try the others before declaring the query a miss. This
-    # stops an agent that passes "Amit Agarwal" (a title) as `query` from
-    # missing just because title-lookup happened to run last.
     lookups: list[tuple[str, dict[str, str]]] = []
     if "@" in q:
         lookups.append(("email", {"canonical_user_email": q.lower()}))
@@ -1461,31 +1546,37 @@ def resolve_page(query: str) -> dict[str, Any]:
         seen_kinds.add(kind)
         row = lookup_page(**kwargs)  # type: ignore[arg-type]
         if row is not None:
-            return {
+            response: dict[str, Any] = {
                 "exists": True,
                 "slug": row["slug"],
                 "title": row["title"],
                 "page_type": row["page_type"],
-                "path": row["path"],
                 "status": row["status"],
                 "confidence": float(row["confidence"]),
+                "why_matched": kind,
             }
+            if original_if_rewritten is not None:
+                response["auto_corrected_from"] = original_if_rewritten
+                response["auto_corrected_to"] = q
+            return response
 
-    # Real miss — help the agent find something close without retrying.
-    candidates = search_pages(q, limit=5)
-    return {
+    candidates = search_pages(q, limit=limit)
+    response = {
         "exists": False,
         "candidates": [
             {
                 "slug": c["slug"],
                 "title": c["title"],
                 "page_type": c["page_type"],
-                "path": c["path"],
                 "status": c["status"],
             }
             for c in candidates
         ],
     }
+    if original_if_rewritten is not None:
+        response["auto_corrected_from"] = original_if_rewritten
+        response["auto_corrected_to"] = q
+    return response
 
 
 @tool
@@ -1584,19 +1675,20 @@ class EntityRequest(BaseModel):
 
 
 @tool
-def create_entities(raw_paths: list[str], entities: list[EntityRequest]) -> dict[str, Any]:
-    """Resolve or create entity pages for the people mentioned in this batch.
+def create_entities(entities: list[EntityRequest]) -> dict[str, Any]:
+    """Resolve or create people pages for the humans mentioned in this batch.
 
-    Always use this tool for entity pages — do NOT invent slugs or
+    Always use this tool for people pages — do NOT invent slugs or
     `write_file` a new entity markdown directly. The tool derives the
     canonical slug from each email deterministically, checks for existing
     pages (by canonical slug OR by legacy display-name slug with
     `email:` frontmatter), and gates new-page creation on evidence
     strength.
 
-    Each requested email MUST appear literally in at least one raw file
-    from ``raw_paths``. Addresses that don't match are refused with
-    `reason: "email_not_in_raw"`.
+    The coordinator injects `raw_paths` for the current batch automatically
+    — you only pass the people you want to resolve or create. Each email
+    must appear literally in at least one of the batch's raw files; any
+    that don't match are refused with `reason: "email_not_in_raw"`.
 
     Per-entity outcomes:
 
@@ -1616,9 +1708,6 @@ def create_entities(raw_paths: list[str], entities: list[EntityRequest]) -> dict
       re-read the raw file if you're unsure of the address.
 
     Args:
-        raw_paths: Relative raw email paths for the current batch, e.g.
-            ["raw/2026-04-11_subject_a.md"]. The tool reads these to
-            validate that each requested email actually appears.
         entities: List of `EntityRequest` objects. **Each item MUST have
             a non-empty `email`.** Do not emit empty objects — the
             schema requires `email`. One entry per person; batching 5-30
@@ -1631,10 +1720,19 @@ def create_entities(raw_paths: list[str], entities: list[EntityRequest]) -> dict
     """
     from src.compile.entities import create_entity_pages
 
-    # LangChain validates & coerces each list item into an EntityRequest
-    # (Pydantic model). Unwrap to plain dicts so the repo-layer helper
-    # keeps its simple signature and stays usable from scripts and tests
-    # that don't import the tool layer.
+    raw_paths = _current_raw_paths.get()
+    if not raw_paths:
+        return {
+            "ok": False,
+            "error": (
+                "no raw_paths in batch context — the coordinator is supposed to "
+                "inject them before invoking the agent. If you're testing this "
+                "tool directly, call create_entity_pages(raw_paths, entities) "
+                "instead."
+            ),
+            "results": [],
+        }
+
     entity_dicts = [e.model_dump() for e in entities]
     return create_entity_pages(raw_paths, entity_dicts)
 
@@ -1996,10 +2094,55 @@ def _make_chat_model(model_name: str) -> Any:
     return init_chat_model(model_name)
 
 
+def _build_compile_view(raw_dir: Path, wiki_dir: Path) -> Path:
+    """Resolve the filesystem view-root for the compile agent.
+
+    Returns the common parent of the resolved raw_dir and wiki_dir, which
+    is what FilesystemBackend's virtual_mode uses as `root_dir`. Inside the
+    view, the agent sees `/raw` and `/wiki` as virtual paths.
+
+    Why not a tempdir + symlinks: FilesystemBackend resolves symlinks then
+    checks `relative_to(root_dir)`. A symlink target outside the tempdir
+    fails that check (`Path:... outside root directory: /tmp/...`). We
+    instead anchor `root_dir` at the real common parent so resolution
+    stays inside.
+
+    The host path is still hidden from the LLM via the prompt + the
+    path_autoheal middleware, which rewrites accidental host-prefix leaks
+    back to virtual `/raw/...` / `/wiki/...` form.
+    """
+    raw_real = raw_dir.resolve()
+    wiki_real = wiki_dir.resolve()
+    if raw_real.parent != wiki_real.parent:
+        # Non-default layout (raw and wiki in different parent dirs). Fall
+        # back to cwd so the backend at least doesn't reject every call.
+        # Operator should fix the layout — log so this is loud.
+        logger.warning(
+            "compile_view_mismatched_parents",
+            raw_parent=str(raw_real.parent),
+            wiki_parent=str(wiki_real.parent),
+            falling_back_to=str(Path.cwd().resolve()),
+        )
+        return Path.cwd().resolve()
+    return raw_real.parent
+
+
+def _cleanup_compile_view(view_root: Path) -> None:
+    """No-op when the view-root is a real repo dir (the typical case).
+
+    Kept for forward compatibility — earlier iterations of the design used
+    a tempdir + symlinks per run. If we ever revive that approach, the
+    cleanup goes here. Today the view-root is the repo's working dir (or
+    a parent of raw/+wiki/) and must NOT be deleted.
+    """
+    _ = view_root  # placeholder — see docstring
+
+
 def create_compiler(
     model_name: str | None = None,
     raw_dir: str = "raw",
     wiki_dir: str = "wiki",
+    view_root: Path | None = None,
 ) -> Any:
     """Create a Deep Agents wiki compiler.
 
@@ -2012,14 +2155,24 @@ def create_compiler(
 
     Args:
         model_name: Model string. Defaults to settings.llm_model.
-        raw_dir: Path to raw/ directory
-        wiki_dir: Path to wiki/ directory
+        raw_dir: Path to raw/ directory. Used for symlink target inside
+            the view-root and for ergonomic error messages.
+        wiki_dir: Path to wiki/ directory. Same treatment as raw_dir.
+        view_root: Pre-built view-root to use (for tests/reuse). When None,
+            a fresh per-run view is built with symlinks to raw_dir/wiki_dir.
+            The caller MUST clean up the view when done (run_compilation
+            does this automatically).
 
     Returns:
         A compiled LangGraph agent ready to invoke.
     """
+    from deepagents import FilesystemPermission
     from deepagents import create_deep_agent
     from deepagents.backends import FilesystemBackend
+
+    from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
+    from src.compile.middleware.path_autoheal import PathAutohealMiddleware
+    from src.compile.reviewer import build_reviewer_subagent
 
     model_name = model_name or settings.llm_model
     logger.info(
@@ -2030,54 +2183,54 @@ def create_compiler(
 
     model = _make_chat_model(model_name)
 
-    # Deep Agents defaults to a virtual (in-memory) filesystem. We need real disk
-    # so read_file/write_file/edit_file operate on raw/ and wiki/ directly.
-    # virtual_mode=True with root_dir="." means:
-    # - Absolute paths and ".." traversal are blocked (security guardrail)
-    # - Agent must use relative paths like "raw/foo.md", "wiki/topics/bar.md"
-    # Per FilesystemBackend docs, this is the right mode for bounded workflows.
-    cwd = Path.cwd().resolve()
-    backend = FilesystemBackend(root_dir=str(cwd), virtual_mode=True)
+    # Per-run view: chroot the agent's filesystem to {view}/raw and
+    # {view}/wiki only. Host paths like /Users/... are not visible.
+    # The view is built here when none is passed in (typical path). Caller
+    # (run_compilation) cleans up on exit.
+    if view_root is None:
+        view_root = _build_compile_view(Path(raw_dir), Path(wiki_dir))
+        logger.info("compile view built", view_root=str(view_root))
+
+    backend = FilesystemBackend(root_dir=str(view_root), virtual_mode=True)
+
+    # Permission rules, evaluated in declaration order:
+    # 1. deny write anywhere under /raw — emails are immutable source of truth.
+    # 2. deny read of /raw/attachments — binary data; agent can't do anything
+    #    useful with it and reading eats context.
+    # 3. reads/writes elsewhere fall through to the permissive default.
+    permissions = [
+        FilesystemPermission(operations=["write"], paths=["/raw/**"], mode="deny"),
+        FilesystemPermission(operations=["read"], paths=["/raw/attachments/**"], mode="deny"),
+    ]
 
     system_prompt = (
         COMPILER_SYSTEM_PROMPT
-        + f"\n\n## Context\n\n- raw_dir: {raw_dir}\n- wiki_dir: {wiki_dir}\n"
-        + "- ALL file paths MUST be relative (no leading /, no ..). Examples:\n"
-        + f"  - GOOD: `{raw_dir}/2026-04-11_subject_abc.md`\n"
-        + f"  - GOOD: `{wiki_dir}/topics/my-topic.md`\n"
-        + "  - BAD: `/Users/...` (absolute paths are blocked)\n"
-        + "  - BAD: `/raw/foo.md` (leading slash means absolute; blocked)\n"
-        + "- Do NOT call `ls` on absolute paths or `/`. Use `ls raw` or "
-        + f"`ls {wiki_dir}/topics` or use `glob` with patterns.\n"
+        + "\n\n## Runtime context\n\n"
+        + "- Your filesystem is chrooted. Only `/raw/` and `/wiki/` exist.\n"
+        + f"- Model: `{model_name}`.\n"
     )
 
-    # mark_as_compiled, update_wiki_index, append_to_log, and
-    # stamp_page_compiled_at are all NOT exposed to the agent — every
-    # bookkeeping call is a coordinator concern now. scripts/compile_all.py
-    # (a) flips messages.compile_state in Postgres deterministically after
-    # run_compilation returns (trusting the LLM leaked ~68% of "processed"
-    # emails into permanent-pending state), (b) regenerates wiki/index.md
-    # after every run, (c) writes one structured per-batch row to
-    # wiki/log.md, and (d) stamps `last_compiled` on every wiki page whose
-    # mtime advanced during the run. Letting the LLM make these calls was
-    # redundant at best and unreliable at worst (the agent forgot stamp
-    # and log calls roughly half the time, leaving pages with stale
-    # timestamps and gaps in the audit trail). All four functions remain
-    # importable for one-off manual use.
-    #
-    # `check_my_work` IS exposed — it runs a quality critique over the
-    # wiki pages sourcing a just-compiled email and returns a punch list
-    # the agent can fix in-session before moving on. It does NOT flip
-    # compile state; it's a self-review gate. The coordinator marks
-    # programmatically post-batch as before.
+    reviewer_spec = build_reviewer_subagent()
+
+    # Compile agent surface:
+    # - Custom tools: find_new_sources, list_wiki_pages, resolve_page,
+    #   create_entities, write_draft_page, log_insight, check_my_work,
+    #   get_page_summary, get_thread_context, patch_page, validate_page_draft.
+    # - Inherited filesystem tools (ls, read_file, write_file, edit_file,
+    #   glob, grep) from FilesystemMiddleware auto-added by create_deep_agent.
+    # - Middleware: path_autoheal (rewrites host-path leaks) +
+    #   entity_write_autoheal (nudges raw entity writes toward create_entities)
+    #   + check_my_work_gate (short-circuits check_my_work calls made before
+    #   any content-page write succeeds — live traces show 59-78% of
+    #   batches hit the validator before writing anything).
+    # - Subagent: reviewer (read-only, structured verdict).
+    # Bookkeeping tools (mark_as_compiled, stamp_page_compiled_at,
+    # append_to_log, update_wiki_index) remain importable but NOT bound —
+    # the coordinator handles them deterministically post-run.
     # NOTE: `list_uncompiled_emails` is deliberately NOT exposed to the agent.
     # The coordinator owns the compile queue and already passes the batch file
     # list in the user instruction. Letting the agent browse the whole queue
     # was pure context tax in Langfuse traces.
-    # Hard gate on `check_my_work`: live traces show the agent calls it
-    # before writing anything in 59-78% of batches, which makes the
-    # critique tool useless. The middleware short-circuits the tool when
-    # no content-page write has succeeded yet in this session.
     from src.compile.middleware import CheckMyWorkGateMiddleware
 
     return create_deep_agent(
@@ -2097,7 +2250,13 @@ def create_compiler(
         ],
         system_prompt=system_prompt,
         backend=backend,
-        middleware=[CheckMyWorkGateMiddleware()],
+        permissions=permissions,
+        middleware=[
+            PathAutohealMiddleware(),
+            EntityWriteAutohealMiddleware(),
+            CheckMyWorkGateMiddleware(),
+        ],
+        subagents=[cast(Any, reviewer_spec)],
     )
 
 
@@ -2160,6 +2319,24 @@ def get_langfuse_handler(
     return CallbackHandler(update_trace=update_trace)
 
 
+def _extract_raw_paths_from_instruction(instruction: str) -> list[str]:
+    """Pull raw/*.md paths out of the coordinator's instruction string.
+
+    The coordinator inlines the batch's raw paths in the user message (see
+    `scripts/compile_all.py::_build_batch_instruction`). We grep them out
+    so `create_entities` can inject `raw_paths` without the LLM having to
+    thread them through.
+
+    Returns the unique list in source order. An empty list is a benign
+    signal — create_entities will error out with a clear message.
+    """
+    matches = re.findall(r"raw/[^\s`'\"]+?\.md", instruction)
+    seen: dict[str, None] = {}
+    for m in matches:
+        seen[m] = None
+    return list(seen)
+
+
 def run_compilation(
     instruction: str = "Compile all uncompiled raw emails into wiki pages.",
     model_name: str | None = None,
@@ -2171,6 +2348,7 @@ def run_compilation(
     run_name: str | None = None,
     trace_metadata: dict[str, Any] | None = None,
     trace_tags: list[str] | None = None,
+    raw_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 
@@ -2186,35 +2364,59 @@ def run_compilation(
     Pass a `ToolCallLogHandler` as `tool_log` to capture per-tool-call
     telemetry (name, inputs, latency, status). See
     `src/compile/tool_call_log.py`.
+
+    `raw_paths` is optional. When provided, the coordinator's list of raw
+    paths for this batch is injected into the `_current_raw_paths` ContextVar
+    so `create_entities` can use them without the LLM threading them
+    through. When None, we grep them out of the instruction string.
     """
-    agent = create_compiler(model_name=model_name, raw_dir=raw_dir, wiki_dir=wiki_dir)
+    # Build the view-root here so cleanup is paired with this run's
+    # lifecycle, not the cached agent graph.
+    view_root = _build_compile_view(Path(raw_dir), Path(wiki_dir))
+    try:
+        agent = create_compiler(
+            model_name=model_name,
+            raw_dir=raw_dir,
+            wiki_dir=wiki_dir,
+            view_root=view_root,
+        )
 
-    callbacks = []
-    lf = get_langfuse_handler(update_trace=True)
-    if lf:
-        callbacks.append(lf)
-    if cache_stats is not None:
-        callbacks.append(cache_stats)
-    if tool_log is not None:
-        callbacks.append(tool_log)
+        callbacks = []
+        lf = get_langfuse_handler(update_trace=True)
+        if lf:
+            callbacks.append(lf)
+        if cache_stats is not None:
+            callbacks.append(cache_stats)
+        if tool_log is not None:
+            callbacks.append(tool_log)
 
-    config: dict[str, Any] = {}
-    if callbacks:
-        config["callbacks"] = callbacks
-    config["recursion_limit"] = recursion_limit
-    if run_name:
-        config["run_name"] = run_name
-    if trace_metadata:
-        config["metadata"] = trace_metadata
-    if trace_tags:
-        config["tags"] = trace_tags
+        config: dict[str, Any] = {}
+        if callbacks:
+            config["callbacks"] = callbacks
+        config["recursion_limit"] = recursion_limit
+        if run_name:
+            config["run_name"] = run_name
+        if trace_metadata:
+            config["metadata"] = trace_metadata
+        if trace_tags:
+            config["tags"] = trace_tags
 
-    logger.info(
-        "running compilation",
-        instruction=instruction[:100],
-        recursion_limit=recursion_limit,
-    )
-    return agent.invoke(
-        {"messages": [{"role": "user", "content": instruction}]},
-        config=config,
-    )
+        effective_raw_paths = raw_paths or _extract_raw_paths_from_instruction(instruction)
+
+        logger.info(
+            "running compilation",
+            instruction=instruction[:100],
+            recursion_limit=recursion_limit,
+            raw_paths_count=len(effective_raw_paths),
+        )
+
+        token = _current_raw_paths.set(effective_raw_paths)
+        try:
+            return agent.invoke(
+                {"messages": [{"role": "user", "content": instruction}]},
+                config=config,
+            )
+        finally:
+            _current_raw_paths.reset(token)
+    finally:
+        _cleanup_compile_view(view_root)

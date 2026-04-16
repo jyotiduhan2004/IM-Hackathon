@@ -98,9 +98,7 @@ def test_write_draft_page_rejects_non_kebab_slug(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bad_slug", ["foo-", "-foo", "foo--bar", "foo-bar-", "--"])
-def test_write_draft_page_rejects_trailing_and_double_dashes(
-    tmp_path: Path, bad_slug: str
-) -> None:
+def test_write_draft_page_rejects_trailing_and_double_dashes(tmp_path: Path, bad_slug: str) -> None:
     """Regression guard: kebab-case must not allow edge-case dashes that
     produce weird filenames (e.g. `foo-.md` or `foo--bar.md`)."""
     wiki_dir = tmp_path / "wiki"
@@ -118,9 +116,7 @@ def test_write_draft_page_rejects_trailing_and_double_dashes(
 
 
 @pytest.mark.parametrize("bad_wiki", ["../etc", "wiki/../../etc", "./foo/../bar"])
-def test_write_draft_page_rejects_path_traversal_in_wiki_dir(
-    tmp_path: Path, bad_wiki: str
-) -> None:
+def test_write_draft_page_rejects_path_traversal_in_wiki_dir(tmp_path: Path, bad_wiki: str) -> None:
     """LLM-callable tool must reject `..` in wiki_dir so a crafted prompt
     can't escape the wiki tree."""
     result = _invoke_write_draft(
@@ -207,12 +203,11 @@ def test_mkdocs_excludes_drafts_from_build(tmp_path: Path) -> None:
 
 
 def test_prompt_explains_when_to_write_a_draft() -> None:
-    assert "## When to write a draft" in COMPILER_SYSTEM_PROMPT
+    """Tier A wholesale-rewrote the prompt — the standalone `## When to
+    write a draft` heading is gone, but the off-ramp guidance still needs
+    to be there. Assert the tool name, a "draft" cue in the workflow, and
+    one of the few-shot examples that demonstrates the idiom."""
     assert "write_draft_page" in COMPILER_SYSTEM_PROMPT
-    assert "Good draft cases:" in COMPILER_SYSTEM_PROMPT
-    assert "Bad draft cases" in COMPILER_SYSTEM_PROMPT
-    # The section must come before the wikilink rules, so the agent has
-    # the draft off-ramp context when it hits "every wikilink must resolve".
-    draft_idx = COMPILER_SYSTEM_PROMPT.index("## When to write a draft")
-    wikilink_idx = COMPILER_SYSTEM_PROMPT.index("## Wikilink rules")
-    assert draft_idx < wikilink_idx
+    assert "_drafts" in COMPILER_SYSTEM_PROMPT
+    # Few-shot example #4 is the canonical "draft when uncertain" demo.
+    assert "Draft when uncertain" in COMPILER_SYSTEM_PROMPT

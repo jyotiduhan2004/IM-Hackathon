@@ -264,9 +264,10 @@ def test_middleware_wired_into_compiler() -> None:
 
     Smoke-level: we don't run an agent, just confirm the middleware's
     `wrap_tool_call` is composed into the ToolNode's wrapper chain so
-    the wiring survives refactors. The chain lives in a closure on
-    `ToolNode._wrap_tool_call` and carries function cells — one per
-    middleware that implements the hook.
+    the wiring survives refactors. deepagents nests middlewares pairwise
+    via `_chain_tool_call_wrappers.compose_two`, so with >1 middleware
+    the gate's `wrap_tool_call` lives several layers deep in the closure
+    chain rather than at the outermost level — we walk recursively.
     """
     from src.compile.compiler import create_compiler
 
@@ -275,18 +276,28 @@ def test_middleware_wired_into_compiler() -> None:
     wrapper = getattr(tools_node, "_wrap_tool_call", None)
     assert wrapper is not None, "ToolNode missing _wrap_tool_call — LangGraph API shifted"
 
-    closure = getattr(wrapper, "__closure__", None) or ()
-    cell_names: list[str] = []
-    for cell in closure:
-        try:
-            contents = cell.cell_contents
-        except ValueError:
-            continue
-        qualname = getattr(contents, "__qualname__", None) or ""
-        if "CheckMyWorkGateMiddleware" in qualname:
-            cell_names.append(qualname)
-    assert cell_names, (
-        "CheckMyWorkGateMiddleware.wrap_tool_call not found in ToolNode's "
-        "wrapper chain — check that create_compiler passes the middleware "
-        "into create_deep_agent(middleware=[...])."
+    found: list[str] = []
+    seen: set[int] = set()
+
+    def walk(fn: object) -> None:
+        if not callable(fn) or id(fn) in seen:
+            return
+        seen.add(id(fn))
+        closure = getattr(fn, "__closure__", None) or ()
+        for cell in closure:
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                continue
+            qualname = getattr(contents, "__qualname__", None) or ""
+            if "CheckMyWorkGateMiddleware" in qualname:
+                found.append(qualname)
+            if callable(contents):
+                walk(contents)
+
+    walk(wrapper)
+    assert found, (
+        "CheckMyWorkGateMiddleware.wrap_tool_call not found anywhere in "
+        "ToolNode's wrapper chain — check that create_compiler passes the "
+        "middleware into create_deep_agent(middleware=[...])."
     )

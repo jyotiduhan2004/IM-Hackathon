@@ -34,15 +34,11 @@ from src.utils import split_frontmatter
 # nagging about pre-existing breakage from other batches.
 _BROKEN_PAGE_STALENESS_SECONDS = 600
 
-_WIKI_CATEGORIES = (
-    "topics",
-    "entities",
-    "people",
-    "systems",
-    "policies",
-    "timelines",
-    "conflicts",
-)
+# Categories we scan for known-slug resolution on wikilinks. `timelines/` and
+# `conflicts/` are empty on disk (retired in Tier P); dropping them from the
+# scan stops the known-slugs set from growing with nothing to hit. People
+# pages still file under `entities/` until the rename migration lands.
+_WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies")
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")

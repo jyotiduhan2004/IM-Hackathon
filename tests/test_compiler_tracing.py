@@ -40,10 +40,17 @@ def test_create_compiler_passes_custom_system_prompt() -> None:
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert "system_prompt" in kwargs
+    # Tier A wholesale-rewrote the prompt — assert structural anchors instead
+    # of the old free-text phrases.
     assert "You are a wiki compiler." in kwargs["system_prompt"]
-    assert "Do NOT call" in kwargs["system_prompt"]
-    assert "`list_uncompiled_emails`" in kwargs["system_prompt"]
+    assert "<background>" in kwargs["system_prompt"]
+    assert "<page_types>" in kwargs["system_prompt"]
+    assert "Runtime context" in kwargs["system_prompt"]
     assert kwargs.get("memory") is None
+    # New Tier A wiring: permissions + middleware + subagents all present.
+    assert len(kwargs.get("permissions") or []) >= 1
+    assert len(kwargs.get("middleware") or []) >= 2
+    assert len(kwargs.get("subagents") or []) >= 1
 
 
 def test_run_compilation_passes_trace_config(monkeypatch: Any) -> None:

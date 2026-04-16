@@ -163,6 +163,95 @@ def test_resolve_page_fallback_across_shapes(db_conn: psycopg.Connection) -> Non
     assert result["slug"] == "quarterly-refund-review"
 
 
+def test_resolve_page_normalises_url_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URL-shaped queries get rewritten to the host's leftmost label.
+
+    `https://mesh-pg.intermesh.net/x` → `mesh-pg`. The tool stamps
+    `auto_corrected_from` / `auto_corrected_to` so the scorecard can
+    measure adoption.
+    """
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"system": 1})
+
+    def fake_lookup(**kwargs: Any) -> dict[str, Any] | None:
+        if kwargs.get("slug") == "mesh-pg":
+            return {
+                "slug": "mesh-pg",
+                "title": "Mesh-PG",
+                "page_type": "system",
+                "path": "wiki/systems/mesh-pg.md",
+                "status": "active",
+                "confidence": 1.0,
+            }
+        return None
+
+    monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
+    monkeypatch.setattr("src.db.wiki_pages.search_pages", lambda q, limit=5: [])
+
+    result = _resolve("https://mesh-pg.intermesh.net/x/y")
+    assert result["exists"] is True
+    assert result["slug"] == "mesh-pg"
+    assert result["auto_corrected_from"] == "https://mesh-pg.intermesh.net/x/y"
+    assert result["auto_corrected_to"] == "mesh-pg"
+    assert result["why_matched"] == "slug"
+
+
+def test_resolve_page_normalises_underscore_to_hyphen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`mesh_pg` → `mesh-pg` — common slug variant the LLM emits."""
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"system": 1})
+
+    def fake_lookup(**kwargs: Any) -> dict[str, Any] | None:
+        if kwargs.get("slug") == "mesh-pg":
+            return {
+                "slug": "mesh-pg",
+                "title": "Mesh-PG",
+                "page_type": "system",
+                "path": "wiki/systems/mesh-pg.md",
+                "status": "active",
+                "confidence": 1.0,
+            }
+        return None
+
+    monkeypatch.setattr("src.db.wiki_pages.lookup_page", fake_lookup)
+    monkeypatch.setattr("src.db.wiki_pages.search_pages", lambda q, limit=5: [])
+
+    result = _resolve("mesh_pg")
+    assert result["exists"] is True
+    assert result["auto_corrected_from"] == "mesh_pg"
+    assert result["auto_corrected_to"] == "mesh-pg"
+
+
+def test_resolve_page_response_omits_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`path` is dropped from the resolve_page response — slugs are the
+    stable identifier the LLM should operate on."""
+    monkeypatch.setattr("src.db.wiki_pages.count_wiki_pages_by_type", lambda: {"topic": 1})
+    monkeypatch.setattr(
+        "src.db.wiki_pages.lookup_page",
+        lambda **kwargs: (
+            {
+                "slug": "buylead",
+                "title": "BuyLead",
+                "page_type": "topic",
+                "path": "wiki/topics/buylead.md",
+                "status": "active",
+                "confidence": 1.0,
+            }
+            if kwargs.get("slug") == "buylead"
+            else None
+        ),
+    )
+
+    result = _resolve("buylead")
+    assert result["exists"] is True
+    assert "path" not in result
+    assert result["why_matched"] == "slug"
+
+
 def test_resolve_page_surfaces_superseded_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
