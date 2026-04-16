@@ -52,6 +52,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -101,6 +102,24 @@ _RECURSION_PAT = re.compile(
 # default — both count as "abs".
 _FILE_PATH_PAT = re.compile(r"""["']file_path["']\s*:\s*["']([^"']+)["']""")
 
+# Tier A telemetry patterns. Shared: nightly_trace_audit imports these
+# to keep the two reports in sync. Match only the key (not the exact
+# punctuation) so middleware-owned formatting can drift.
+AUTO_CORRECT_PAT = re.compile(r"auto_corrected_from", re.IGNORECASE)
+
+# Match key + literal verdict value so we don't fire on stray "verdict"
+# prose appearing outside a ReviewReport payload.
+REVIEWER_VERDICT_PAT = re.compile(
+    r"""['"]verdict['"]\s*:\s*['"](pass|revise|block)['"]""",
+    re.IGNORECASE,
+)
+
+# Tuple for deterministic iteration order when building the dist dict.
+REVIEWER_VERDICTS: tuple[str, ...] = ("pass", "revise", "block")
+
+# write_todos called within the first N tool calls counts as adoption.
+TODOS_EARLY_WINDOW = 3
+
 # Retry policy for the trace-fetch subprocess. Linear backoff is fine
 # — the self-hosted instance just needs a bit of breathing room, and
 # the script's overall runtime is dominated by the sequential fetch.
@@ -124,6 +143,10 @@ class TraceMetrics:
     write_draft_page_calls: int = 0
     log_insight_calls: int = 0
     recursion_or_timeout: bool = False
+    # Tier A signals. Default to "feature off" values pre-Tier-A.
+    auto_corrected: bool = False
+    reviewer_verdict: str | None = None
+    wrote_todos_early: bool = False
 
 
 @dataclass
@@ -156,6 +179,13 @@ class ModelAggregate:
     absolute_path_rate: float = 0.0
     check_my_work_first_call_rate: float = 0.0
     traces_included: int = 0
+    # auto_correction_rate should trend DOWN as the LLM internalizes
+    # the chroot — it's a friction metric, not a health metric.
+    auto_correction_rate: float = 0.0
+    reviewer_verdicts_dist: dict[str, int] = field(
+        default_factory=lambda: dict.fromkeys((*REVIEWER_VERDICTS, "none"), 0)
+    )
+    todo_adoption_rate: float = 0.0
 
 
 def _parse_since(since: str) -> datetime:
@@ -267,9 +297,26 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
         name = str(obs.get("name", ""))
         if not name:
             continue
+        tool_index = metrics.tool_calls  # 0-based ordinal within this trace
         metrics.tool_calls += 1
         if metrics.first_tool is None:
             metrics.first_tool = name
+
+        raw_output = str(obs.get("output") or "")
+
+        # One hit is enough: the metric is friction rate, not frequency.
+        if not metrics.auto_corrected and AUTO_CORRECT_PAT.search(raw_output):
+            metrics.auto_corrected = True
+
+        # First verdict wins. Reviewer may run multiple times; we only
+        # want the distribution shape, not an average.
+        if metrics.reviewer_verdict is None:
+            verdict_match = REVIEWER_VERDICT_PAT.search(raw_output)
+            if verdict_match:
+                metrics.reviewer_verdict = verdict_match.group(1).lower()
+
+        if name == "write_todos" and tool_index < TODOS_EARLY_WINDOW:
+            metrics.wrote_todos_early = True
 
         if name in FS_TOOLS:
             metrics.fs_calls += 1
@@ -281,7 +328,6 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
 
         if name == "resolve_page":
             metrics.resolve_page_calls += 1
-            raw_output = str(obs.get("output") or "")
             if _RESOLVE_HIT_PAT.search(raw_output) or _RESOLVE_CANDIDATES_PAT.search(raw_output):
                 metrics.resolve_page_useful += 1
 
@@ -518,6 +564,19 @@ def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) 
     cmw_first = sum(1 for t in traces if t.first_tool == "check_my_work")
     cmw_first_rate = cmw_first / len(traces) if traces else 0.0
 
+    # Rates are over traces (not attempts) because the signals live in
+    # observations, one per batch — symmetric with recursion_timeout_rate.
+    auto_corrected_count = sum(1 for t in traces if t.auto_corrected)
+    auto_correction_rate = auto_corrected_count / len(traces) if traces else 0.0
+
+    todo_early_count = sum(1 for t in traces if t.wrote_todos_early)
+    todo_adoption_rate = todo_early_count / len(traces) if traces else 0.0
+
+    verdicts_dist: dict[str, int] = dict.fromkeys((*REVIEWER_VERDICTS, "none"), 0)
+    for t in traces:
+        key = t.reviewer_verdict if t.reviewer_verdict in REVIEWER_VERDICTS else "none"
+        verdicts_dist[key] += 1
+
     return ModelAggregate(
         model=model,
         attempts=total,
@@ -534,6 +593,9 @@ def _build_row(model: str, attempts: list[Attempt], traces: list[TraceMetrics]) 
         absolute_path_rate=abs_path_rate,
         check_my_work_first_call_rate=cmw_first_rate,
         traces_included=len(traces),
+        auto_correction_rate=auto_correction_rate,
+        reviewer_verdicts_dist=verdicts_dist,
+        todo_adoption_rate=todo_adoption_rate,
     )
 
 
@@ -551,6 +613,22 @@ def _fmt_num(value: float | int | None) -> str:
     return str(int(value))
 
 
+_VERDICT_SHORT_KEYS = {"pass": "p", "revise": "r", "block": "b", "none": "n"}
+
+
+def _fmt_verdicts(value: dict[str, int] | None) -> str:
+    """Render verdict distribution compactly (e.g. ``p=4 r=1 b=0 n=2``).
+
+    Short keys keep the column narrow; JSON output retains full keys.
+    """
+    if not value:
+        return "—"
+    parts = [
+        f"{_VERDICT_SHORT_KEYS.get(k, k)}={value.get(k, 0)}" for k in (*REVIEWER_VERDICTS, "none")
+    ]
+    return " ".join(parts)
+
+
 _TABLE_COLUMNS: list[tuple[str, str]] = [
     ("model", "str"),
     ("attempts", "num"),
@@ -566,6 +644,9 @@ _TABLE_COLUMNS: list[tuple[str, str]] = [
     ("log_insight_calls", "num"),
     ("absolute_path_rate", "pct"),
     ("check_my_work_first_call_rate", "pct"),
+    ("auto_correction_rate", "pct"),
+    ("reviewer_verdicts_dist", "dist"),
+    ("todo_adoption_rate", "pct"),
 ]
 
 
@@ -585,6 +666,8 @@ def _render_markdown(rows: list[ModelAggregate], trivial_skip_rate: float | None
                 cells.append(str(value))
             elif kind == "pct":
                 cells.append(_fmt_pct(value))
+            elif kind == "dist":
+                cells.append(_fmt_verdicts(value))
             else:
                 cells.append(_fmt_num(value))
         lines.append("| " + " | ".join(cells) + " |")

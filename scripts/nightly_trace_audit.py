@@ -39,6 +39,13 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# Tier A telemetry constants live in scripts.trace_scorecard so both
+# reports stay in lockstep when PathAutoHealMiddleware / reviewer
+# subagent / todo-nudging land.
+from scripts.trace_scorecard import AUTO_CORRECT_PAT  # noqa: E402
+from scripts.trace_scorecard import REVIEWER_VERDICT_PAT  # noqa: E402
+from scripts.trace_scorecard import REVIEWER_VERDICTS  # noqa: E402
+from scripts.trace_scorecard import TODOS_EARLY_WINDOW  # noqa: E402
 from src.config import settings  # noqa: E402
 
 logger = structlog.get_logger(__name__)
@@ -64,6 +71,10 @@ class TraceRubric(TypedDict):
     model: str | None
     thread_id: str | None
     run_id: str | None
+    # Tier A signals. Default to the "feature off" values pre-Tier-A.
+    auto_corrected: bool
+    reviewer_verdict: str | None
+    wrote_todos_early: bool
 
 
 def _cli_env() -> dict[str, str]:
@@ -151,6 +162,36 @@ def _fetch_trace(tid: str) -> dict[str, Any]:
 
 def _extract_tool_seq(observations: list[dict[str, Any]]) -> list[str]:
     return [o.get("name") or "?" for o in observations if o.get("type") == "TOOL"]
+
+
+def _extract_tier_a_signals(
+    observations: list[dict[str, Any]],
+) -> tuple[bool, str | None, bool]:
+    """Scan TOOL observations for Tier A telemetry.
+
+    Returns ``(auto_corrected, reviewer_verdict, wrote_todos_early)``.
+    Passive: all three stay at "feature off" values when the
+    corresponding middleware / subagent hasn't landed yet.
+    """
+    auto_corrected = False
+    reviewer_verdict: str | None = None
+    wrote_todos_early = False
+    tool_index = 0
+    for obs in observations:
+        if obs.get("type") != "TOOL":
+            continue
+        name = str(obs.get("name", ""))
+        raw_output = str(obs.get("output") or "")
+        if not auto_corrected and AUTO_CORRECT_PAT.search(raw_output):
+            auto_corrected = True
+        if reviewer_verdict is None:
+            match = REVIEWER_VERDICT_PAT.search(raw_output)
+            if match:
+                reviewer_verdict = match.group(1).lower()
+        if name == "write_todos" and tool_index < TODOS_EARLY_WINDOW:
+            wrote_todos_early = True
+        tool_index += 1
+    return auto_corrected, reviewer_verdict, wrote_todos_early
 
 
 def _scan_output_issues(output_text: str) -> list[str]:
@@ -257,6 +298,9 @@ def _score_trace(
             model=None,
             thread_id=None,
             run_id=None,
+            auto_corrected=False,
+            reviewer_verdict=None,
+            wrote_todos_early=False,
         )
     body = trace.get("body") or trace
     metadata = body.get("metadata") or {}
@@ -266,6 +310,7 @@ def _score_trace(
     err_obs_count = sum(1 for o in observations if o.get("level") == "ERROR")
     output_issues = _scan_output_issues(output_text)
     tool_issues, issue_counts = _scan_tool_issues(observations, tool_seq)
+    auto_corrected, reviewer_verdict, wrote_todos_early = _extract_tier_a_signals(observations)
     grade = _grade(
         output_text=output_text,
         tool_calls=len(tool_seq),
@@ -285,6 +330,9 @@ def _score_trace(
         model=metadata.get("compile_model"),
         thread_id=metadata.get("compile_thread_id"),
         run_id=metadata.get("compile_run_id"),
+        auto_corrected=auto_corrected,
+        reviewer_verdict=reviewer_verdict,
+        wrote_todos_early=wrote_todos_early,
     )
 
 
@@ -292,16 +340,33 @@ def _summarize(rubrics: list[TraceRubric]) -> dict[str, Any]:
     grades: dict[str, int] = {}
     common_issues: dict[str, int] = {}
     issue_total_counts: dict[str, int] = {}
+    # Rates are over scored traces, fetch errors included — they count
+    # as "off" because the features weren't exercised.
+    auto_corrected_n = 0
+    verdicts_dist: dict[str, int] = dict.fromkeys((*REVIEWER_VERDICTS, "none"), 0)
+    todos_early_n = 0
     for r in rubrics:
         grades[r["grade"]] = grades.get(r["grade"], 0) + 1
         for issue in r["issues"]:
             common_issues[issue] = common_issues.get(issue, 0) + 1
         for tag, n in r.get("issue_counts", {}).items():
             issue_total_counts[tag] = issue_total_counts.get(tag, 0) + n
+        if r.get("auto_corrected"):
+            auto_corrected_n += 1
+        verdict_key = r.get("reviewer_verdict") or "none"
+        if verdict_key not in verdicts_dist:
+            verdict_key = "none"
+        verdicts_dist[verdict_key] += 1
+        if r.get("wrote_todos_early"):
+            todos_early_n += 1
+    total = len(rubrics) or 1  # avoid div-by-zero for the rate fields
     return {
         "grades": dict(sorted(grades.items())),
         "common_issues": dict(sorted(common_issues.items(), key=lambda kv: -kv[1])),
         "issue_total_counts": dict(sorted(issue_total_counts.items(), key=lambda kv: -kv[1])),
+        "auto_correction_rate": auto_corrected_n / total,
+        "reviewer_verdicts_dist": verdicts_dist,
+        "todo_adoption_rate": todos_early_n / total,
     }
 
 
