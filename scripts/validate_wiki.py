@@ -78,6 +78,7 @@ VALID_PAGE_TYPES = {
 CATEGORY_TO_TYPE = {
     "topics": "topic",
     "entities": "entity",
+    "people": "person",
     "systems": "system",
     "policies": "policy",
     "timelines": "timeline",

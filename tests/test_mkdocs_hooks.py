@@ -343,3 +343,37 @@ def test_flag_on_entity_cap_uses_newest_first_slice(monkeypatch: pytest.MonkeyPa
     assert "raw/msg-10.md" not in out  # 11th newest — cut off
     assert "raw/msg-29.md" not in out  # oldest — cut off
     assert "+20 older sources" in out
+
+
+# --- people/ decoration (Tier P) -------------------------------------------
+
+
+def test_hook_decorates_people_pages() -> None:
+    """People/ pages get the same decoration treatment as entities/ during
+    the C1 migration. Status pill + metadata banner must render so the viewer
+    shows person pages alongside entity pages consistently."""
+    meta = {
+        "title": "Alice Person",
+        "page_type": "person",
+        "status": "active",
+        "sources": ["raw/a.md"],
+        "last_compiled": "2026-04-16",
+        "email": "alice@example.com",
+    }
+    body = "Email: alice@example.com\n\nSome content about Alice.\n"
+    out = on_page_markdown(body, page=_page("people/alice.md", meta), config={}, files=[])
+    assert "ns-status-active" in out
+    assert "1 source · last compiled 2026-04-16" in out
+
+
+def test_hook_person_page_external_badge_renders() -> None:
+    """External flag flows through for person pages too, not just entity."""
+    meta = {
+        "title": "Jane External Person",
+        "page_type": "person",
+        "status": "active",
+        "is_external": True,
+    }
+    body = "Email: jane@external.com\n\nSome content.\n"
+    out = on_page_markdown(body, page=_page("people/jane.md", meta), config={}, files=[])
+    assert BADGE_HTML in out

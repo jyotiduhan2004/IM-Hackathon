@@ -34,7 +34,15 @@ from src.utils import split_frontmatter
 # nagging about pre-existing breakage from other batches.
 _BROKEN_PAGE_STALENESS_SECONDS = 600
 
-_WIKI_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
+_WIKI_CATEGORIES = (
+    "topics",
+    "entities",
+    "people",
+    "systems",
+    "policies",
+    "timelines",
+    "conflicts",
+)
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")

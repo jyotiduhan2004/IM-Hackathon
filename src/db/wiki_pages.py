@@ -4,9 +4,10 @@ One row per rendered wiki page. `slug` is the stem of the markdown file;
 `path` is the repo-relative path ("wiki/entities/alice.md"); `page_type`
 mirrors the on-disk folder (topic / entity / system / ...).
 
-`canonical_user_email` is populated only for entity pages — see the
-partial unique index in schema.sql. For topic / system pages we just
-leave it NULL.
+`canonical_user_email` is populated for entity and person pages — see
+the partial unique index in schema.sql. During the C1 migration both
+categories coexist; `person` is the target, `entity` is the legacy
+alias. For topic / system pages we just leave it NULL.
 """
 
 from __future__ import annotations
@@ -196,13 +197,19 @@ def lookup_page(
                 return hit
 
         if canonical_user_email is not None:
+            # Accept both 'entity' (legacy) and 'person' (C1 migration) so
+            # the resolver finds people-directory pages during the transition.
+            # Prefer 'entity' matches so resolver order stays deterministic
+            # while both categories coexist.
             hit = _stamp(
                 conn.execute(
                     """
                     SELECT slug, title, page_type, path, status
                       FROM wiki_pages
-                     WHERE page_type = 'entity'
+                     WHERE page_type IN ('entity', 'person')
                        AND canonical_user_email = %s
+                     ORDER BY (page_type = 'entity') DESC,
+                              page_id ASC
                      LIMIT 1
                     """,
                     (canonical_user_email,),

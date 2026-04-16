@@ -128,3 +128,43 @@ def test_warnings_do_not_contribute_to_errors(mini_wiki: Path) -> None:
     assert errors == []
     assert len(warnings) == 1
     assert warnings[0].check == "entity-missing-email"
+
+
+# ---------------------------------------------------------------------------
+# people/ directory acceptance (C1 migration prerequisite)
+# ---------------------------------------------------------------------------
+#
+# `wiki/people/` is the target directory for person pages; during the
+# transition it's accepted alongside `wiki/entities/` so neither side of
+# the migration breaks the compiler.
+
+
+def test_people_directory_accepts_person_page_type(tmp_path: Path) -> None:
+    """A page in wiki/people/ with `page_type: person` validates clean."""
+    wiki = tmp_path / "wiki"
+    people = wiki / "people"
+    people.mkdir(parents=True)
+    page = people / "test-person.md"
+    page.write_text(
+        '---\ntitle: "Test Person"\npage_type: person\nstatus: active\nsources: []\n'
+        "---\n\nTest person body.\n",
+        encoding="utf-8",
+    )
+    errs = validator.validate_page(page)
+    assert errs == [], f"expected clean, got: {[(e.page.name, e.reason) for e in errs]}"
+
+
+def test_people_directory_rejects_wrong_page_type(tmp_path: Path) -> None:
+    """A page in wiki/people/ but `page_type: entity` mismatches the folder."""
+    wiki = tmp_path / "wiki"
+    people = wiki / "people"
+    people.mkdir(parents=True)
+    page = people / "wrong-type.md"
+    page.write_text(
+        '---\ntitle: "Wrong Type"\npage_type: entity\nstatus: active\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+    errs = validator.validate_page(page)
+    assert any("expected 'person'" in e.reason for e in errs), (
+        f"expected mismatch error, got: {[(e.page.name, e.reason) for e in errs]}"
+    )

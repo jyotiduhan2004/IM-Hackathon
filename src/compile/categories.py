@@ -11,6 +11,7 @@ from __future__ import annotations
 WIKI_CATEGORIES: tuple[str, ...] = (
     "topics",
     "entities",
+    "people",
     "systems",
     "policies",
     "timelines",

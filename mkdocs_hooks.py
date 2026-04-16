@@ -314,11 +314,13 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     # Decorate: legacy 6 dirs + new north-star dirs + generated top-level pages.
     # `log.md` (legacy chronological log) stays skipped above; `changes.md`
     # (new generated changelog) gets decorated via the top-level allowlist.
+    # `people/` is accepted alongside `entities/` during the C1 migration.
     in_wiki_dir = any(
         src_path.startswith(p + "/")
         for p in (
             "topics",
             "entities",
+            "people",
             "systems",
             "policies",
             "timelines",
@@ -410,12 +412,13 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     if not sources_list or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
         return body
 
-    # For entity pages, try to recover the person's email so each source can
-    # show HOW they appear in it (From/To/CC/body). Frontmatter rarely carries
-    # `email:` explicitly; compiler convention is to write "Email: x@y" as
-    # the first body line.
+    # For entity/person pages, try to recover the person's email so each
+    # source can show HOW they appear in it (From/To/CC/body). Frontmatter
+    # rarely carries `email:` explicitly; compiler convention is to write
+    # "Email: x@y" as the first body line. Both page_types are treated the
+    # same during the C1 migration.
     page_email: str | None = fm.get("email") if isinstance(fm.get("email"), str) else None
-    if not page_email and fm.get("page_type") == "entity":
+    if not page_email and fm.get("page_type") in ("entity", "person"):
         m = re.search(
             r"(?mi)^\s*(?:\*\*)?email(?:\*\*)?[:\s]+"
             r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+)",
@@ -427,7 +430,7 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     sources_block = _render_sources_block(
         sources_list,
         page_email=page_email,
-        is_entity=(fm.get("page_type") == "entity"),
+        is_person_page=fm.get("page_type") in ("entity", "person"),
         newest_first=newest_first,
     )
     return body.rstrip() + "\n" + sources_block + "\n"
@@ -437,21 +440,22 @@ def _render_sources_block(
     sources_list: list[str],
     *,
     page_email: str | None,
-    is_entity: bool,
+    is_person_page: bool,
     newest_first: bool,
 ) -> str:
     """Render the collapsible `## Sources` block as a string.
 
     `sources_list` is ordered; `newest_first=True` means element 0 is the
     newest (catalog path). Frontmatter convention is oldest-first, so the
-    entity-page "show newest 10" cap slices the tail. Keeping both paths
-    in one renderer avoids drift between the flag-on and flag-off output.
+    entity/person-page "show newest 10" cap slices the tail (or head, when
+    newest_first). Keeping both paths in one renderer avoids drift between
+    the flag-on and flag-off output.
     """
     show_recent = 10
     cap_at = 20
     older_count = 0
     sources_to_render = sources_list
-    if is_entity and len(sources_list) > cap_at:
+    if is_person_page and len(sources_list) > cap_at:
         if newest_first:
             sources_to_render = sources_list[:show_recent]
         else:

@@ -163,18 +163,19 @@ def _iter_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
     """Return every wiki page whose mtime advanced at/after ``batch_start``.
 
     Scans the same set of categories the formatter operates on
-    (topics/entities/systems — policies/timelines/conflicts keep their own
-    templates). Used by both the post-batch formatter and validator so the
-    validator sees every page the batch touched, not just the ones the
-    formatter chose to rewrite. Missing ``wiki_dir`` → empty list (matches
-    the stamp helper's contract).
+    (topics/entities/people/systems — policies/timelines/conflicts keep their
+    own templates). `people/` is accepted alongside `entities/` during the
+    C1 migration transition. Used by both the post-batch formatter and
+    validator so the validator sees every page the batch touched, not just
+    the ones the formatter chose to rewrite. Missing ``wiki_dir`` → empty
+    list (matches the stamp helper's contract).
     """
     wiki_path = Path(wiki_dir)
     if not wiki_path.exists():
         return []
 
     touched: list[Path] = []
-    for category in ("topics", "entities", "systems"):
+    for category in ("topics", "entities", "people", "systems"):
         cat_dir = wiki_path / category
         if not cat_dir.exists():
             continue
@@ -228,6 +229,7 @@ def _normalize_touched_pages(pages: list[Path], wiki_dir: Path) -> list[Path]:
 _CATEGORY_BY_FOLDER: dict[str, str] = {
     "topics": "topic",
     "entities": "entity",
+    "people": "person",
     "systems": "system",
     "policies": "policy",
     "timelines": "timeline",
@@ -319,7 +321,9 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
                 else "current"
             )
             canonical_email: str | None = None
-            if page_type == "entity":
+            # Both 'entity' and 'person' carry a canonical email during the
+            # C1 transition — neither gets dropped here.
+            if page_type in ("entity", "person"):
                 email_raw = fm.get("email")
                 if isinstance(email_raw, str) and email_raw.strip():
                     canonical_email = email_raw.strip()

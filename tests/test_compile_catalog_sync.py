@@ -90,6 +90,39 @@ def test_sync_upserts_topic_entity_system(tmp_path: Path, db_conn: psycopg.Conne
     assert find_by_email("sync-test@example.com") is not None
 
 
+def test_sync_upserts_people_as_person(tmp_path: Path, db_conn: psycopg.Connection) -> None:
+    """A page under `wiki/people/` with `page_type: person` must land in
+    wiki_pages with page_type='person' and its canonical email auto-inserted
+    into users — matching the entity/entities path during the C1 migration.
+    """
+    wiki = tmp_path / "wiki"
+    person = wiki / "people" / "sync-test-person.md"
+    _write_page(
+        person,
+        {
+            "title": "Sync Test Person Page",
+            "page_type": "person",
+            "status": "active",
+            "email": "sync-test-person@example.com",
+        },
+        "body",
+    )
+
+    synced = compile_all._sync_wiki_catalog([person], wiki)
+    assert synced == 1
+
+    from src.db.wiki_pages import find_by_slug
+
+    row = find_by_slug("sync-test-person")
+    assert row is not None
+    assert row["page_type"] == "person"
+    assert row["canonical_user_email"] == "sync-test-person@example.com"
+    # FK auto-insert into users
+    from src.db.users import find_by_email
+
+    assert find_by_email("sync-test-person@example.com") is not None
+
+
 def test_sync_ignores_out_of_category_files(tmp_path: Path, db_conn: psycopg.Connection) -> None:
     wiki = tmp_path / "wiki"
     # Top-level files (no category folder) are not catalog entries.
