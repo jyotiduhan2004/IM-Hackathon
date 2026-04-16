@@ -531,9 +531,9 @@ def _migration_inflight_pct() -> float | None:
 # bad habit of citing an email in an entity page's `sources:` list
 # without actually synthesizing topic/system/policy content from it.
 # That's the exact failure the headline metric is designed to catch.
-_CONTENT_PAGE_TYPES: frozenset[str] = frozenset(
-    {"topic", "system", "policy", "decision", "timeline", "conflict"}
-)
+# `timeline` and `conflict` are deprecated per NORTH-STAR — the agent
+# should no longer be writing them, so they're excluded as well.
+_CONTENT_PAGE_TYPES: frozenset[str] = frozenset({"topic", "system", "policy", "decision"})
 
 
 def _content_page_citation_rate_by_model(
@@ -555,6 +555,10 @@ def _content_page_citation_rate_by_model(
     # a tuple only works through the legacy pyformat-list fork.
     # Sorted for deterministic query plans.
     page_types = sorted(_CONTENT_PAGE_TYPES)
+    # Per-(message, model) rows so the "all" aggregate can dedupe on
+    # message_id — when a message is compiled under two models (rare
+    # but possible), the per-model row counts each attempt, but the
+    # "all" row counts the message once.
     sql = """
         WITH windowed_compiled AS (
           SELECT DISTINCT ca.message_id, ca.compile_model
@@ -570,12 +574,11 @@ def _content_page_citation_rate_by_model(
            WHERE wp.page_type = ANY(%(page_types)s)
         )
         SELECT
+          wc.message_id                         AS message_id,
           COALESCE(wc.compile_model, 'unknown') AS model,
-          COUNT(*)                              AS compiled_total,
-          COUNT(cp.message_id)                  AS with_content_page
+          (cp.message_id IS NOT NULL)           AS has_content_page
           FROM windowed_compiled wc
      LEFT JOIN with_content_page cp USING (message_id, compile_model)
-         GROUP BY 1
     """
     try:
         with connect() as conn:
@@ -591,17 +594,30 @@ def _content_page_citation_rate_by_model(
     if not rows:
         return {}
 
-    result: dict[str, float | None] = {}
-    total_compiled = 0
-    total_with_page = 0
+    # Per-model tallies count every attempt (a message compiled under
+    # two models contributes to each). The "all" aggregate dedupes on
+    # message_id so the same message isn't double-counted when it
+    # shows up under multiple models — and a message counts as "with
+    # content page" if any of its attempts produced one.
+    per_model_compiled: dict[str, int] = defaultdict(int)
+    per_model_with_page: dict[str, int] = defaultdict(int)
+    message_has_page: dict[str, bool] = {}
     for row in rows:
         model = str(row["model"])
-        compiled = int(row["compiled_total"] or 0)
-        with_page = int(row["with_content_page"] or 0)
-        result[model] = with_page / compiled if compiled else None
-        total_compiled += compiled
-        total_with_page += with_page
-    result["all"] = total_with_page / total_compiled if total_compiled else None
+        message_id = str(row["message_id"])
+        has_page = bool(row["has_content_page"])
+        per_model_compiled[model] += 1
+        if has_page:
+            per_model_with_page[model] += 1
+        message_has_page[message_id] = message_has_page.get(message_id, False) or has_page
+
+    result: dict[str, float | None] = {
+        model: (per_model_with_page[model] / compiled if compiled else None)
+        for model, compiled in per_model_compiled.items()
+    }
+    all_compiled = len(message_has_page)
+    all_with_page = sum(1 for has_page in message_has_page.values() if has_page)
+    result["all"] = all_with_page / all_compiled if all_compiled else None
     return result
 
 
