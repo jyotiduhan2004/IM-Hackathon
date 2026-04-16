@@ -81,3 +81,15 @@ def test_build_reviewer_subagent_honours_model_override() -> None:
     # so just assert it still produces a valid spec.
     spec = build_reviewer_subagent(model_name=REVIEWER_MODEL)
     assert spec["name"] == REVIEWER_NAME
+
+
+def test_reviewer_prompt_recognises_no_op_insight_categories() -> None:
+    # U4: the reviewer must treat `trivial_skip` / `already_captured`
+    # as legitimate no-op outcomes and return `pass` when the agent
+    # logged either instead of editing. The prompt is the only place
+    # this behaviour is encoded, so guard it with a phrase check.
+    spec = build_reviewer_subagent()
+    prompt = spec["system_prompt"]
+    assert isinstance(prompt, str)
+    assert "trivial_skip" in prompt
+    assert "already_captured" in prompt

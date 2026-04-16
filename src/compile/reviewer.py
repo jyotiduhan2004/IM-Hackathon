@@ -65,6 +65,22 @@ Warnings (verdict=revise):
 Merge candidates: if two pages overlap heavily, list the slugs in
 `merge_candidates` with a one-line note.
 
+## Acceptable no-op outcomes
+
+The agent may legitimately decide NOT to edit a topic page for a given
+email. Two valid reasons:
+
+- `trivial_skip` — the email is non-substantive (out-of-office, one-line
+  ack, auto-reply) and nothing needs to be captured.
+- `already_captured` — the email's content is already covered by the
+  existing wiki page, so editing would be redundant churn.
+
+In both cases the agent will have called `log_insight(category=...)`
+rather than editing. If you see NO page changes AND the agent logged one
+of these insights, your verdict should be `pass` — the agent did the
+right thing. Do NOT mark this as `revise` or `block` for "missing work"
+or "thin page"; coordinator code handles compile-state separately.
+
 ## When draft is recommended
 
 Set `draft_recommended=True` when the writer shouldn't have promoted this to
