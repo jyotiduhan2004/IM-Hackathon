@@ -25,6 +25,10 @@ Checks (WARN severity — stderr only, no exit-code effect):
 - Topic/policy page opens with a ≥2-sentence lead paragraph before the
   first H2 ({topic,policy}-lead-paragraph). Warning-only for now — legacy
   pages have this pattern and we don't want to break CI immediately.
+- Topic/system page has a `domain:` slug in frontmatter matching one of
+  the eight north-star domains (domain-missing / domain-unknown). Tier A
+  will teach the agent to emit this; until then every legacy page fires
+  the warning so we can see progress.
 
 Usage:
     uv run python scripts/validate_wiki.py                    # report + exit 1 on errors
@@ -153,6 +157,32 @@ except ImportError:
 
     def _email_to_slug(email: str) -> str:  # pragma: no cover - fallback only
         raise NotImplementedError("email_to_slug unavailable without src.compile.entities")
+
+
+# North-star domain slugs — sourced from src.compile.compiler so the
+# validator and the hub generator can't drift apart. Fallback to a
+# hardcoded set if the compiler module isn't importable (keeps the
+# validator runnable on branches that haven't picked up the compiler
+# changes yet).
+try:
+    from src.compile.compiler import _DOMAIN_BY_SLUG as _COMPILER_DOMAIN_BY_SLUG
+
+    CANONICAL_DOMAINS: frozenset[str] = frozenset(_COMPILER_DOMAIN_BY_SLUG.keys())
+except ImportError:  # pragma: no cover - fallback only
+    CANONICAL_DOMAINS = frozenset(
+        {
+            "buyer-experience",
+            "seller-experience",
+            "marketplace-discovery",
+            "platform-reliability",
+            "trust-safety",
+            "ai-automation",
+            "growth-monetization",
+            "engineering-productivity",
+        }
+    )
+
+_EXPECTED_DOMAINS_HINT = ", ".join(sorted(CANONICAL_DOMAINS))
 
 
 class _DuplicateKeyLoader(yaml.SafeLoader):
@@ -670,6 +700,56 @@ def check_lead_paragraph(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
+def check_missing_domain(wiki_dir: Path) -> list[ValidationWarning]:
+    """Topic/system pages should carry a `domain:` slug in frontmatter.
+
+    Two WARN-level signals:
+    - `domain-missing`: no `domain:` field in frontmatter
+    - `domain-unknown`: `domain:` is set but isn't one of the eight
+      canonical north-star domain slugs
+
+    Warning-only by design — Tier A's prompt rewrite teaches the agent
+    to emit this, and every legacy page pre-dates that prompt. Errors
+    would block the build immediately on merge.
+    """
+    warnings: list[ValidationWarning] = []
+    for category in ("topics", "systems"):
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in sorted(cat_dir.glob("*.md")):
+            if path.name == "index.md":
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm, _ = _extract_frontmatter(content)
+            if not fm:
+                # Frontmatter corruption is already an ERROR in validate_page.
+                continue
+            domain = fm.get("domain")
+            if domain is None or (isinstance(domain, str) and not domain.strip()):
+                warnings.append(
+                    ValidationWarning(
+                        path,
+                        f"no `domain:` in frontmatter (expected one of: {_EXPECTED_DOMAINS_HINT})",
+                        "domain-missing",
+                    )
+                )
+                continue
+            if not isinstance(domain, str) or domain.strip() not in CANONICAL_DOMAINS:
+                warnings.append(
+                    ValidationWarning(
+                        path,
+                        f"`domain:` {domain!r} not in canonical set "
+                        f"(expected one of: {_EXPECTED_DOMAINS_HINT})",
+                        "domain-unknown",
+                    )
+                )
+    return warnings
+
+
 def check_required_sections(
     wiki_dir: Path, *, strict: bool = False
 ) -> tuple[list[Error], list[ValidationWarning]]:
@@ -735,6 +815,7 @@ def run(
     errors.extend(section_errors)
     warnings.extend(section_warnings)
     warnings.extend(check_lead_paragraph(wiki_dir))
+    warnings.extend(check_missing_domain(wiki_dir))
     return errors, warnings
 
 
