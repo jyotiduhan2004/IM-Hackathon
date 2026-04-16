@@ -19,7 +19,7 @@ Rules (in order; the first match wins):
 3. **Exact normalized slug match**: lowercase + strip whitespace, try
    both `target` and `category/target` (e.g. `entities/foo`). If exactly
    one wiki page matches, rewrite to `[[slug]]`.
-4. **Fuzzy candidate** with `difflib.SequenceMatcher().ratio() > 0.95`
+4. **Fuzzy candidate** with `difflib.SequenceMatcher().ratio() >= 0.95`
    AND a single unique candidate: rewrite. Otherwise leave for manual.
 5. **Leave for manual**: collected in
    `docs/audits/broken-wikilinks-<ISO>.md` with page, line number,
