@@ -249,8 +249,11 @@ def fix_wiki(
 ) -> tuple[list[Fix], list[ManualItem]]:
     """Walk wiki/, apply (or preview) fixes, collect manual items."""
     known_by_norm = _collect_known_slugs(wiki_dir)
-    all_slugs = [s for group in known_by_norm.values() for s in group]
-    real_slugs = set(all_slugs)
+    # Lowercase for fuzzy-match symmetry with the normalized lookup key
+    # (difflib matches case-sensitively; keeping real-case slugs here
+    # would make "Alice" miss against a "alice-smith" typo).
+    all_slugs = [s.lower() for group in known_by_norm.values() for s in group]
+    real_slugs = {s for group in known_by_norm.values() for s in group}
 
     all_fixes: list[Fix] = []
     all_manual: list[ManualItem] = []
@@ -366,9 +369,9 @@ def main(dry_run: bool, commit: bool) -> None:
     """Conservative broken-wikilink batch fixer.
 
     Exit codes:
-    - 0: nothing to fix OR all items auto-fixed.
+    - 0: nothing to fix OR all items auto-fixed. `--dry-run` always exits 0.
     - 1 (--commit only): manual-review items remain; audit file written.
-    - 2: misuse (both --dry-run and --commit, or neither).
+    - 2: misuse (both --dry-run and --commit together, or wiki_dir missing).
     """
     if dry_run and commit:
         click.echo("error: --dry-run and --commit are mutually exclusive", err=True)
@@ -385,11 +388,16 @@ def main(dry_run: bool, commit: bool) -> None:
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     # Audit file is a side effect; --dry-run prints the proposed body
-    # to stdout instead so previewing stays read-only.
+    # to stdout instead so previewing stays read-only. On --commit with
+    # zero manual items, skip the audit entirely — an empty audit file
+    # is just noise (and was a bug that made it into a prior commit).
     audit_path: Path | None = None
     if commit:
-        audit_path = REPO_ROOT / "docs" / "audits" / f"broken-wikilinks-{timestamp}.md"
-        _write_manual_review(manual, audit_path, timestamp)
+        if manual:
+            audit_path = REPO_ROOT / "docs" / "audits" / f"broken-wikilinks-{timestamp}.md"
+            _write_manual_review(manual, audit_path, timestamp)
+        else:
+            click.echo("no manual items; skipping audit file")
     elif manual:
         click.echo("--- proposed manual-review (not written; --dry-run) ---")
         click.echo(_format_manual_review(manual, timestamp))
