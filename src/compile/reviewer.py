@@ -86,8 +86,7 @@ Blockers (verdict=block):
   and an H2 `## Feedback Frequency Design (Jan 13)` at line 261 with
   identical content is a duplicate. Almost always a re-insert
   instead of a patch, often after a retry picks up the same raw
-  email and the previous partial write is already on disk. See
-  `docs/audits/cycle-7-case-photosearch-duplicate-section.md`.
+  email and the previous partial write is already on disk.
 
 Warnings (verdict=revise):
 - `missing_tldr` — no lead paragraph.
