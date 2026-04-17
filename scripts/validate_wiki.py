@@ -789,6 +789,66 @@ def check_missing_domain(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
+# Bug F: H2 titles should be canonical structure, not dated/attributed
+# per-email entries. The regexes below match the observed bad shapes:
+# - ISO date: "## Bug Status (as of 2026-01-13)"
+# - Month-name attribution: "## QA Testing Results (Rucha Patil, 2026-01-12)"
+# - Parens closing on a year: "## Decision: Scale to 100% (January 7, 2026)"
+# Valid canonical H2s like "## Q4 2025 results" don't have parens and so pass.
+_DATED_H2_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATED_H2_MONTH_NAME = re.compile(
+    r"\([^)]*\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|"
+    r"January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\b[^)]*\)",
+    re.IGNORECASE,
+)
+_DATED_H2_PARENS_YEAR = re.compile(r"\([^)]*\b20\d{2}\b[^)]*\)")
+
+
+def _is_dated_h2(title: str) -> bool:
+    """True if this H2 title bakes in a date, person name, or email
+    subject (Bug F). Conservative: only matches date-like tokens, not
+    any parens."""
+    return bool(
+        _DATED_H2_ISO.search(title)
+        or _DATED_H2_MONTH_NAME.search(title)
+        or _DATED_H2_PARENS_YEAR.search(title)
+    )
+
+
+def check_dated_h2_sections(wiki_dir: Path) -> list[ValidationWarning]:
+    """Bug F: warn when a topic/system/policy page has an H2 with a
+    date, month name, or attribution baked in. Those create parallel
+    per-email sections instead of updating one canonical block.
+
+    Warning-only — the legacy corpus has dozens of these and we don't
+    want to block CI. Cycle-7+ measurements should show the count
+    trending down as the prompt fix takes hold.
+    """
+    warnings: list[ValidationWarning] = []
+    heading_re = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+    for category, _page_type in (
+        ("topics", "topic"),
+        ("systems", "system"),
+        ("policies", "policy"),
+    ):
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in cat_dir.glob("*.md"):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            _, body = split_frontmatter(content)
+            body_no_fences = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+            dated = [h for h in heading_re.findall(body_no_fences) if _is_dated_h2(h)]
+            if dated:
+                reason = f"dated/attributed H2 sections (Bug F): {dated}"
+                warnings.append(ValidationWarning(path, reason, "dated-h2-section"))
+    return warnings
+
+
 def check_required_sections(
     wiki_dir: Path, *, strict: bool = False
 ) -> tuple[list[Error], list[ValidationWarning]]:
@@ -989,6 +1049,7 @@ def run(
     warnings.extend(section_warnings)
     warnings.extend(check_lead_paragraph(wiki_dir))
     warnings.extend(check_missing_domain(wiki_dir))
+    warnings.extend(check_dated_h2_sections(wiki_dir))
     legacy_errors, legacy_warnings = check_legacy_shape(wiki_dir, strict=strict_new_ontology)
     errors.extend(legacy_errors)
     warnings.extend(legacy_warnings)
