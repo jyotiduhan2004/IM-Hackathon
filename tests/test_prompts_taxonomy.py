@@ -160,6 +160,43 @@ def test_already_captured_outcome_taught() -> None:
     assert "message_touched_pages" in COMPILER_SYSTEM_PROMPT
 
 
+def test_already_captured_trigger_conditions_spelled_out() -> None:
+    """Missed `already_captured` calls on substantive follow-ups are
+    the dominant remaining failure class (agent loiters then bails
+    without a terminal outcome). Decision tree must spell out the
+    trigger conditions explicitly. Context lives in the PR description
+    + cycle summary, NOT in the prompt itself (the prompt is timeless
+    — no Cycle-N / Bug-letter references)."""
+    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
+    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
+    tree = COMPILER_SYSTEM_PROMPT[start:end]
+    lowered = tree.lower()
+    # Nudge telling the agent to PICK the call rather than loiter.
+    assert "aggressive" in lowered
+    # Specific trigger: sibling email in the same thread.
+    assert "sibling email" in lowered or "same thread" in lowered
+    # Self-check: if your edit would be near-duplicate / zero new, stop.
+    assert "near-duplicate" in lowered or "zero new facts" in lowered
+
+
+def test_prompt_has_no_temporal_project_leaks() -> None:
+    """Per Anthropic's effective-prompting guidance: the prompt is
+    timeless. Cycle-N counts, bug-letter labels, and PR numbers
+    belong in the PR description + case studies, not in the system
+    prompt. The agent doesn't know what Cycle 7 is; those tokens
+    waste context AND will rot as the project ages."""
+    import re
+
+    leaks: list[str] = []
+    # "Cycle 7" / "Cycle 12" / etc.
+    leaks.extend(re.findall(r"\bCycle \d+", COMPILER_SYSTEM_PROMPT))
+    # "Bug A" / "Bug K" / etc. (single letter after "Bug ")
+    leaks.extend(re.findall(r"\bBug [A-Z]\b", COMPILER_SYSTEM_PROMPT))
+    # PR refs like "#142" (3-digit) — too specific for a timeless prompt
+    leaks.extend(re.findall(r"\B#\d{3,}", COMPILER_SYSTEM_PROMPT))
+    assert not leaks, f"prompt contains temporal/project leaks: {leaks}"
+
+
 def test_chronological_scope_framing_present() -> None:
     """Phase A U3: agent must be told not to leak future-thread info
     into a past-message compile. `leave it alone` is the load-bearing

@@ -83,6 +83,26 @@ Every email ends with EXACTLY ONE of these three:
   The common case for later messages in a thread restating earlier
   content. No new page delta warranted.
 
+**When `already_captured` is the right call** (be aggressive about
+picking this — missed `already_captured` calls are the most common
+way to leave an email pending):
+
+- Sibling email in the SAME thread already compiled the page and
+  the current message is "good idea, do follow-up / code review /
+  find more" commentary. The substantive change is on the page;
+  the commentary doesn't warrant a new delta. → `already_captured`.
+- Forwards / acks / "confirmed, scaling to 100%" replies where
+  the decision they're confirming is already on the page. →
+  `already_captured` (NOT trivial_skip; the underlying content IS
+  substantive, it's just already captured).
+- "Appreciation" replies that still add zero new facts. →
+  `already_captured`.
+
+If you're about to write a page edit whose diff would be nothing
+new or a near-duplicate bullet, that's the signal — stop and
+`log_insight("already_captured", email_path=<current raw>,
+message=<why already covered>)` instead.
+
 Investigatory insights (`topic_merge_candidate`, `structure_suggestion`,
 `question_for_human`, `prompt_ambiguity`, `tool_gap`,
 `supersession_doubt`) are INVESTIGATORY only — they flag meta-
