@@ -86,10 +86,14 @@ def find_new_sources(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, str]] | dict[str, str]:
-    """Filter-aware search for uncompiled email sources. Returns paginated results.
+    """Coordinator-owned helper — not bound to the agent tool surface.
 
-    Use this INSTEAD of list_uncompiled_emails when you want to narrow down
-    which emails to process — by date range, sender, or thread.
+    The coordinator injects `raw_paths` at dispatch; use the
+    `_current_raw_paths` ContextVar if you need batch scope inside an
+    agent tool. This function is kept in the module for coordinator /
+    script-side use (see `scripts/compile_all.py`).
+
+    Filter-aware search for uncompiled email sources with pagination.
 
     Args:
         date_from: ISO date 'YYYY-MM-DD' lower bound (inclusive).
@@ -103,7 +107,7 @@ def find_new_sources(
     Returns:
         List of dicts with keys: path, date, subject, from, thread_id. When the
         input is malformed, returns `{"error": "<reason>"}` instead so the
-        agent can recover rather than crash the batch.
+        caller can recover rather than crash the batch.
     """
     try:
         date_from = _validate_iso_date(date_from, "date_from")
@@ -144,10 +148,14 @@ def find_new_sources(
 
 @tool
 def list_uncompiled_emails(raw_dir: str = "raw") -> list[dict[str, str]]:
-    """List raw email files that haven't been compiled yet.
+    """Coordinator-owned helper — not bound to the agent tool surface.
 
-    DEPRECATED: prefer `find_new_sources` for filter + pagination support. This
-    tool returns ALL uncompiled emails (up to 1000) with no filters.
+    The coordinator injects `raw_paths` at dispatch; use the
+    `_current_raw_paths` ContextVar if you need batch scope inside an
+    agent tool. This function is kept in the module for coordinator /
+    script-side use (see `scripts/compile_all.py`).
+
+    Returns ALL uncompiled emails (up to 1000) with no filters.
 
     Reads from the Postgres `messages` table (the source of truth as of the
     catalog migration). The `raw_dir` arg is preserved for backward
