@@ -76,6 +76,63 @@ class TestPageSummaryProvenance:
         assert summary["is_stub"] is True
         assert summary["sources_count"] == 0
 
+    def test_missing_status_defaults_to_active(self, tmp_path: Path) -> None:
+        # v8 vocabulary shift: `active` is the new canonical default, not
+        # the retired legacy `current`. Pages with no status in frontmatter
+        # must fall back to `active` so landing listings don't stamp every
+        # such page with a `*(current)*` "stale legacy" suffix.
+        page = tmp_path / "topics" / "no-status.md"
+        _write_page(
+            page,
+            "title: Page without status\nsource_threads:\n- abc123\n"
+            "last_compiled: '2026-04-17T00:00:00+00:00'",
+        )
+        summary = _page_summary(page)
+        assert summary is not None
+        assert summary["status"] == "active"
+
+
+class TestWriteSectionIndexStatusSuffix:
+    """PR #159 regression: suffix rule must treat both `active` (new
+    canonical) and `current` (legacy) as no-suffix states. Only deviant
+    states (`superseded`, `archived`, `contested`) should get the suffix.
+    """
+
+    def _seed_and_render(self, tmp_path: Path, status: str) -> str:
+        _write_page(
+            tmp_path / "topics" / f"demo-{status}.md",
+            f"title: Demo {status}\npage_type: topic\nstatus: {status}\n"
+            "sources:\n- raw/2026-01-01_foo_abc.md\n"
+            "last_compiled: '2026-04-10T08:00:00+00:00'",
+            body="Demo body.\n",
+        )
+        rebuild_landing_pages(str(tmp_path))
+        return (tmp_path / "topics" / "index.md").read_text(encoding="utf-8")
+
+    def test_active_has_no_suffix(self, tmp_path: Path) -> None:
+        index = self._seed_and_render(tmp_path, "active")
+        assert "*(active)*" not in index
+        assert "[[demo-active]] — Demo active" in index
+
+    def test_current_legacy_has_no_suffix(self, tmp_path: Path) -> None:
+        # Legacy pages still read correctly — no retroactive flagging.
+        index = self._seed_and_render(tmp_path, "current")
+        assert "*(current)*" not in index
+        assert "[[demo-current]] — Demo current" in index
+
+    def test_superseded_gets_suffix(self, tmp_path: Path) -> None:
+        index = self._seed_and_render(tmp_path, "superseded")
+        assert "[[demo-superseded]] — Demo superseded *(superseded)*" in index
+
+    def test_archived_gets_suffix(self, tmp_path: Path) -> None:
+        index = self._seed_and_render(tmp_path, "archived")
+        assert "[[demo-archived]] — Demo archived *(archived)*" in index
+
+    def test_contested_legacy_gets_suffix(self, tmp_path: Path) -> None:
+        # Legacy `contested` still renders with suffix so humans notice.
+        index = self._seed_and_render(tmp_path, "contested")
+        assert "[[demo-contested]] — Demo contested *(contested)*" in index
+
 
 class TestRebuildLandingPagesShowsSourceThreadsPages:
     def test_systems_page_with_source_threads_appears_in_index(self, tmp_path: Path) -> None:
