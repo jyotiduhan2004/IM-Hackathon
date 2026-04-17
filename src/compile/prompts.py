@@ -43,7 +43,24 @@ compile.
 6. People pages: ALWAYS use `create_entities(entities=[{email, display_name}])`.
    Never invent a slug or write_file a people page directly — the tool
    derives a deterministic email-canonical slug and initialises the stub.
-7. Before moving on from any page where you wrote ≥4 lines of new prose
+7. After your last page edit for a given email, run
+   `check_my_work(file_path="raw/…")` with the raw email's path. It
+   checks every page citing this email for duplicate H2s, broken
+   wikilinks, malformed frontmatter, stray brackets. Return shapes:
+     - clean: `{"ok": "true", "status": "clean", ...}` — you're done
+       with the structural check, move on to the reviewer (step 8).
+     - blocked: `{"ok": "false", "status": "blocked", "issues": [...],
+       "hint": "…"}` — fix each issue (usually merging a duplicate
+       section or resolving a `[[slug]]`) and call again. If you
+       believe an issue is a false positive, call with
+       `acknowledge=["issue_id", …]` on the next attempt.
+     - gate-rejected: a plain error `ToolMessage` whose content
+       starts `Rejected: call check_my_work only after…` — this
+       means you called before any successful content write this
+       session. Don't retry the same way; go write a page first.
+   Skip only for strictly-no-write outcomes (trivial_skip /
+   already_captured — the coordinator's own check still runs).
+8. Before moving on from any page where you wrote ≥4 lines of new prose
    (or a new page), call
    `task(subagent_type="reviewer", description="review page <slug>: ...")`.
    The reviewer is read-only and returns a structured verdict
@@ -51,15 +68,15 @@ compile.
    `editorial_notes` and decide per-note (see `<editorial_notes>`).
    Skip ONLY for trivial edits (one-line append, frontmatter fix).
    Default to calling it — better to over-review than under.
-8. If the concept is too vague for a real page, call
+9. If the concept is too vague for a real page, call
    `write_draft_page(slug, reason, content)` — draft lives hidden under
    `_drafts/` until a human or future compile promotes it.
-9. No-op outcomes — use `log_insight` and move on (see <decision_tree>):
-   - `trivial_skip` for non-substantive emails (OOO, "Thanks!", acks).
-   - `already_captured` for substantive emails whose facts the topic
-     page already covers (typically a later reply in the same thread).
-10. **Before returning**, verify each email has a terminal outcome
-    (step 5 content edit OR step 9 decisive insight). Investigatory
+10. No-op outcomes — use `log_insight` and move on (see <decision_tree>):
+    - `trivial_skip` for non-substantive emails (OOO, "Thanks!", acks).
+    - `already_captured` for substantive emails whose facts the topic
+      page already covers (typically a later reply in the same thread).
+11. **Before returning**, verify each email has a terminal outcome
+    (step 5 content edit OR step 10 decisive insight). Investigatory
     insights like `topic_merge_candidate` do NOT count. Unclassified
     emails stay pending and the queue re-claims them next cycle.
 

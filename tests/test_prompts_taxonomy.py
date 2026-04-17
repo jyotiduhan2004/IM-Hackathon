@@ -325,8 +325,31 @@ def test_investigatory_insights_marked_non_terminal() -> None:
     assert "do not close the loop" in lowered_tree or "do not satisfy" in lowered_tree
 
 
+def test_check_my_work_taught_in_workflow_with_correct_contract() -> None:
+    """Codex P1: `check_my_work` is bound at runtime but the prompt
+    never mentioned it. Workflow now teaches all three possible
+    return shapes (clean / blocked / gate-rejected). The gate-
+    rejected shape is the key one — it's a plain error ToolMessage
+    whose content starts 'Rejected: call check_my_work only after…'
+    — and if the prompt doesn't describe it the agent loops retrying
+    the same gate with no write in between."""
+    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
+    workflow = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "check_my_work" in workflow, "check_my_work must be named in workflow"
+    # All three return shapes taught:
+    assert "clean" in workflow and "blocked" in workflow
+    assert "Rejected: call check_my_work only after" in workflow, (
+        "gate-rejection shape (plain ToolMessage content) must be taught so "
+        "the agent doesn't loop retrying"
+    )
+    # Recovery on gate rejection: go write a page, don't retry the gate.
+    lowered = workflow.lower()
+    assert "go write a page first" in lowered or "write a page first" in lowered
+
+
 def test_workflow_has_terminal_decision_check() -> None:
-    """Workflow step 10 (the pre-return check) must tell the agent to
+    """Workflow step 11 (the pre-return check) must tell the agent to
     verify each email has a terminal outcome before returning.
     Without this step the <decision_tree> guidance is advisory; with
     it the agent has an explicit self-audit hook."""
