@@ -2533,9 +2533,9 @@ def create_compiler(
     reviewer_spec = build_reviewer_subagent()
 
     # Compile agent surface:
-    # - Custom tools: find_new_sources, list_wiki_pages, resolve_page,
-    #   create_entities, write_draft_page, log_insight, check_my_work,
-    #   get_page_summary, get_thread_context, patch_page, validate_page_draft.
+    # - Custom tools: list_wiki_pages, resolve_page, create_entities,
+    #   write_draft_page, log_insight, check_my_work, get_page_summary,
+    #   get_thread_context, patch_page, validate_page_draft.
     # - Inherited filesystem tools (ls, read_file, write_file, edit_file,
     #   glob, grep) from FilesystemMiddleware auto-added by create_deep_agent.
     # - Middleware: path_autoheal (rewrites host-path leaks) +
@@ -2549,16 +2549,19 @@ def create_compiler(
     # Bookkeeping tools (mark_as_compiled, stamp_page_compiled_at,
     # append_to_log, update_wiki_index) remain importable but NOT bound —
     # the coordinator handles them deterministically post-run.
-    # NOTE: `list_uncompiled_emails` is deliberately NOT exposed to the agent.
-    # The coordinator owns the compile queue and already passes the batch file
-    # list in the user instruction. Letting the agent browse the whole queue
-    # was pure context tax in Langfuse traces.
+    # NOTE: `list_uncompiled_emails` + `find_new_sources` are deliberately
+    # NOT exposed to the agent. The coordinator owns the compile queue and
+    # already passes the batch file list in the user instruction. Agent
+    # queue-discovery is pure context tax. Historical trace data showed
+    # `find_new_sources(thread_id=...)` being used as a stand-in for
+    # `get_thread_context(thread_id)` — same information, clearer intent;
+    # the latter is the right tool. Both functions remain importable for
+    # coordinator + script use.
     from src.compile.middleware import CheckMyWorkGateMiddleware
 
     return create_deep_agent(
         model=model,
         tools=[
-            find_new_sources,
             list_wiki_pages,
             resolve_page,
             create_entities,
