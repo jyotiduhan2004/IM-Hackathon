@@ -1627,6 +1627,10 @@ def log_insight(
             ),
         }
 
+    original_path = email_path
+    if email_path:
+        email_path = _autoheal_email_path(email_path)
+
     run_id = os.environ.get("COMPILE_RUN_ID")
     new_id = record(
         run_id=run_id,
@@ -1635,7 +1639,62 @@ def log_insight(
         email_path=email_path,
         suggested_action=suggested_action,
     )
-    return {"ok": True, "id": new_id}
+    result: dict[str, Any] = {"ok": True, "id": new_id}
+    if original_path and original_path != email_path:
+        result["auto_corrected"] = {
+            "from": original_path,
+            "to": email_path,
+            "note": (
+                "email_path normalized (leading slash stripped). The next "
+                "call should use the unrooted form directly."
+            ),
+        }
+    return result
+
+
+def _autoheal_email_path(email_path: str) -> str:
+    """Normalize + verify `email_path` against DB + filesystem.
+
+    Agent sees the raw dir as ``/raw/`` via its chrooted virtual-mode
+    filesystem, so it often passes the virtual path (leading slash).
+    The coordinator's skip-path matcher compares to ``messages.raw_path``
+    which stores the unrooted form — so ``/raw/...`` silently misses
+    (Bug L). Autoheal steps:
+
+    1. Normalize: strip any leading slashes so ``/raw/...`` becomes
+       ``raw/...``.
+    2. DB check: if the normalized path exists in ``messages.raw_path``,
+       accept it — this is the happy path.
+    3. Filesystem fallback: if DB doesn't know the path (test fixtures,
+       pre-ingest fossils) but the file exists on disk, accept it with
+       a warning.
+    4. Warn: otherwise, log ``log_insight_path_unknown`` and return the
+       normalized path anyway. The coordinator's batch-end skip-path
+       materialization is the authoritative gate — rejecting here would
+       only couple ``log_insight`` to infrastructure state.
+
+    Always returns the normalized path. Point of autoheal is the common
+    leading-slash case (caught by strip) + observability when something
+    less obvious drifts.
+    """
+    normalized = email_path.lstrip("/")
+
+    try:
+        from src.db.messages import find_by_raw_path
+
+        row = find_by_raw_path(normalized)
+    except Exception as exc:  # noqa: BLE001 — DB outage is non-fatal
+        logger.warning("autoheal_db_lookup_failed", path=normalized, error=str(exc))
+        return normalized
+
+    if row is None and not Path(normalized).is_file():
+        logger.warning(
+            "log_insight_path_unknown",
+            path=normalized,
+            reason="not in messages and not on disk — skip-materialization will fail",
+        )
+
+    return normalized
 
 
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)

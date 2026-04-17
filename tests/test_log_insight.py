@@ -67,6 +67,69 @@ class TestLogInsightTool:
             suggested_action=None,
         )
 
+    def test_leading_slash_on_email_path_autohealed(self) -> None:
+        # Bug L — Cycle 6. Agent sees raw/ as /raw/ via virtual-mode FS
+        # and passes the virtual path. Coordinator's skip-path matcher
+        # compares to messages.raw_path which stores the unrooted form,
+        # so /raw/... never correlates. log_insight normalizes AND
+        # surfaces the correction in the response so the agent can
+        # adjust on the next call.
+        with (
+            patch("src.db.messages.find_by_raw_path", return_value={"message_id": "abc"}),
+            patch("src.db.insights.record", return_value=133) as record,
+        ):
+            result = _invoke(
+                category="already_captured",
+                message="Already on [[abc-test]] from the Jan-10 announcement.",
+                email_path="/raw/2026-01-13_abc_test_f15459f0.md",
+            )
+        assert result["ok"] is True
+        assert result["id"] == 133
+        assert result["auto_corrected"] == {
+            "from": "/raw/2026-01-13_abc_test_f15459f0.md",
+            "to": "raw/2026-01-13_abc_test_f15459f0.md",
+            "note": (
+                "email_path normalized (leading slash stripped). The next "
+                "call should use the unrooted form directly."
+            ),
+        }
+        # Slash stripped before hitting the DB write.
+        call = record.call_args
+        assert call.kwargs["email_path"] == "raw/2026-01-13_abc_test_f15459f0.md"
+
+    def test_canonical_path_no_auto_corrected_field(self) -> None:
+        # When the agent gets it right, no noise in the response.
+        with (
+            patch("src.db.messages.find_by_raw_path", return_value={"message_id": "abc"}),
+            patch("src.db.insights.record", return_value=1),
+        ):
+            result = _invoke(
+                category="trivial_skip",
+                message="OOO auto-reply.",
+                email_path="raw/2026-04-15_ooo_abc.md",
+            )
+        assert "auto_corrected" not in result
+
+    def test_unknown_path_is_logged_but_still_persisted(self) -> None:
+        # When DB + FS both disagree the path exists, we persist anyway
+        # (the coordinator's batch-end skip-materialization is the
+        # authoritative gate, not this tool). We log a warning so the
+        # operator can trace drift. Patch `Path.is_file` so the test
+        # doesn't depend on what happens to live on disk under the
+        # fixture dir at test time.
+        with (
+            patch("src.db.messages.find_by_raw_path", return_value=None),
+            patch("pathlib.Path.is_file", return_value=False),
+            patch("src.db.insights.record", return_value=50) as record,
+        ):
+            result = _invoke(
+                category="already_captured",
+                message="Covered elsewhere.",
+                email_path="raw/bogus-not-in-db.md",
+            )
+        assert result == {"ok": True, "id": 50}
+        record.assert_called_once()
+
     def test_already_captured_category_accepted_by_validator(self) -> None:
         # 'already_captured' marks substantive emails whose facts are
         # already on the topic page — distinct from 'trivial_skip' which
