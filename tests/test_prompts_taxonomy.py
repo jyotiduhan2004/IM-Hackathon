@@ -26,6 +26,7 @@ def test_tagged_sections_present() -> None:
         "<sources_management>",
         "<todo_rule>",
         "<self_review>",
+        "<editorial_notes>",
         "<few_shots>",
     )
     missing = [tag for tag in required if tag not in COMPILER_SYSTEM_PROMPT]
@@ -52,6 +53,34 @@ def test_section_titles_rule_bans_dates_and_names() -> None:
     assert len(present) >= 2, f"need ≥2 canonical H2 examples; got {present}"
     # BAD/GOOD worked example keeps the rule concrete — verify both sides.
     assert "BAD" in block and "GOOD" in block
+
+
+def test_editorial_notes_teaches_three_outcomes() -> None:
+    """Reviewer returns editorial_notes as a free-form channel. The
+    writer must know to read each note and classify it into one of
+    three buckets: patch / log_insight / acknowledge. Without this
+    teaching the channel is observability-only."""
+    start = COMPILER_SYSTEM_PROMPT.find("<editorial_notes>")
+    end = COMPILER_SYSTEM_PROMPT.find("</editorial_notes>")
+    assert start != -1 and end != -1 and end > start
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Three outcome branches named:
+    assert "Actionable" in block  # patch
+    assert "Out of scope" in block and "log_insight" in block  # log_insight
+    assert "Speculative" in block or "acknowledge" in block  # acknowledge
+    # Anti-loop guard — don't re-patch if the next reviewer cycle
+    # surfaces the same note.
+    assert "don't loop" in block.lower() or "not a gatekeeper" in block.lower()
+
+
+def test_workflow_step_7_points_to_editorial_notes_section() -> None:
+    """Step 7 teaches the call, but the nuance lives in the
+    <editorial_notes> block. Workflow must name-drop the section so
+    the writer knows to go read it."""
+    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
+    workflow = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "editorial_notes" in workflow
 
 
 def test_taxonomy_covers_four_plus_two() -> None:

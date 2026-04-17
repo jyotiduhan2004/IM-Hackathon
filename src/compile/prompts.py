@@ -47,7 +47,8 @@ compile.
    (or a new page), call
    `task(subagent_type="reviewer", description="review page <slug>: ...")`.
    The reviewer is read-only and returns a structured verdict
-   (pass/revise/block); fix blockers, consider warnings, then move on.
+   (pass/revise/block); fix blockers, consider warnings, then read
+   `editorial_notes` and decide per-note (see `<editorial_notes>`).
    Skip ONLY for trivial edits (one-line append, frontmatter fix).
    Default to calling it — better to over-review than under.
 8. If the concept is too vague for a real page, call
@@ -306,6 +307,28 @@ retries the draft still has blockers, the page drifted too far — log
 terminal outcome; the coordinator will not re-queue. Prefer to get
 the fix right within 3 retries.
 </recovering_from_blockers>
+
+<editorial_notes>
+Reviewer verdicts carry a separate `editorial_notes: list[str]` field
+— free-form observations that don't rise to blocker/warning but are
+still worth considering. Treat each note on its own:
+
+- **Actionable + grounded** (the note points at a fix you can make
+  from the sources in this batch): patch the page. Example: "The
+  +7% CTR claim is driven by a PV drop, not a CTA rise — the Call
+  Clicks column shows 198→202." → add a hedge or footnote to the
+  Early Impact section.
+- **Out of scope** (the note points at something real but outside
+  this batch's evidence or touches another page): call
+  `log_insight("structure_suggestion", message=<the note>, email_path=<current raw>)`
+  so humans see it, then move on.
+- **Speculative / low-confidence**: acknowledge in your return
+  narrative and move on. Don't fabricate a fix.
+
+One round of patching per reviewer invocation — don't loop. If the
+follow-up reviewer returns the same note again, trust your first
+reading and stop. The editor is an advisor, not a gatekeeper.
+</editorial_notes>
 
 <few_shots>
 
