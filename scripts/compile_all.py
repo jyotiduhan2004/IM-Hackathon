@@ -277,6 +277,45 @@ def _normalize_touched_pages(pages: list[Path], wiki_dir: Path) -> list[Path]:
     return changed
 
 
+def _mdlint_autofix_touched_pages(pages: list[Path]) -> int:
+    """Best-effort structural hygiene pass via ``pymarkdown fix`` on the
+    touched pages. Complements the content formatter:
+
+    - ``_normalize_touched_pages`` handles section-level normalization
+      (idempotent frontmatter, section templating)
+    - this handles whitespace-class hygiene (final newlines, blank-line
+      collapse, list indent, trailing spaces)
+
+    Silently no-ops if pymarkdown is not installed (e.g. production
+    images without the dev extra) — the validator's mdlint warn-pass
+    will still surface remaining issues. Returns the fix-command exit
+    code purely for observability; failures don't affect the compile.
+
+    MD024 (duplicate-heading) is NOT auto-fixable by design — content
+    judgement lives in the reviewer subagent.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("pymarkdown") is None or not pages:
+        return 0
+    try:
+        result = subprocess.run(
+            ["pymarkdown", "fix", *[str(p) for p in pages]],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.warning("mdlint_autofix_failed", error=str(exc))
+        return 0
+    fixed = sum(1 for line in result.stdout.splitlines() if line.startswith("Fixed:"))
+    if fixed:
+        logger.info("mdlint_autofix_applied", pages_fixed=fixed, total_touched=len(pages))
+    return fixed
+
+
 _CATEGORY_BY_FOLDER: dict[str, str] = {
     "topics": "topic",
     "entities": "entity",
@@ -1748,6 +1787,7 @@ def main(
                 # empty and every email stays ``pending``.
                 touched_pages = _iter_touched_pages(batch_start, Path(wiki_dir))
                 normalized = _normalize_touched_pages(touched_pages, Path(wiki_dir))
+                _mdlint_autofix_touched_pages(touched_pages)
                 catalog_synced = _sync_wiki_catalog(touched_pages, Path(wiki_dir))
                 errors_by_page = _validate_touched_pages(touched_pages, Path(wiki_dir))
                 if errors_by_page:
