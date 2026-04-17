@@ -599,8 +599,10 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
     """Extract reader-facing summary fields from a wiki page.
 
     Returns None for pages with broken frontmatter so the caller can skip
-    them. The `is_stub` flag is True when the page has no sources cited —
-    used to hide ghost entity/system pages from the landing listings.
+    them. The `is_stub` flag is True when the page has no provenance
+    evidence — neither per-message `sources:` nor post-Phase-A
+    `source_threads:` — used to hide ghost entity/system pages from the
+    landing listings.
     """
     try:
         content = md_file.read_text(encoding="utf-8")
@@ -611,6 +613,12 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
         return None
     body = _extract_body(content)
     sources = fm.get("sources") or []
+    # Post-Phase-A pages carry provenance as `source_threads:` — the agent
+    # no longer writes `sources:`. Either field counts as "not a stub".
+    source_threads = fm.get("source_threads") or []
+    sources_list = sources if isinstance(sources, list) else []
+    threads_list = source_threads if isinstance(source_threads, list) else []
+    has_provenance = bool(sources_list) or bool(threads_list)
     last_compiled = str(fm.get("last_compiled", "") or "")
     # `last_compiled: stub` and `stub-backfilled` are the canonical stub
     # markers used by `scripts/backfill_stubs.py` — keep this rule in sync
@@ -622,8 +630,8 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
         "status": str(fm.get("status", "current")),
         "last_compiled": last_compiled,
         "summary": _first_paragraph(body),
-        "sources_count": len(sources) if isinstance(sources, list) else 0,
-        "is_stub": not sources or is_stub_marker,
+        "sources_count": len(sources_list) or len(threads_list),
+        "is_stub": not has_provenance or is_stub_marker,
     }
 
 
