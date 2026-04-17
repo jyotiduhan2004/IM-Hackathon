@@ -1615,13 +1615,16 @@ def log_insight(
             ``raw/2026-04-11_subject_abc.md``). **Required** for
             ``trivial_skip`` and ``already_captured`` — the coordinator
             uses it to materialize the skip. Optional for investigatory
-            categories.
+            categories. In single-email batches the path is inferred
+            from the coordinator's batch scope when omitted; multi-email
+            batches still require explicit selection.
         suggested_action: Optional concrete fix the human could take.
 
     Returns:
         ``{"ok": True, "id": <int>}`` on success, or
         ``{"ok": False, "error": "..."}`` on invalid category or a
-        skip-category call that omitted ``email_path``.
+        skip-category call that omitted ``email_path`` in a non-single-
+        email batch.
     """
     import os
 
@@ -1635,20 +1638,31 @@ def log_insight(
             ),
         }
 
+    inferred_from_batch: str | None = None
     if category in _SKIP_INSIGHT_CATEGORIES and not email_path:
-        return {
-            "ok": False,
-            "error": (
-                f"email_path is required for category={category!r} — "
-                f"call log_insight once per email you're skipping, with "
-                f"email_path='raw/YYYY-MM-DD_..._hash.md'. Without it the "
-                f"coordinator can't mark the message skipped and the "
-                f"decision is lost."
-            ),
-        }
+        # Self-heal: in a single-email batch the coordinator already knows
+        # which email is in scope, so we can infer it instead of looping
+        # on the structured error. Multi-email batches still need explicit
+        # selection — we can't guess which of N messages the insight is
+        # about.
+        batch_paths = _current_raw_paths.get() or []
+        if len(batch_paths) == 1:
+            email_path = batch_paths[0]
+            inferred_from_batch = email_path
+        else:
+            return {
+                "ok": False,
+                "error": (
+                    f"email_path is required for category={category!r} — "
+                    f"call log_insight once per email you're skipping, with "
+                    f"email_path='raw/YYYY-MM-DD_..._hash.md'. Without it the "
+                    f"coordinator can't mark the message skipped and the "
+                    f"decision is lost."
+                ),
+            }
 
     original_path = email_path
-    if email_path:
+    if email_path and inferred_from_batch is None:
         email_path = _autoheal_email_path(email_path)
 
     run_id = os.environ.get("COMPILE_RUN_ID")
@@ -1660,7 +1674,14 @@ def log_insight(
         suggested_action=suggested_action,
     )
     result: dict[str, Any] = {"ok": True, "id": new_id}
-    if original_path and original_path != email_path:
+    if inferred_from_batch is not None:
+        result["auto_corrected"] = {
+            "inferred_from_batch": inferred_from_batch,
+            "note": (
+                "email_path inferred from single-email batch scope — pass it explicitly next time."
+            ),
+        }
+    elif original_path and original_path != email_path:
         result["auto_corrected"] = {
             "from": original_path,
             "to": email_path,

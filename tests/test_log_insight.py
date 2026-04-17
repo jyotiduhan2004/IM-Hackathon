@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+from src.compile.compiler import _current_raw_paths
 from src.compile.compiler import log_insight
 from src.compile.prompts import COMPILER_SYSTEM_PROMPT
 
@@ -193,6 +194,118 @@ class TestLogInsightTool:
             )
         assert result == {"ok": True, "id": 5}
         record.assert_called_once()
+
+    def test_single_email_batch_infers_email_path_for_trivial_skip(self) -> None:
+        # In a single-email batch the coordinator already knows which email
+        # is in scope, so the agent shouldn't need to re-specify email_path
+        # on every log_insight(trivial_skip) call. Without inference the
+        # agent loops on the structured error and never converges (trace
+        # 6569afd9026319d70b719888fe9aff5f).
+        inferred = "raw/2026-04-15_single_batch_abc.md"
+        token = _current_raw_paths.set([inferred])
+        try:
+            with patch("src.db.insights.record", return_value=201) as record:
+                result = _invoke(
+                    category="trivial_skip",
+                    message="One-line 'Thanks!' reply, no content.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result["ok"] is True
+        assert result["id"] == 201
+        assert result["auto_corrected"] == {
+            "inferred_from_batch": inferred,
+            "note": (
+                "email_path inferred from single-email batch scope — pass it explicitly next time."
+            ),
+        }
+        # Inferred path flows through to the persisted record.
+        assert record.call_args.kwargs["email_path"] == inferred
+
+    def test_single_email_batch_infers_email_path_for_already_captured(self) -> None:
+        inferred = "raw/2026-04-15_already_captured_xyz.md"
+        token = _current_raw_paths.set([inferred])
+        try:
+            with patch("src.db.insights.record", return_value=202) as record:
+                result = _invoke(
+                    category="already_captured",
+                    message="Covered on [[topic-page]] from thread root.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result["ok"] is True
+        assert result["auto_corrected"]["inferred_from_batch"] == inferred
+        assert record.call_args.kwargs["email_path"] == inferred
+
+    def test_multi_email_batch_still_rejects_missing_email_path(self) -> None:
+        # Two or more emails in the batch → can't safely guess which the
+        # insight is about. Keep the structured error so the agent picks
+        # explicitly.
+        token = _current_raw_paths.set(
+            [
+                "raw/2026-04-15_alice_abc.md",
+                "raw/2026-04-15_bob_xyz.md",
+            ]
+        )
+        try:
+            with patch("src.db.insights.record") as record:
+                result = _invoke(
+                    category="trivial_skip",
+                    message="One of these is a terse ack.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result["ok"] is False
+        assert "email_path" in result["error"]
+        assert "trivial_skip" in result["error"]
+        record.assert_not_called()
+
+    def test_empty_batch_scope_still_rejects_missing_email_path(self) -> None:
+        # No batch scope set (ContextVar default None) or an empty list →
+        # nothing to infer from. Keep the structured error.
+        token = _current_raw_paths.set(None)
+        try:
+            with patch("src.db.insights.record") as record:
+                result = _invoke(
+                    category="trivial_skip",
+                    message="Drive-by insight outside a batch.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result["ok"] is False
+        assert "email_path" in result["error"]
+        record.assert_not_called()
+
+        token = _current_raw_paths.set([])
+        try:
+            with patch("src.db.insights.record") as record:
+                result = _invoke(
+                    category="already_captured",
+                    message="Drive-by insight outside a batch.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result["ok"] is False
+        assert "email_path" in result["error"]
+        record.assert_not_called()
+
+    def test_investigatory_category_no_inference_no_email_path(self) -> None:
+        # Inference only runs for skip categories. An investigatory insight
+        # without email_path should pass through cleanly (no auto_corrected
+        # block), even if a single-email batch scope is set — those
+        # categories don't materialize skips, so we don't need to name a
+        # specific email.
+        token = _current_raw_paths.set(["raw/2026-04-15_some_email.md"])
+        try:
+            with patch("src.db.insights.record", return_value=303) as record:
+                result = _invoke(
+                    category="prompt_ambiguity",
+                    message="Prompt doesn't say what to do when status=draft.",
+                )
+        finally:
+            _current_raw_paths.reset(token)
+        assert result == {"ok": True, "id": 303}
+        assert record.call_args.kwargs["email_path"] is None
 
 
 class TestInsightsRepoListForRun:
