@@ -552,6 +552,12 @@ def check_duplicate_headings(wiki_dir: Path) -> list[Error]:
 
     Most common cause: the updater appends a new `## Related` section
     instead of merging into the existing one.
+
+    Note: this is the H2-only deterministic check. Cross-level dups
+    (H3 + H2 same title, e.g. the photosearch `Feedback Frequency
+    Design` case — see docs/audits/cycle-7-case-photosearch-
+    duplicate-section.md) are caught by `check_markdownlint` via
+    pymarkdown MD024.
     """
     heading_re = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
     errors: list[Error] = []
@@ -573,6 +579,66 @@ def check_duplicate_headings(wiki_dir: Path) -> list[Error]:
             if dups:
                 errors.append(Error(path, f"duplicate H2 heading(s): {dups}"))
     return errors
+
+
+def check_markdownlint(wiki_dir: Path) -> list[ValidationWarning]:
+    """Run pymarkdown across wiki/ content pages. Warning-only.
+
+    Config in pyproject.toml [tool.pymarkdown.*] disables noisy rules
+    (MD013 line-length, MD036 emphasis-as-heading for our dated-bullet
+    idiom, MD022 blanks-around-headings, etc.) and keeps the rules
+    that signal compile-writer drift:
+
+    - MD024 (no-duplicate-heading) — catches cross-level dups the
+      `check_duplicate_headings` H2-only scanner misses
+    - MD001 (heading-increment), MD003 (heading-style), MD023
+      (heading-indent), MD025 (single-h1), MD026 (no-trailing-
+      punctuation in heading), MD029 (ordered-list-prefix)
+
+    Pymarkdown is a dev dep; if it's not installed the check
+    silently no-ops rather than failing the validator.
+    """
+    import shutil
+    import subprocess
+
+    warnings: list[ValidationWarning] = []
+    if shutil.which("pymarkdown") is None:
+        return warnings
+
+    categories = [c for c in CATEGORY_TO_TYPE if (wiki_dir / c).exists()]
+    if not categories:
+        return warnings
+    targets = [str(wiki_dir / c) for c in categories]
+    try:
+        result = subprocess.run(
+            ["pymarkdown", "scan", *targets],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return warnings
+
+    # pymarkdown emits one violation per line in the format:
+    #   <path>:<line>:<col>: MDxxx: <message> (<name>)
+    rx = re.compile(r"^(?P<path>[^:]+):(?P<line>\d+):\d+:\s+(?P<rule>MD\d+):\s+(?P<msg>.+)$")
+    for raw in (result.stdout + result.stderr).splitlines():
+        m = rx.match(raw)
+        if m is None:
+            continue
+        path = Path(m.group("path"))
+        rule = m.group("rule").lower()
+        msg = m.group("msg").strip()
+        line_no = m.group("line")
+        warnings.append(
+            ValidationWarning(
+                path,
+                f"line {line_no}: {msg}",
+                f"mdlint-{rule}",
+            )
+        )
+    return warnings
 
 
 def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
@@ -1050,6 +1116,7 @@ def run(
     warnings.extend(check_lead_paragraph(wiki_dir))
     warnings.extend(check_missing_domain(wiki_dir))
     warnings.extend(check_dated_h2_sections(wiki_dir))
+    warnings.extend(check_markdownlint(wiki_dir))
     legacy_errors, legacy_warnings = check_legacy_shape(wiki_dir, strict=strict_new_ontology)
     errors.extend(legacy_errors)
     warnings.extend(legacy_warnings)

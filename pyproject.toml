@@ -119,3 +119,43 @@ asyncio_mode = "auto"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pymarkdown]
+# Wiki-tuned config. Each disable below is justified by a concrete
+# false-positive pattern measured against the live corpus on
+# 2026-04-17 (~4k topic pages). Hygiene rules with near-zero hits
+# stay enabled — they catch real issues without generating noise.
+# Headline rule: MD024 (no-duplicate-heading, siblings_only=false) —
+# catches cross-level dups (H3 + H2 same title, e.g. the photosearch
+# Feedback Frequency Design case).
+
+# Disables — each backed by a documented false-positive pattern:
+[tool.pymarkdown.plugins.md013]
+enabled = false  # 4176 hits; tables + long bullets legit
+[tool.pymarkdown.plugins.md022]
+enabled = false  # 770 hits; dense compile output by design
+[tool.pymarkdown.plugins.md032]
+enabled = false  # 726 hits; dense compile output by design
+[tool.pymarkdown.plugins.md033]
+enabled = false  # 324 hits; <aside>/<section> in SEO pages are legit
+[tool.pymarkdown.plugins.md041]
+enabled = false  # 297 hits; YAML frontmatter precedes first heading (mkdocs stack)
+[tool.pymarkdown.plugins.md034]
+enabled = false  # 256 hits; email-quoted URLs preserve source fidelity
+[tool.pymarkdown.plugins.md036]
+enabled = false  # 134 hits; `**2026-01-13 (Name)** — …` is the dated-bullet idiom
+                 # the prompt teaches in <section_titles>
+[tool.pymarkdown.plugins.md031]
+enabled = false  # 23 hits; dense compile output
+[tool.pymarkdown.plugins.md040]
+enabled = false  # 6 hits; code fences mix diff/log/stdout, language-tagging them
+                 # would be theatrical
+
+[tool.pymarkdown.plugins.md003]
+enabled = false  # 150 hits; mkdocs hooks inject setext H1 at render time
+                 # while bodies use atx — platform artifact, not writer bug
+
+# Everything else stays at pymarkdown defaults. MD047, MD007, MD009,
+# MD010, MD012, MD018, MD019, MD001, MD004, MD023, MD024, MD025,
+# MD026, MD029 all catch real hygiene issues without drowning the
+# validator in noise (under 50 hits each corpus-wide).
