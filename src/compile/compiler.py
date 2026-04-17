@@ -222,13 +222,18 @@ def list_wiki_pages(
             if not fm:
                 continue
             sources = fm.get("sources") or []
+            source_threads = fm.get("source_threads") or []
+            source_count = len(sources) if isinstance(sources, list) else 0
+            source_thread_count = len(source_threads) if isinstance(source_threads, list) else 0
             detailed[category].append(
                 {
                     "slug": md_file.stem,
                     "title": str(fm.get("title") or md_file.stem),
                     "page_type": str(fm.get("page_type") or ""),
                     "status": str(fm.get("status") or "active"),
-                    "source_count": len(sources) if isinstance(sources, list) else 0,
+                    "source_count": source_count,
+                    "source_thread_count": source_thread_count,
+                    "is_cited": source_count > 0 or source_thread_count > 0,
                     "last_compiled": str(fm.get("last_compiled") or ""),
                 }
             )
@@ -2093,7 +2098,11 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
     Returns:
         On hit: ``{"found": True, "slug": str, "title": str, "page_type": str,
         "status": str, "first_paragraph": str, "headings": list[str],
-        "source_count": int, "last_compiled": str}``.
+        "source_count": int, "source_thread_count": int, "is_cited": bool,
+        "last_compiled": str}``. `source_count` counts per-message raw
+        paths; `source_thread_count` counts thread_ids (the newer form).
+        `is_cited` is true when either is non-zero — the cheap merge-vs-
+        new check.
         On miss: ``{"found": False, "slug": str, "reason": "not_found"}``.
     """
     path = _find_page_by_slug(slug, wiki_dir)
@@ -2108,17 +2117,21 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
     fm = _extract_frontmatter(content)
     body = _extract_body(content)
     sources = fm.get("sources") or []
+    source_threads = fm.get("source_threads") or []
     source_count = len(sources) if isinstance(sources, list) else 0
+    source_thread_count = len(source_threads) if isinstance(source_threads, list) else 0
 
     return {
         "found": True,
         "slug": slug,
         "title": str(fm.get("title") or slug),
         "page_type": str(fm.get("page_type") or ""),
-        "status": str(fm.get("status") or "current"),
+        "status": str(fm.get("status") or "active"),
         "first_paragraph": _first_paragraph_capped(body, cap=200),
         "headings": _extract_h2_headings(body),
         "source_count": source_count,
+        "source_thread_count": source_thread_count,
+        "is_cited": source_count > 0 or source_thread_count > 0,
         "last_compiled": str(fm.get("last_compiled") or ""),
     }
 
