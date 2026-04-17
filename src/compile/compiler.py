@@ -37,6 +37,19 @@ _current_raw_paths: contextvars.ContextVar[list[str] | None] = contextvars.Conte
     "current_raw_paths", default=None
 )
 
+# ContextVar carrying the chronological cutoff for this batch — the latest
+# `messages.date` among the batch's raw_paths. `get_thread_context` reads
+# it to clip future replies the writer shouldn't see (Bug H fix). The
+# prompt tells the agent it's processing email N of a thread "as a writer
+# at that point in time"; this enforces it structurally.
+#
+# Stored as ISO8601 string (not datetime) so the ContextVar stays picklable
+# and avoids tz-comparison surprises at query time — Postgres casts the
+# literal to timestamptz.
+_current_batch_cutoff_date: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_batch_cutoff_date", default=None
+)
+
 
 # === Custom Tools for the Compiler Agent ===
 
@@ -599,10 +612,8 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
     """Extract reader-facing summary fields from a wiki page.
 
     Returns None for pages with broken frontmatter so the caller can skip
-    them. The `is_stub` flag is True when the page has no provenance
-    evidence — neither per-message `sources:` nor post-Phase-A
-    `source_threads:` — used to hide ghost entity/system pages from the
-    landing listings.
+    them. The `is_stub` flag is True when the page has no sources cited —
+    used to hide ghost entity/system pages from the landing listings.
     """
     try:
         content = md_file.read_text(encoding="utf-8")
@@ -613,12 +624,6 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
         return None
     body = _extract_body(content)
     sources = fm.get("sources") or []
-    # Post-Phase-A pages carry provenance as `source_threads:` — the agent
-    # no longer writes `sources:`. Either field counts as "not a stub".
-    source_threads = fm.get("source_threads") or []
-    sources_list = sources if isinstance(sources, list) else []
-    threads_list = source_threads if isinstance(source_threads, list) else []
-    has_provenance = bool(sources_list) or bool(threads_list)
     last_compiled = str(fm.get("last_compiled", "") or "")
     # `last_compiled: stub` and `stub-backfilled` are the canonical stub
     # markers used by `scripts/backfill_stubs.py` — keep this rule in sync
@@ -630,8 +635,8 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
         "status": str(fm.get("status", "current")),
         "last_compiled": last_compiled,
         "summary": _first_paragraph(body),
-        "sources_count": len(sources_list) or len(threads_list),
-        "is_stub": not has_provenance or is_stub_marker,
+        "sources_count": len(sources) if isinstance(sources, list) else 0,
+        "is_stub": not sources or is_stub_marker,
     }
 
 
@@ -1909,6 +1914,14 @@ def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
     markdown. Missing raw files degrade gracefully (empty preview).
     Caps at `limit` rows to avoid flooding agent context on long threads.
 
+    **Chronological scope**: when invoked inside `run_compilation`, this
+    tool automatically clips results to messages dated at or before the
+    batch's latest raw — the agent processes email N of the thread "as a
+    writer at that point in time" and should not see future replies. The
+    cutoff is reported back in the ``cutoff_date`` field of the response
+    so the agent knows the scope was narrowed. Outside of a compile run
+    (unit tests, ad-hoc queries) no cutoff is applied.
+
     Args:
         thread_id: Gmail thread identifier.
         limit: Maximum rows to return. Default 50.
@@ -1916,20 +1929,30 @@ def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
     Returns:
         ``{"thread_id": str, "messages": [{"message_id", "subject", "from_addr",
         "date", "raw_path", "first_200_chars", "compile_state"}, ...],
-        "truncated": bool}``. Empty list when the thread is unknown.
+        "truncated": bool, "cutoff_date": str | None}``. Empty list when
+        the thread is unknown. ``cutoff_date`` echoes the applied cutoff
+        (ISO8601), or None when the full thread was returned.
     """
     from src.db import connect
 
+    cutoff = _current_batch_cutoff_date.get()
+    # Compare date-to-date so a YYYY-MM-DD cutoff (derived from the
+    # batch's filename prefix) doesn't timezone-drift against the DB's
+    # timestamptz. The middleware enforces the same date-level guard.
+    cutoff_clause = "AND (date IS NULL OR date::date <= %s::date)" if cutoff else ""
+    params: tuple[Any, ...] = (thread_id, cutoff, limit + 1) if cutoff else (thread_id, limit + 1)
+
     with connect() as conn:
         raw_rows = conn.execute(
-            """
+            f"""
             SELECT message_id, raw_path, subject, from_address, date, compile_state
               FROM messages
              WHERE thread_id = %s
+                   {cutoff_clause}
              ORDER BY date ASC NULLS LAST, message_id ASC
              LIMIT %s
             """,
-            (thread_id, limit + 1),
+            params,
         ).fetchall()
     rows = cast(list[dict[str, Any]], raw_rows)
     truncated = len(rows) > limit
@@ -1960,7 +1983,12 @@ def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
             }
         )
 
-    return {"thread_id": thread_id, "messages": messages, "truncated": truncated}
+    return {
+        "thread_id": thread_id,
+        "messages": messages,
+        "truncated": truncated,
+        "cutoff_date": cutoff,
+    }
 
 
 @tool
@@ -2216,6 +2244,7 @@ def create_compiler(
     from deepagents import create_deep_agent
     from deepagents.backends import FilesystemBackend
 
+    from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
@@ -2302,6 +2331,7 @@ def create_compiler(
         permissions=permissions,
         middleware=[
             PathAutohealMiddleware(),
+            ChronologicalScopeMiddleware(),
             EntityWriteAutohealMiddleware(),
             LegacyPageHintMiddleware(),
             CheckMyWorkGateMiddleware(),
@@ -2552,7 +2582,16 @@ def run_compilation(
             raw_paths_count=len(effective_raw_paths),
         )
 
-        token = _current_raw_paths.set(effective_raw_paths)
+        cutoff_date = _compute_batch_cutoff_date(effective_raw_paths)
+        if cutoff_date:
+            logger.info(
+                "batch_cutoff_date",
+                cutoff_date=cutoff_date,
+                raw_paths_count=len(effective_raw_paths),
+            )
+
+        raw_paths_token = _current_raw_paths.set(effective_raw_paths)
+        cutoff_token = _current_batch_cutoff_date.set(cutoff_date)
         try:
             result = agent.invoke(
                 {"messages": [{"role": "user", "content": instruction}]},
@@ -2561,7 +2600,8 @@ def run_compilation(
             _check_silent_fail(result, model=model_name)
             return result
         finally:
-            _current_raw_paths.reset(token)
+            _current_batch_cutoff_date.reset(cutoff_token)
+            _current_raw_paths.reset(raw_paths_token)
     finally:
         _cleanup_compile_view(view_root)
 
@@ -2587,19 +2627,6 @@ def _check_silent_fail(result: dict[str, Any], *, model: str | None = None) -> N
     """Raise SilentModelFailError if the agent's final state is the
     zero-token empty-content shape produced by the LiteLLM proxy on
     malfunctioning model requests.
-
-    Conservative: we only trigger when ALL of the following hold:
-    - Exactly one non-human message exists in the result (the empty AI
-      response, no retries inside LangGraph).
-    - That AI message has empty string content AND no tool calls.
-    - `response_metadata.token_usage.total_tokens` is 0 (explicit
-      evidence that LiteLLM returned an empty body, not that the agent
-      chose to be silent).
-
-    The triple guard avoids false positives on an agent that
-    legitimately has nothing to do and returns a short acknowledgement
-    without calling a tool — though the terminal-decision prompt
-    (#135) makes that shape vanishingly rare.
     """
     messages = result.get("messages") if isinstance(result, dict) else None
     if not isinstance(messages, list):
@@ -2627,9 +2654,6 @@ def _check_silent_fail(result: dict[str, Any], *, model: str | None = None) -> N
 
 
 def _message_is_ai(msg: Any) -> bool:
-    """True when this is an assistant/AI message, regardless of LangChain
-    vs plain-dict representation.
-    """
     if isinstance(msg, dict):
         return msg.get("type") == "ai" or msg.get("role") == "assistant"
     return msg.__class__.__name__ == "AIMessage"
@@ -2660,3 +2684,30 @@ def _message_total_tokens(msg: Any) -> int | None:
         return None
     total = usage.get("total_tokens")
     return int(total) if isinstance(total, (int, float)) else None
+
+
+def _compute_batch_cutoff_date(raw_paths: list[str]) -> str | None:
+    """Return the latest raw-filename date for the batch as YYYY-MM-DD.
+
+    The cutoff is derived from filename prefixes (``YYYY-MM-DD_...``),
+    NOT from the Postgres ``messages.date`` timestamp. Rationale: the
+    ingest pipeline writes filenames in its local timezone (IST for
+    IndiaMART), but ``messages.date`` lands as UTC timestamptz. A
+    near-midnight email can therefore have a filename dated Jan 10 and
+    a DB timestamp on Jan 9 UTC — the middleware, which compares against
+    the filename prefix, would false-reject the batch's own raw if we
+    went through the DB. Using the filename on BOTH sides keeps the
+    enforcement layer consistent.
+
+    Returns None when no raw path has a parseable date prefix (test
+    fixtures, pre-ingest fossils).
+    """
+    if not raw_paths:
+        return None
+
+    from src.compile.middleware.chronological_scope import _raw_file_date
+
+    dates = [d for p in raw_paths if (d := _raw_file_date(p)) is not None]
+    if not dates:
+        return None
+    return max(dates).isoformat()

@@ -185,15 +185,33 @@ Fixing Bug G (relax create_entities) lets the agent recover when H
 fails. Fixing Bug F (patch_page semantics) stops the duplicate-H2
 spiral.
 
-## Priority for Cycle 5+ fixes
+## Priority for Cycle 5+ fixes — resolved and in-flight
 
-1. **Bug G** (highest leverage, smallest diff): relax
-   `create_entities` to accept emails from any message in the same
-   thread_id. Unblocks recovery when H violates.
-2. **Bug F**: clarify `patch_page` contract (REPLACE, not append) +
-   prompt warning.
-3. **Bug H**: tighten `get_thread_context` output to current-message-
-   and-earlier. Biggest behavioral shift but also highest payoff.
+After reviewing, the right fix is systemic chronological scoping. Bug G's
+`create_entities` rejection was actually **correct** per contract — the
+real leak is upstream in the tools that expose future-dated thread
+context in the first place. Per-tool scope lets the agent learn about
+Amarinder (via `get_thread_context` + `read_file`), then traps it at
+the creation gate. Make scope **consistent across all tools**.
+
+1. ~~**Bug G** — relax `create_entities` to accept thread-scope emails~~.
+   **Rejected**: the batch-scope gate is correct. If the agent never
+   discovers Amarinder's future replies in the first place, it never
+   tries to wikilink him, and the gate never fires. Fixing this
+   downstream would paper over the real scope leak.
+2. **Bug H** — **shipped in PR #139**. Coordinator sets
+   `_current_batch_cutoff_date` (the batch's latest message date) and:
+   - `get_thread_context` auto-clips rows to `date <= cutoff`, so the
+     agent can't discover future replies.
+   - `ChronologicalScopeMiddleware` rejects `read_file` on raws whose
+     filename date is later than the cutoff — belt-and-suspenders for
+     leaks via any other discovery path.
+
+   This resolves Bug G transitively (Amarinder never gets surfaced → no
+   wikilink to him → no creation attempt → no rejection cascade).
+3. **Bug F** (still open): clarify `patch_page` contract (REPLACE, not
+   append) + prompt warning. Duplicate-H2 spiral is orthogonal to the
+   scope fix.
 
 ## Artifacts
 
