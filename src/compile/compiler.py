@@ -2186,19 +2186,28 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
 
 
 @tool
-def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
+def get_thread_context(
+    thread_id: str,
+    limit: int = 50,
+    response_format: Literal["detailed", "concise"] = "detailed",
+) -> dict[str, Any]:
     """Return chronological messages in a thread with short previews.
 
     WHEN TO USE: when merging a new email into an existing topic page that
       spans multiple emails — gives you the conversation arc cheaply.
+      For long threads (>5 messages) prefer `response_format="concise"`
+      first to skim the arc in a fraction of the tokens; fall back to
+      `"detailed"` only for the specific messages you need to read in full.
     WHEN NOT TO USE: don't call when you only need one message
       (use the email's raw_path directly) or when the thread isn't
       relevant to the current concept.
 
     Queries Postgres `messages` for every row matching `thread_id`, ordered
-    by `date` ASC, and attaches a 200-char body preview from the raw
-    markdown. Missing raw files degrade gracefully (empty preview).
-    Caps at `limit` rows to avoid flooding agent context on long threads.
+    by `date` ASC. In `"detailed"` mode (default, back-compat) each row
+    carries a 200-char body preview; in `"concise"` mode each row carries
+    a quote-stripped one-line summary capped at 120 chars. Missing raw
+    files degrade gracefully (empty preview/one_line). Caps at `limit`
+    rows to avoid flooding agent context on long threads.
 
     **Chronological scope**: when invoked inside `run_compilation`, this
     tool automatically clips results to messages dated at or before the
@@ -2211,15 +2220,29 @@ def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
     Args:
         thread_id: Gmail thread identifier.
         limit: Maximum rows to return. Default 50.
+        response_format:
+          - "detailed" (default) — full shape with per-message subject,
+            raw_path, first_200_chars preview, compile_state. Use when you
+            need to decide which message to read next or match against
+            page content.
+          - "concise" — compact shape `{message_id, date, from_addr,
+            one_line}` per message, where `one_line` is the first
+            non-empty line of the quote-stripped body capped at 120
+            chars. Cheap overview of a long thread; saves ~70% context
+            vs. detailed on 10+ message threads.
 
     Returns:
-        ``{"thread_id": str, "messages": [{"message_id", "subject", "from_addr",
-        "date", "raw_path", "first_200_chars", "compile_state"}, ...],
-        "truncated": bool, "cutoff_date": str | None}``. Empty list when
-        the thread is unknown. ``cutoff_date`` echoes the applied cutoff
+        Detailed: ``{"thread_id": str, "messages": [{"message_id", "subject",
+        "from_addr", "date", "raw_path", "first_200_chars", "compile_state"},
+        ...], "truncated": bool, "cutoff_date": str | None}``.
+        Concise: ``{"thread_id": str, "message_count": int, "cutoff_date":
+        str | None, "summary_lines": [{"message_id", "date", "from_addr",
+        "one_line"}, ...], "truncated": bool}``. Empty list when the
+        thread is unknown. ``cutoff_date`` echoes the applied cutoff
         (ISO8601), or None when the full thread was returned.
     """
     from src.db import connect
+    from src.utils.email_quotes import strip_quoted
 
     cutoff = _current_batch_cutoff_date.get()
     # Compare date-to-date so a YYYY-MM-DD cutoff (derived from the
@@ -2243,6 +2266,41 @@ def get_thread_context(thread_id: str, limit: int = 50) -> dict[str, Any]:
     rows = cast(list[dict[str, Any]], raw_rows)
     truncated = len(rows) > limit
     rows = rows[:limit]
+
+    if response_format == "concise":
+        summary_lines: list[dict[str, Any]] = []
+        for row in rows:
+            raw_path = str(row["raw_path"] or "")
+            one_line = ""
+            if raw_path:
+                try:
+                    text = Path(raw_path).read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    text = ""
+                if text:
+                    body = _extract_body(text)
+                    stripped = strip_quoted(body)
+                    for line in stripped.splitlines():
+                        candidate = line.strip()
+                        if candidate:
+                            one_line = candidate[:120]
+                            break
+            date_val = row["date"]
+            summary_lines.append(
+                {
+                    "message_id": str(row["message_id"] or ""),
+                    "date": date_val.isoformat() if date_val else "",
+                    "from_addr": str(row["from_address"] or ""),
+                    "one_line": one_line,
+                }
+            )
+        return {
+            "thread_id": thread_id,
+            "message_count": len(summary_lines),
+            "cutoff_date": cutoff,
+            "summary_lines": summary_lines,
+            "truncated": truncated,
+        }
 
     messages: list[dict[str, Any]] = []
     for row in rows:

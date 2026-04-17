@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.utils.email_quotes import strip_quoted
+
 # Subject prefixes that almost always indicate no new content.
 _TRIVIAL_SUBJECT_PREFIXES: tuple[str, ...] = (
     "re: ack",
@@ -88,25 +90,15 @@ def classify(subject: str, body: str, from_addr: str) -> TrivialVerdict:
     if any(sender in from_lower for sender in _AUTOMATED_SENDERS):
         return TrivialVerdict(True, "auto_sender")
 
-    body_only = _strip_quoted(body)
+    body_only = strip_quoted(body)
     if len(body_only.split()) < _MIN_WORDS:
         return TrivialVerdict(True, "too_short")
 
     return TrivialVerdict(False, "")
 
 
-def _strip_quoted(body: str) -> str:
-    """Drop quoted-reply and forwarded-message blocks before word-counting.
-
-    Without this, a two-word ack with a 500-word quoted previous message
-    trivially clears the 50-word threshold.
-    """
-    out: list[str] = []
-    for line in body.splitlines():
-        if line.lstrip().startswith(">"):
-            continue
-        lower = line.lower()
-        if "original message" in lower or "----- forwarded" in lower:
-            break
-        out.append(line)
-    return "\n".join(out)
+# Backward-compat alias: the helper lives in src.utils.email_quotes now.
+# Kept so any legacy `from src.ingest.filter_trivial import _strip_quoted`
+# call site (scripts, notebooks) doesn't break. New code should import
+# `strip_quoted` from `src.utils.email_quotes` directly.
+_strip_quoted = strip_quoted

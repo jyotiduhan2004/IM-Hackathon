@@ -207,8 +207,11 @@ Write/read:
   H2 block. Prefer this for targeted edits.
 
 Discovery (start here, in this order):
-- `get_thread_context(thread_id)` — opener. See the thread's structure
-  before reading any individual email.
+- `get_thread_context(thread_id, response_format="concise")` — opener.
+  See the thread's structure before reading any individual email. Use
+  `"concise"` first (one-line-per-message, quote blocks stripped); switch
+  to `response_format="detailed"` only when you need full 200-char
+  previews to decide what to read.
 - `resolve_page(query)` — slug / title / email lookup. Returns
   `{slug, title, page_type, status, confidence, why_matched, candidates,
    auto_corrected_from, auto_corrected_to}`. Call this BEFORE creating any
@@ -355,7 +358,7 @@ Context: Batch contains one email announcing a new test-coverage number
 for an ongoing rollout.
 
 ```
-get_thread_context("19b59cdc863ac109") → {messages: [...], subject: "WhatsApp 9696 coverage"}
+get_thread_context("19b59cdc863ac109", response_format="concise") → {summary_lines: [{date, from_addr, one_line}, ...], message_count: 4, subject: "WhatsApp 9696 coverage"}
 resolve_page("whatsapp-9696-rollout") → {exists: true, slug: "whatsapp-9696-rollout", ...}
 get_page_summary("whatsapp-9696-rollout") → shows current-state section already tracks coverage
 patch_page("whatsapp-9696-rollout", "Current state", "As of 2026-04-15, ...")
