@@ -122,6 +122,74 @@ def test_count_wiki_pages_by_type_empty(db_conn: psycopg.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# find_active_topic_for_thread — catalog join for same-thread topic guard
+# ---------------------------------------------------------------------------
+
+
+def _seed_topic_touch(
+    db_conn: psycopg.Connection,
+    *,
+    slug: str,
+    thread_id: str,
+    message_id: str = "m1",
+    status: str = "active",
+) -> None:
+    db_conn.execute(
+        """
+        INSERT INTO messages (message_id, raw_path, thread_id, compile_state)
+        VALUES (%s, %s, %s, 'compiled')
+        """,
+        (message_id, f"raw/seed-{message_id}.md", thread_id),
+    )
+    page_id = _upsert(db_conn, slug=slug, page_type="topic", status=status)
+    db_conn.execute(
+        "INSERT INTO message_touched_pages (message_id, page_id) VALUES (%s, %s)",
+        (message_id, page_id),
+    )
+
+
+def test_find_active_topic_returns_slug_when_linked(db_conn: psycopg.Connection) -> None:
+    _seed_topic_touch(db_conn, slug="foo-topic", thread_id="T1")
+    db_conn.commit()
+    assert repo.find_active_topic_for_thread("T1") == "foo-topic"
+
+
+def test_find_active_topic_returns_none_for_unknown_thread(db_conn: psycopg.Connection) -> None:
+    assert repo.find_active_topic_for_thread("T-missing") is None
+
+
+def test_find_active_topic_ignores_non_topic_page_types(db_conn: psycopg.Connection) -> None:
+    """System / policy / decision pages must not count as topics."""
+    db_conn.execute(
+        """
+        INSERT INTO messages (message_id, raw_path, thread_id, compile_state)
+        VALUES ('m1', 'raw/seed.md', 'T1', 'compiled')
+        """
+    )
+    for page_type in ("system", "policy", "decision"):
+        page_id = _upsert(db_conn, slug=f"{page_type}-page", page_type=page_type)
+        db_conn.execute(
+            "INSERT INTO message_touched_pages (message_id, page_id) VALUES ('m1', %s)",
+            (page_id,),
+        )
+    db_conn.commit()
+    assert repo.find_active_topic_for_thread("T1") is None
+
+
+def test_find_active_topic_ignores_superseded_topic(db_conn: psycopg.Connection) -> None:
+    _seed_topic_touch(db_conn, slug="old-topic", thread_id="T1", status="superseded")
+    db_conn.commit()
+    assert repo.find_active_topic_for_thread("T1") is None
+
+
+def test_find_active_topic_accepts_legacy_current_status(db_conn: psycopg.Connection) -> None:
+    """Unmigrated pages carrying `current` still register as the thread's topic."""
+    _seed_topic_touch(db_conn, slug="legacy-topic", thread_id="T1", status="current")
+    db_conn.commit()
+    assert repo.find_active_topic_for_thread("T1") == "legacy-topic"
+
+
+# ---------------------------------------------------------------------------
 # Schema-level DEFAULT for `status`
 # ---------------------------------------------------------------------------
 

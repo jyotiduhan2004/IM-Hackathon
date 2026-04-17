@@ -11,6 +11,7 @@ from src.compile.middleware.chronological_scope import ChronologicalScopeMiddlew
 from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
 from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
 from src.compile.middleware.path_autoheal import PathAutohealMiddleware
+from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
 
 __all__ = [
     "GATE_REJECT_MESSAGE",
@@ -20,4 +21,5 @@ __all__ = [
     "EntityWriteAutohealMiddleware",
     "LegacyPageHintMiddleware",
     "PathAutohealMiddleware",
+    "SameThreadTopicGuardMiddleware",
 ]

@@ -13,6 +13,7 @@ alias. For topic / system pages we just leave it NULL.
 from __future__ import annotations
 
 from typing import Any
+from typing import cast
 
 import psycopg
 
@@ -229,3 +230,38 @@ def count_wiki_pages_by_type() -> dict[str, int]:
             "SELECT page_type, count(*)::int AS n FROM wiki_pages GROUP BY 1"
         ).fetchall()
     return {r["page_type"]: r["n"] for r in rows}
+
+
+def find_active_topic_for_thread(thread_id: str) -> str | None:
+    """Return the slug of an active topic already linked to `thread_id`, or None.
+
+    Catalog-truth join: `message_touched_pages` → `messages` → `wiki_pages`,
+    filtered to `page_type='topic'` and `status IN ('active', 'current')`.
+    Legacy `current` is kept so unmigrated rows still register. Returns
+    the first match — callers only need "exists or not".
+
+    Used by `same_thread_topic_guard` middleware to detect the Codex
+    2026-04-17 fragmentation pattern (one thread → two topic pages).
+    """
+    with connect() as conn:
+        # connect() pins row_factory=dict_row; cast so mypy-strict sees
+        # the real runtime shape instead of psycopg's generic tuple stub.
+        row = cast(
+            "dict[str, Any] | None",
+            conn.execute(
+                """
+                SELECT DISTINCT wp.slug
+                  FROM message_touched_pages mtp
+                  JOIN messages m ON m.message_id = mtp.message_id
+                  JOIN wiki_pages wp ON wp.page_id = mtp.page_id
+                 WHERE m.thread_id = %s
+                   AND wp.page_type = 'topic'
+                   AND wp.status IN ('active', 'current')
+                 LIMIT 1
+                """,
+                (thread_id,),
+            ).fetchone(),
+        )
+    if row is None:
+        return None
+    return str(row["slug"])

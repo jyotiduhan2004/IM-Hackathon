@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any
+from typing import cast
 
 import psycopg
 import structlog
@@ -311,6 +312,44 @@ def reset_to_pending_by_path(raw_paths: list[str]) -> int:
             (list(raw_paths),),
         )
         return cur.rowcount
+
+
+def shared_thread_id_for_paths(raw_paths: list[str]) -> str | None:
+    """Return the shared thread_id when every raw_path maps to one thread; else None.
+
+    Returns None when:
+      - ``raw_paths`` is empty,
+      - any path has no row in ``messages`` (ingest race / missing backfill),
+      - any row has a NULL ``thread_id`` (pre-thread-backfill fossil), or
+      - the batch straddles multiple Gmail threads.
+
+    Used by ``run_compilation`` to populate the same-thread guard's
+    ContextVar. Single round-trip; caller does it once per batch.
+    """
+    if not raw_paths:
+        return None
+    with connect() as conn:
+        # connect() pins row_factory=dict_row; cast so mypy-strict sees
+        # the real runtime shape instead of psycopg's generic tuple stub.
+        rows = cast(
+            "list[dict[str, Any]]",
+            conn.execute(
+                "SELECT raw_path, thread_id FROM messages WHERE raw_path = ANY(%s)",
+                (list(raw_paths),),
+            ).fetchall(),
+        )
+    if len(rows) != len(raw_paths):
+        return None
+    # NULL thread_ids must disable the guard — the batch is ambiguous
+    # if any row doesn't have a thread. Codex P2 on PR #171: filtering
+    # them out instead of bailing was the bug (a mixed [T-A, NULL] batch
+    # returned "T-A" incorrectly).
+    if any(r["thread_id"] is None for r in rows):
+        return None
+    thread_ids = {r["thread_id"] for r in rows}
+    if len(thread_ids) != 1:
+        return None
+    return str(next(iter(thread_ids)))
 
 
 # TODO(refactor): move to src/db/compile_attempts.py once the import graph

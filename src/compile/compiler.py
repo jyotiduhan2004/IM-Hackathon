@@ -50,6 +50,30 @@ _current_batch_cutoff_date: contextvars.ContextVar[str | None] = contextvars.Con
     "current_batch_cutoff_date", default=None
 )
 
+# ContextVar carrying the batch's thread_id — populated only when every
+# raw_path in the batch belongs to the same Gmail thread. Read by the
+# `same_thread_topic_guard` middleware to detect a second /wiki/topics/
+# write within the same concept stream (Codex 2026-04-17 fragmentation
+# bug: Seller BL thread producing two topic pages for one stream).
+#
+# Stays None when the batch straddles multiple threads — the guard
+# isn't meaningful across threads and shouldn't fire.
+_current_batch_thread_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_batch_thread_id", default=None
+)
+
+# Topic slugs the agent has successfully written during the current
+# run. Populated by `SameThreadTopicGuardMiddleware` on each
+# successful `write_file` to /wiki/topics/ so that an in-run duplicate
+# (second topic write in the same batch, before the coordinator's
+# post-run catalog sync has a chance to land the first) is still
+# caught. Catalog-only checks miss this case because
+# `message_touched_pages` is populated *after* `run_compilation`
+# returns. Codex P1 on PR #171.
+_current_batch_topic_slugs_written: contextvars.ContextVar[set[str] | None] = (
+    contextvars.ContextVar("current_batch_topic_slugs_written", default=None)
+)
+
 
 # === Custom Tools for the Compiler Agent ===
 
@@ -2592,6 +2616,7 @@ def create_compiler(
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
+    from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
     from src.compile.reviewer import build_reviewer_subagent
 
     model_name = model_name or settings.llm_model
@@ -2681,6 +2706,7 @@ def create_compiler(
             ChronologicalScopeMiddleware(),
             EntityWriteAutohealMiddleware(),
             LegacyPageHintMiddleware(),
+            SameThreadTopicGuardMiddleware(),
             CheckMyWorkGateMiddleware(),
         ],
         subagents=[cast(Any, reviewer_spec)],
@@ -2937,8 +2963,20 @@ def run_compilation(
                 raw_paths_count=len(effective_raw_paths),
             )
 
+        from src.db.messages import shared_thread_id_for_paths
+
+        batch_thread_id = shared_thread_id_for_paths(effective_raw_paths)
+        if batch_thread_id:
+            logger.info(
+                "batch_thread_id",
+                thread_id=batch_thread_id,
+                raw_paths_count=len(effective_raw_paths),
+            )
+
         raw_paths_token = _current_raw_paths.set(effective_raw_paths)
         cutoff_token = _current_batch_cutoff_date.set(cutoff_date)
+        thread_id_token = _current_batch_thread_id.set(batch_thread_id)
+        topic_slugs_token = _current_batch_topic_slugs_written.set(set())
         try:
             result = agent.invoke(
                 {"messages": [{"role": "user", "content": instruction}]},
@@ -2947,6 +2985,8 @@ def run_compilation(
             _check_silent_fail(result, model=model_name)
             return result
         finally:
+            _current_batch_topic_slugs_written.reset(topic_slugs_token)
+            _current_batch_thread_id.reset(thread_id_token)
             _current_batch_cutoff_date.reset(cutoff_token)
             _current_raw_paths.reset(raw_paths_token)
     finally:

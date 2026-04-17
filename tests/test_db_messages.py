@@ -380,3 +380,56 @@ def test_reset_to_pending_by_path(db_conn: psycopg.Connection) -> None:
 
     # Empty list short-circuits to 0 with no DB call needed.
     assert repo.reset_to_pending_by_path([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# shared_thread_id_for_paths
+# ---------------------------------------------------------------------------
+
+
+def test_shared_thread_id_empty_returns_none() -> None:
+    assert repo.shared_thread_id_for_paths([]) is None
+
+
+def test_shared_thread_id_single_path(db_conn: psycopg.Connection) -> None:
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id="T-A")
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md"]) == "T-A"
+
+
+def test_shared_thread_id_all_same_thread(db_conn: psycopg.Connection) -> None:
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id="T-A")
+    _insert(db_conn, message_id="m2", raw_path="raw/two.md", thread_id="T-A")
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md", "raw/two.md"]) == "T-A"
+
+
+def test_shared_thread_id_multi_thread_returns_none(db_conn: psycopg.Connection) -> None:
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id="T-A")
+    _insert(db_conn, message_id="m2", raw_path="raw/two.md", thread_id="T-B")
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md", "raw/two.md"]) is None
+
+
+def test_shared_thread_id_missing_path_returns_none(db_conn: psycopg.Connection) -> None:
+    """If any raw_path has no row, the batch is ambiguous — fall back to None."""
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id="T-A")
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md", "raw/missing.md"]) is None
+
+
+def test_shared_thread_id_null_thread_returns_none(db_conn: psycopg.Connection) -> None:
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id=None)
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md"]) is None
+
+
+def test_shared_thread_id_mixed_null_returns_none(db_conn: psycopg.Connection) -> None:
+    """Codex P2 on PR #171: a batch where one row has a real thread
+    and another has NULL thread_id must return None, not the non-NULL
+    thread. Filtering NULLs silently violated the contract that every
+    raw_path maps to one thread."""
+    _insert(db_conn, message_id="m1", raw_path="raw/one.md", thread_id="T-A")
+    _insert(db_conn, message_id="m2", raw_path="raw/two.md", thread_id=None)
+    db_conn.commit()
+    assert repo.shared_thread_id_for_paths(["raw/one.md", "raw/two.md"]) is None
