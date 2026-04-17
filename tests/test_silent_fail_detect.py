@@ -119,6 +119,38 @@ class TestRetryLoopIntegration:
         assert _is_model_unavailable_error(Exception("team not allowed to access model")) is True
         assert _is_model_unavailable_error(Exception("Invalid model name")) is True
 
+    def test_is_model_unavailable_error_catches_bare_401_auth(self) -> None:
+        # Bug K — Cycle 6 glm-5 at 162s died with
+        # ``Error code: 401 - {'error': {'message': 'Authentication Error'...``
+        # and slipped past the original string match.
+        from scripts.compile_all import _is_model_unavailable_error
+
+        exc = Exception(
+            "Error code: 401 - {'error': {'message': 'Authentication Error, "
+            "API key provided', 'type': 'invalid_request_error'}}"
+        )
+        assert _is_model_unavailable_error(exc) is True
+
+    def test_is_model_unavailable_error_catches_403_forbidden(self) -> None:
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert (
+            _is_model_unavailable_error(
+                Exception("Error code: 403 - {'error': {'message': 'Forbidden'}}")
+            )
+            is True
+        )
+
+    def test_is_model_unavailable_error_ignores_free_text_401(self) -> None:
+        # False-positive hedge: matcher requires the structured "Error
+        # code: 401" prefix, not any mention of 401.
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert (
+            _is_model_unavailable_error(Exception("response: HTTP 401 came back from upstream API"))
+            is False
+        )
+
     def test_unrelated_exception_does_not_trigger_retry(self) -> None:
         from scripts.compile_all import _is_model_unavailable_error
 

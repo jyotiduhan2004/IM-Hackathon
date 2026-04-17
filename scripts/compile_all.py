@@ -1187,23 +1187,38 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
 
 def _is_model_unavailable_error(exc: BaseException) -> bool:
     """True if ``exc`` indicates the LiteLLM proxy refuses this model for
-    this team key — 401 ``team not allowed to access model`` or 400
-    ``Invalid model name``, OR the proxy returned HTTP 200 with an empty
-    payload (Bug J — documented in
-    docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md).
+    this team key. Covers five shapes:
 
-    All three are infrastructure failures, not agent failures; the batch
+    - 401 ``team not allowed to access model`` — original LiteLLM shape
+    - 400 ``Invalid model name`` — original LiteLLM shape
+    - 401 ``Authentication Error`` — bare auth fail (Bug K, Cycle 6 glm-5
+      at 162s died with ``Error code: 401 - {'error': {'message':
+      'Authentication Error'...`` and slipped past the original string
+      match)
+    - 403 ``Forbidden`` — bare forbidden (Bug K)
+    - ``SilentModelFailError`` — HTTP 200 with empty payload (Bug J,
+      docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md)
+
+    All are infrastructure failures, not agent failures; the batch
     should retry with a different pool model instead of being marked
     failed. The 24h ``_healthy_pool`` guard can't help here because the
     failure must accumulate over time and every batch in between burns
     latency + telemetry rows.
+
+    False-positive hedge: ``Error code: 401`` / ``Error code: 403`` is
+    LiteLLM's structured error prefix — it doesn't appear in normal
+    tool output or model text. Matching on the number alone would
+    false-positive on things like "HTTP 401 from upstream" in page
+    content.
     """
     from src.compile.compiler import SilentModelFailError
 
     if isinstance(exc, SilentModelFailError):
         return True
     msg = str(exc)
-    return "team not allowed to access model" in msg or "Invalid model name" in msg
+    if "team not allowed to access model" in msg or "Invalid model name" in msg:
+        return True
+    return "Error code: 401" in msg or "Error code: 403" in msg
 
 
 def _record_attempts_start(
@@ -1692,7 +1707,7 @@ def main(
                         if not eligible:
                             raise
                         click.echo(
-                            f"  model {batch_model} unavailable (LiteLLM 401/400) — "
+                            f"  model {batch_model} unavailable (LiteLLM 401/403/400) — "
                             f"dropping for this run; retrying batch with another"
                         )
                         _record_attempts_outcome(
