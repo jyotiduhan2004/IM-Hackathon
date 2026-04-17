@@ -1,9 +1,18 @@
 """Shared wiki category constants.
 
-`compiler.py` and `validation.py` both need the canonical category list
-when scanning `wiki/<category>/*.md`. Defined here to avoid drift —
-adding a category in one and not the other silently broke duplicate-title
-checks before this module existed.
+Two scopes, avoid drift:
+
+1. ``WIKI_CATEGORIES`` — every directory that might exist on disk.
+   Consumers: scanners, validators, backfill scripts. Includes legacy
+   categories (``entities`` transitioning to ``people``) and retired
+   ones (``timelines``, ``conflicts``) because pages on disk still
+   need to be scanned until they're migrated away.
+
+2. ``AGENT_VISIBLE_CATEGORIES`` — the subset the compile agent
+   browses via ``list_wiki_pages``. Aligned with the prompt's
+   ``<page_types>`` contract: 4 visible content types + lazy person.
+   Glossary is a single file (``wiki/glossary.md``), not a directory.
+   Domains are coordinator-generated hubs, also not agent-authored.
 """
 
 from __future__ import annotations
@@ -18,4 +27,12 @@ WIKI_CATEGORIES: tuple[str, ...] = (
     "conflicts",
     "domains",
     "decisions",
+)
+
+AGENT_VISIBLE_CATEGORIES: tuple[str, ...] = (
+    "topics",
+    "systems",
+    "policies",
+    "decisions",
+    "people",
 )

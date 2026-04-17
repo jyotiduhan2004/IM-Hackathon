@@ -190,11 +190,18 @@ def list_wiki_pages(
             more context but saves a follow-up `get_page_summary`.
 
     Returns:
-        Dict keyed by category. Categories: topics, entities, people,
-        systems, policies.
+        Dict keyed by category. Categories: topics, systems, policies,
+        decisions, people — the agent-browseable subset (see the
+        prompt's <page_types> contract + AGENT_VISIBLE_CATEGORIES in
+        src/compile/categories.py). Glossary is a single file, not a
+        directory; domains + timelines + conflicts are coordinator-
+        generated or retired and intentionally hidden from this
+        browse surface.
     """
+    from src.compile.categories import AGENT_VISIBLE_CATEGORIES
+
     wiki_path = Path(wiki_dir)
-    categories: tuple[str, ...] = ("topics", "entities", "people", "systems", "policies")
+    categories: tuple[str, ...] = AGENT_VISIBLE_CATEGORIES
     if not wiki_path.exists():
         return {c: [] for c in categories}
 
