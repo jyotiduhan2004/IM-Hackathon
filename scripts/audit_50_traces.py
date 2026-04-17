@@ -41,10 +41,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.trace_scorecard import ENTITY_TOOLS  # noqa: E402
+from scripts.trace_scorecard import _coerce_batch_index  # noqa: E402
 from scripts.trace_scorecard import _langfuse_env  # noqa: E402
 from scripts.trace_scorecard import _run_langfuse  # noqa: E402
+from src.compile.categories import AGENT_VISIBLE_CATEGORIES  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.observability.trace_signals import CONTENT_PAGE_TYPES  # noqa: E402
+
+# Content-page category directories we accept for the broadened
+# "attempted content page" denominator. Sourced from the shared
+# ``AGENT_VISIBLE_CATEGORIES`` tuple minus ``people`` — person / entity
+# pages are filing-cabinet territory and must NOT bump the denominator.
+_CONTENT_CATEGORIES: tuple[str, ...] = tuple(c for c in AGENT_VISIBLE_CATEGORIES if c != "people")
 
 structlog.configure(
     processors=[
@@ -73,8 +81,21 @@ _RESOLVE_ABS_PATH_PAT = re.compile(r"""["']path["']\s*:\s*["']/""")
 
 # file_path arg heuristic — same shape as trace_scorecard but we don't
 # import the private pattern to keep the script self-describing on the
-# narrow set of signals the audit reports.
-_FILE_PATH_ABS_PAT = re.compile(r"""["']file_path["']\s*:\s*["']/""")
+# narrow set of signals the audit reports. Narrowed to exclude
+# ``/raw/...`` and ``/wiki/...`` prefixes because the agent prompt teaches
+# those as sanctioned virtual-mode mounts, not host rootfs paths. The
+# old pattern fired on every legitimate email read.
+_FILE_PATH_ABS_PAT = re.compile(r"""["']file_path["']\s*:\s*["'](?!/(?:raw|wiki)/)/""")
+
+# Per-category wiki write path — used to count `write_file` / `edit_file`
+# calls that land on a content-type page (topic/system/policy/decision).
+# Built from the shared ``AGENT_VISIBLE_CATEGORIES`` tuple so the
+# scanner and the agent contract never drift.
+_CONTENT_WRITE_PATH_PAT = re.compile(
+    r"""["']file_path["']\s*:\s*["']/wiki/(?:"""
+    + "|".join(re.escape(c) for c in _CONTENT_CATEGORIES)
+    + r""")/"""
+)
 
 # create_entities called with an empty `entities` list or `raw_paths`
 # empty is a contract violation — the coordinator would never have
@@ -140,6 +161,10 @@ class TraceAudit:
     # Tool-call counts we use for the note sentence.
     tool_calls: int = 0
     write_draft_page_calls: int = 0
+    # `patch_page` + `write_file`/`edit_file` on content-type paths.
+    # Necessary because the legacy `write_draft_page` proxy misses the
+    # modern writing surface entirely.
+    content_write_calls: int = 0
     create_entity_calls: int = 0
     log_insight_calls: int = 0
     trivial_skip_calls: int = 0
@@ -215,6 +240,7 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
     tool_friction = False
     trivial_skip_calls = 0
     already_captured_calls = 0
+    content_write_calls = 0
 
     for obs in observations:
         name = _observation_tool_name(obs)
@@ -234,6 +260,12 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
             trivial_skip_calls += 1
         if name == "log_insight" and _ALREADY_CAPTURED_PAT.search(raw_input):
             already_captured_calls += 1
+        if name == "patch_page":
+            # Every patch_page call targets an existing content page by
+            # definition — count it unconditionally.
+            content_write_calls += 1
+        elif name in {"write_file", "edit_file"} and _CONTENT_WRITE_PATH_PAT.search(raw_input):
+            content_write_calls += 1
         # log_insight itself reports friction; treating its error-shaped
         # output as friction would double-count and defeat the metric.
         if (obs.get("level") or "").upper() == "ERROR" or (
@@ -248,6 +280,7 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
         "create_entities_empty": create_empty,
         "tool_friction": tool_friction,
         "write_draft_page_calls": counters.get("write_draft_page", 0),
+        "content_write_calls": content_write_calls,
         "create_entity_calls": sum(counters.get(n, 0) for n in ENTITY_TOOLS),
         "log_insight_calls": counters.get("log_insight", 0),
         "trivial_skip_calls": trivial_skip_calls,
@@ -256,8 +289,10 @@ def _scan_trace(trace: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
     return signals, dict(counters)
 
 
-def _compute_citation_rate_for_run(run_id: str, thread_id: str) -> tuple[int, int, float | None]:
-    """Return ``(touched, content_cited, rate)`` for one (run_id, thread_id).
+def _compute_citation_rate_for_run(
+    run_id: str, thread_id: str, batch_index: int = -1
+) -> tuple[int, int, float | None]:
+    """Return ``(touched, content_cited, rate)`` for a batch within a run.
 
     "Touched" = distinct message_ids that `message_touched_pages` records
     for any page compiled in this run+thread. "Content-cited" = the subset
@@ -266,7 +301,16 @@ def _compute_citation_rate_for_run(run_id: str, thread_id: str) -> tuple[int, in
 
     We bound the query to messages actually claimed by this run to avoid
     double-counting thread-mates processed in a different batch.
+
+    ``batch_index`` is accepted for signature symmetry with
+    ``trace_scorecard._list_traces_by_run`` (which keys by batch), but
+    Postgres doesn't persist ``compile_batch_index`` anywhere today — the
+    value only lives in Langfuse trace metadata. Per-batch citation
+    filtering requires a schema change (column on ``compile_attempts``
+    or ``messages``) and is explicitly deferred; the argument is carried
+    through so callers can pass it unconditionally.
     """
+    del batch_index  # intentionally unused; see docstring.
     sql = """
         WITH run_messages AS (
           SELECT message_id
@@ -313,19 +357,26 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
     model = md.get("compile_model") or md.get("model")
     run_id = md.get("compile_run_id")
     thread_id = md.get("compile_thread_id")
+    batch_index = _coerce_batch_index(md.get("compile_batch_index"))
     name = body.get("name")
     created_at = body.get("createdAt") or body.get("timestamp")
 
     signals, _ = _scan_trace(trace)
 
-    # trace_scorecard uses the same write_draft_page proxy for "attempted
-    # content page" — keep them consistent so headline metrics agree.
-    attempted_content = signals["write_draft_page_calls"] > 0
-
     if run_id and thread_id:
-        touched, cited, rate = _compute_citation_rate_for_run(str(run_id), str(thread_id))
+        touched, cited, rate = _compute_citation_rate_for_run(
+            str(run_id), str(thread_id), batch_index
+        )
     else:
         touched, cited, rate = 0, 0, None
+
+    # Denominator for "attempted content page" is broadened beyond the
+    # legacy `write_draft_page` proxy so modern writes (`write_file` /
+    # `edit_file` / `patch_page`) and catalog-observable compiles
+    # (touched_messages > 0) aren't missed.
+    attempted_content = (
+        signals["write_draft_page_calls"] > 0 or signals["content_write_calls"] > 0 or touched > 0
+    )
 
     # 0 touched is "couldn't evaluate", not filing-cabinet.
     filing_cabinet = touched > 0 and cited < touched
@@ -339,11 +390,13 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
     trivial_skip = bool(
         signals["trivial_skip_calls"] > 0
         and signals["write_draft_page_calls"] == 0
+        and signals["content_write_calls"] == 0
         and signals["create_entity_calls"] == 0
     )
     already_captured = bool(
         signals["already_captured_calls"] > 0
         and signals["write_draft_page_calls"] == 0
+        and signals["content_write_calls"] == 0
         and signals["create_entity_calls"] == 0
     )
 
@@ -366,6 +419,7 @@ def _build_audit(trace: dict[str, Any]) -> TraceAudit:
         content_cited_messages=cited,
         tool_calls=int(signals["tool_calls"]),
         write_draft_page_calls=int(signals["write_draft_page_calls"]),
+        content_write_calls=int(signals["content_write_calls"]),
         create_entity_calls=int(signals["create_entity_calls"]),
         log_insight_calls=int(signals["log_insight_calls"]),
         trivial_skip_calls=int(signals["trivial_skip_calls"]),
@@ -437,8 +491,9 @@ def _note_for(a: TraceAudit) -> str:
             )
         case "no_content_page_attempt":
             return (
-                f"No write_draft_page call; {a.create_entity_calls} entity calls — "
-                f"filing over synthesis."
+                f"No content page write ({a.write_draft_page_calls} write_draft_page, "
+                f"{a.content_write_calls} wiki-path write/edit/patch); "
+                f"{a.create_entity_calls} entity calls — filing over synthesis."
             )
         case "abs_path":
             return "Absolute path used in filesystem tool input (should be repo-relative)."
@@ -514,9 +569,27 @@ def _render_markdown(
     limit: int,
     fetch_failures: int,
     generated_at: datetime,
+    invalid_sample: bool = False,
 ) -> str:
-    """Render the final markdown audit report."""
+    """Render the final markdown audit report.
+
+    When ``invalid_sample`` is True — i.e. trace fetch failures exceeded
+    ``FETCH_FAILURE_ABORT_RATIO`` — a banner heading is prepended at the
+    top of the document so the written file is self-describing. Prior to
+    this, the nonzero exit was the only signal and the rendered doc
+    looked fine in isolation.
+    """
     lines: list[str] = []
+    if invalid_sample:
+        lines.append(f"## ⚠️ SAMPLE INVALID — {fetch_failures}/{limit} fetches failed")
+        lines.append("")
+        lines.append(
+            "_Trace fetch failure ratio exceeded the "
+            f"{FETCH_FAILURE_ABORT_RATIO * 100:.0f}% abort threshold. "
+            "The numbers below are unrepresentative — re-run when "
+            "Langfuse stabilises._"
+        )
+        lines.append("")
     lines.append(f"# 50-trace audit — {generated_at.strftime('%Y-%m-%d %H:%M UTC')}")
     lines.append("")
     lines.append(f"- Limit: `{limit}` · since tag: `{since_tag}`")
@@ -680,16 +753,28 @@ def main(limit: int, since: str) -> None:
         audits.append(_build_audit(trace))
 
     aggregate = _aggregate(audits)
-    md = _render_markdown(audits, aggregate, since_tag, limit, failures, now)
+    # Compute the invalid-sample flag BEFORE rendering so the banner
+    # lands in the written file (not just on stderr). Mirror the
+    # post-write threshold check so both paths use the same ratio.
+    attempted = len(trace_ids)
+    failure_ratio = failures / attempted if attempted else 0.0
+    invalid_sample = failure_ratio > FETCH_FAILURE_ABORT_RATIO
+    md = _render_markdown(
+        audits,
+        aggregate,
+        since_tag,
+        limit,
+        failures,
+        now,
+        invalid_sample=invalid_sample,
+    )
     out_path.write_text(md, encoding="utf-8")
 
     click.echo(str(out_path))
 
     # Threshold check runs AFTER writing so the operator can see the
     # partial audit before the nonzero exit.
-    attempted = len(trace_ids)
-    failure_ratio = failures / attempted if attempted else 0.0
-    if failure_ratio > FETCH_FAILURE_ABORT_RATIO:
+    if invalid_sample:
         click.echo(
             f"ERROR: {failures}/{attempted} trace fetches failed "
             f"({failure_ratio * 100:.0f}% > "

@@ -97,10 +97,28 @@ _RECURSION_PAT = re.compile(
     r"GraphRecursionError|recursion_limit|Timed out|TimeoutError", re.IGNORECASE
 )
 # Absolute-path heuristic over fs tool inputs. Safe paths are
-# mount-relative (``wiki/...`` / ``raw/...``); anything starting with
-# ``/`` is either the host rootfs or Deep Agents' built-in ``/mnt``
-# default — both count as "abs".
+# mount-relative (``wiki/...`` / ``raw/...``) OR the agent's sanctioned
+# virtual-mode mounts (``/wiki/...`` / ``/raw/...``), which the prompt
+# actively teaches. Anything else that starts with ``/`` is either the
+# host rootfs or Deep Agents' built-in ``/mnt`` default — both still
+# count as "abs" violations.
 _FILE_PATH_PAT = re.compile(r"""["']file_path["']\s*:\s*["']([^"']+)["']""")
+_VIRTUAL_MOUNT_PREFIXES: tuple[str, ...] = ("/raw/", "/wiki/")
+
+
+def _is_abs_outside_virtual_mounts(fp: str) -> bool:
+    """Return True for rootfs/``/mnt/...`` paths, False for virtual mounts.
+
+    Matches ``/Users/...``, ``/tmp/...``, ``/mnt/...`` (Deep Agents'
+    default sandbox root) but NOT ``/raw/...`` / ``/wiki/...``. Symmetric
+    with ``scripts.audit_50_traces._FILE_PATH_ABS_PAT`` so the scorecard
+    and the 50-trace audit agree on what counts as a path-contract
+    violation.
+    """
+    if not fp.startswith("/"):
+        return False
+    return not fp.startswith(_VIRTUAL_MOUNT_PREFIXES)
+
 
 # Tier A + D1 telemetry patterns. Shared with `nightly_trace_audit.py`
 # and `src/observability/langfuse_scores.py` via the `trace_signals`
@@ -417,7 +435,7 @@ def _extract_trace_metrics(trace: dict[str, Any]) -> TraceMetrics:
         if name in FS_TOOLS:
             metrics.fs_calls += 1
             for fp in _FILE_PATH_PAT.findall(raw_input):
-                if fp.startswith("/"):
+                if _is_abs_outside_virtual_mounts(fp):
                     metrics.fs_absolute_calls += 1
                     break
 
@@ -756,17 +774,25 @@ def _citation_counts_by_model(
     return dict(per_model)
 
 
-def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tuple[str, str], str]:
-    """Map ``(run_id, thread_id) → trace_id`` for every run in scope.
+def _list_traces_by_run(
+    run_ids: set[uuid.UUID], env: dict[str, str]
+) -> dict[tuple[str, str, int], str]:
+    """Map ``(run_id, thread_id, batch_index) → trace_id`` for every run.
 
     The compile coordinator stamps each trace with
-    ``metadata.compile_run_id`` and ``metadata.compile_thread_id``
-    but does NOT set ``sessionId``, so we filter on the metadata
-    key. Langfuse's v3 ``--filter`` API is JSON: one ``stringObject``
-    condition per run keeps the URL bounded and the returned dict
-    drives the trace fetch loop.
+    ``metadata.compile_run_id``, ``metadata.compile_thread_id``, and
+    ``metadata.compile_batch_index`` but does NOT set ``sessionId``, so
+    we filter on the metadata key. Langfuse's v3 ``--filter`` API is
+    JSON: one ``stringObject`` condition per run keeps the URL bounded
+    and the returned dict drives the trace fetch loop.
+
+    The key includes ``batch_index`` so repeated same-thread batches in
+    one run don't collapse onto each other. Traces whose metadata
+    pre-dates the ``compile_batch_index`` stamp (or that lost the field
+    in transit) fall back to ``-1`` — still distinct from any positive
+    real batch index.
     """
-    mapping: dict[tuple[str, str], str] = {}
+    mapping: dict[tuple[str, str, int], str] = {}
     for run_id in run_ids:
         filter_json = json.dumps(
             [
@@ -795,18 +821,44 @@ def _list_traces_by_run(run_ids: set[uuid.UUID], env: dict[str, str]) -> dict[tu
             md = item.get("metadata") or {}
             thread_id = md.get("compile_thread_id") or ""
             trace_id = str(item.get("id") or item.get("traceId") or "")
+            batch_index = _coerce_batch_index(md.get("compile_batch_index"))
             if thread_id and trace_id:
-                mapping[(str(run_id), str(thread_id))] = trace_id
+                mapping[(str(run_id), str(thread_id), batch_index)] = trace_id
     return mapping
+
+
+def _coerce_batch_index(value: Any) -> int:
+    """Coerce the Langfuse metadata ``compile_batch_index`` to int.
+
+    Langfuse stores metadata as JSON — Python ints survive the roundtrip,
+    but older traces may not carry the field at all and some adapters
+    stringify numeric values. ``-1`` is the documented sentinel for
+    missing / unparseable and deliberately can't collide with a real
+    1-based batch index.
+    """
+    if value is None:
+        return -1
+    if isinstance(value, bool):
+        # `bool` is an `int` subclass in Python; collapse to -1 to keep
+        # the sentinel reserved.
+        return -1
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return -1
 
 
 def _fetch_trace_metrics(
     attempts: list[Attempt], env: dict[str, str]
-) -> dict[tuple[str, str], TraceMetrics]:
+) -> dict[tuple[str, str, int], TraceMetrics]:
     """Fetch one trace per distinct batch and return its metrics.
 
-    Returns ``{(run_id, thread_id): metrics}`` — caller looks the
-    trace up by (run_id, thread_id) when aggregating per model.
+    Returns ``{(run_id, thread_id, batch_index): metrics}`` — caller
+    looks the trace up by the full key when aggregating per model.
+    Keying on ``batch_index`` keeps repeated same-thread batches in one
+    run from collapsing onto a single metrics row.
     """
     run_ids: set[uuid.UUID] = {a.run_id for a in attempts if a.run_id is not None}
     if not run_ids:
@@ -814,7 +866,7 @@ def _fetch_trace_metrics(
     trace_index = _list_traces_by_run(run_ids, env)
     logger.info("trace_index_built", batches=len(trace_index))
 
-    out: dict[tuple[str, str], TraceMetrics] = {}
+    out: dict[tuple[str, str, int], TraceMetrics] = {}
     for key, trace_id in trace_index.items():
         trace = _run_langfuse(["api", "traces", "get", trace_id], env)
         if trace is None:
@@ -826,15 +878,25 @@ def _fetch_trace_metrics(
 
 def _aggregate(
     attempts: list[Attempt],
-    batch_metrics: dict[tuple[str, str], TraceMetrics],
+    batch_metrics: dict[tuple[str, str, int], TraceMetrics],
     citation_counts_by_model: dict[str, CitationCounts] | None = None,
 ) -> list[ModelAggregate]:
     """Build one scorecard row per model + an "all" aggregate.
 
     Attempts are per-message; trace metrics are per-batch. A batch
-    covers N messages from the same thread, so we attribute its
-    trace metrics ONCE per batch to avoid inflating tool-call totals
-    when one thread happens to have several messages.
+    covers N messages from the same thread, so we attribute trace
+    metrics via the ``(run_id, thread_id, batch_index)`` map key to
+    avoid inflating tool-call totals when one thread happens to have
+    several messages AND to avoid collapsing distinct same-thread
+    batches within one run onto a single metrics row (U1).
+
+    Postgres ``Attempt`` rows don't carry ``batch_index`` today
+    (compile_batch_index lives only in Langfuse metadata), so the
+    per-model attribution fans out: every trace row whose
+    ``(run_id, thread_id)`` matches one of the model's attempts
+    contributes. This over-credits when a thread was processed by
+    two different models in the same run — a rare shape today and
+    explicitly deferred until the schema can persist batch_index.
     """
     citation_counts_by_model = citation_counts_by_model or {}
     # Group attempts by model so per-model counters are cheap.
@@ -842,32 +904,51 @@ def _aggregate(
     for a in attempts:
         attempts_by_model[a.compile_model or "unknown"].append(a)
 
-    # Deduplicate the (run_id, thread_id) batches each model owns so
-    # the same trace isn't counted twice when multiple attempts share
-    # a batch.
-    batches_by_model: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    # Collect ``(run_id, thread_id)`` pairs per model for trace lookup.
+    # Same-thread-same-run pairs contribute every trace whose full
+    # key matches — see note above.
+    attempt_pairs_by_model: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for a in attempts:
         if a.run_id is None or not a.thread_id:
             continue
         model = a.compile_model or "unknown"
-        batches_by_model[model].add((str(a.run_id), a.thread_id))
+        attempt_pairs_by_model[model].add((str(a.run_id), a.thread_id))
 
     models = sorted(attempts_by_model.keys())
-    all_batches: set[tuple[str, str]] = set()
-    for bs in batches_by_model.values():
-        all_batches.update(bs)
+    all_pairs: set[tuple[str, str]] = set()
+    for bs in attempt_pairs_by_model.values():
+        all_pairs.update(bs)
 
     rows: list[ModelAggregate] = []
     for name in [*models, "all"]:
         if name == "all":
             model_attempts = attempts
-            traces = [batch_metrics[k] for k in all_batches if k in batch_metrics]
+            pairs = all_pairs
         else:
             model_attempts = attempts_by_model[name]
-            traces = [batch_metrics[k] for k in batches_by_model[name] if k in batch_metrics]
-
+            pairs = attempt_pairs_by_model[name]
+        traces = _traces_for_pairs(pairs, batch_metrics)
         rows.append(_build_row(name, model_attempts, traces, citation_counts_by_model))
     return rows
+
+
+def _traces_for_pairs(
+    pairs: set[tuple[str, str]],
+    batch_metrics: dict[tuple[str, str, int], TraceMetrics],
+) -> list[TraceMetrics]:
+    """Pick every trace row whose ``(run_id, thread_id)`` is in ``pairs``.
+
+    The third tuple element (``batch_index``) varies per trace, so a
+    single ``(run_id, thread_id)`` pair can contribute multiple
+    ``TraceMetrics`` — one per distinct batch Langfuse saw. Without this
+    spread, repeated same-thread batches would either collapse in the
+    old key shape OR get filtered out now that the key is three-wide.
+    """
+    return [
+        metrics
+        for (run_id, thread_id, _batch_index), metrics in batch_metrics.items()
+        if (run_id, thread_id) in pairs
+    ]
 
 
 def _build_row(

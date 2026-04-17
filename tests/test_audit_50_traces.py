@@ -41,12 +41,15 @@ def _mk_trace(
     model: str = "test-model",
     run_id: str | None = None,
     thread_id: str | None = None,
+    batch_index: int | None = None,
 ) -> dict[str, Any]:
     md: dict[str, Any] = {"compile_model": model}
     if run_id:
         md["compile_run_id"] = run_id
     if thread_id:
         md["compile_thread_id"] = thread_id
+    if batch_index is not None:
+        md["compile_batch_index"] = batch_index
     return {
         "body": {
             "id": trace_id,
@@ -78,9 +81,51 @@ def test_parse_since_rejects_bad_syntax() -> None:
 
 
 def test_scan_trace_detects_abs_path_violation() -> None:
+    """Host-rootfs paths (``/Users/...``) count as contract violations."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs("read_file", inputs='{"file_path": "/Users/foo/bar.md"}'),
+        ]
+    )
+    signals, _ = _scan_trace(trace)
+    assert signals["abs_path_violation"] is True
+
+
+def test_scan_trace_allows_virtual_raw_prefix() -> None:
+    """``/raw/...`` is a sanctioned virtual mount; NOT an abs-path violation.
+
+    The agent prompt actively teaches virtual-mode reads from
+    ``/raw/<email>.md`` — flagging them as path violations made healthy
+    runs report false positives (U1).
+    """
     trace = _mk_trace(
         [
             _mk_tool_obs("read_file", inputs='{"file_path": "/raw/foo.md"}'),
+        ]
+    )
+    signals, _ = _scan_trace(trace)
+    assert signals["abs_path_violation"] is False
+
+
+def test_scan_trace_allows_virtual_wiki_prefix() -> None:
+    """``/wiki/...`` is a sanctioned virtual mount; NOT an abs-path violation."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "write_file",
+                inputs='{"file_path": "/wiki/topics/cool-topic.md"}',
+            ),
+        ]
+    )
+    signals, _ = _scan_trace(trace)
+    assert signals["abs_path_violation"] is False
+
+
+def test_scan_trace_flags_mnt_prefix() -> None:
+    """Deep Agents' built-in ``/mnt/...`` sandbox root still counts."""
+    trace = _mk_trace(
+        [
+            _mk_tool_obs("read_file", inputs='{"file_path": "/mnt/data.md"}'),
         ]
     )
     signals, _ = _scan_trace(trace)
@@ -192,7 +237,7 @@ def test_build_audit_clean_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace(
         [_mk_tool_obs("write_draft_page")],
@@ -205,12 +250,169 @@ def test_build_audit_clean_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     assert a.flags == []
 
 
+def test_build_audit_patch_page_counts_as_content_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """patch_page edits an existing content page → attempted_content_page=True (U1).
+
+    Before this fix the audit only recognised the legacy
+    ``write_draft_page`` proxy and ignored ``patch_page`` / ``edit_file``
+    / ``write_file``, so modern-tool healthy runs reported "0 content
+    page attempts".
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [_mk_tool_obs("patch_page", inputs='{"slug": "foo", "section": "Current state"}')],
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="t1",
+    )
+    a = _build_audit(trace)
+    assert a.attempted_content_page is True
+    assert a.content_write_calls == 1
+    assert "no_content_page_attempt" not in a.flags
+
+
+def test_build_audit_write_file_to_wiki_topic_counts_as_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """write_file to ``/wiki/topics/...`` counts toward attempted_content_page (U1)."""
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "write_file",
+                inputs='{"file_path": "/wiki/topics/authn.md", "content": "# Authn\\n"}',
+            ),
+        ],
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="t1",
+    )
+    a = _build_audit(trace)
+    assert a.attempted_content_page is True
+    assert a.content_write_calls == 1
+
+
+def test_build_audit_edit_file_on_entity_not_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """edit_file on ``/wiki/entities/...`` does NOT count as content write.
+
+    Entity pages are filing-cabinet territory by design — only content-
+    type paths (topic/system/policy/decision/...) should bump the
+    denominator.
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "edit_file",
+                inputs='{"file_path": "/wiki/entities/alice.md"}',
+            ),
+        ],
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="t1",
+    )
+    a = _build_audit(trace)
+    assert a.attempted_content_page is False
+    assert a.content_write_calls == 0
+    assert "no_content_page_attempt" in a.flags
+
+
+def test_build_audit_distinct_rows_for_same_thread_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two different batch_indexes on same (run_id, thread_id) yield two audits (U1).
+
+    Previously both would share the same DB citation lookup — still
+    true until the schema persists batch_index — but each trace body
+    still produces its own ``TraceAudit`` row with the batch_index
+    stamp intact in downstream logs. This guards the citation-rate
+    helper against confusing them at the trace-ID layer.
+    """
+    # Record each (run_id, thread_id, batch_index) the citation helper
+    # was called with so we can assert distinct lookups per batch.
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_rate(
+        run_id: str, thread_id: str, batch_index: int = -1
+    ) -> tuple[int, int, float | None]:
+        calls.append((run_id, thread_id, batch_index))
+        return (1, 1, 1.0)
+
+    monkeypatch.setattr(audit_50_traces, "_compute_citation_rate_for_run", fake_rate)
+
+    trace_a = _mk_trace(
+        [_mk_tool_obs("write_draft_page")],
+        trace_id="trace-a",
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="thread-abc",
+        batch_index=1,
+    )
+    trace_b = _mk_trace(
+        [_mk_tool_obs("write_draft_page")],
+        trace_id="trace-b",
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="thread-abc",
+        batch_index=2,
+    )
+    audit_a = _build_audit(trace_a)
+    audit_b = _build_audit(trace_b)
+    assert audit_a.trace_id != audit_b.trace_id
+    # Both batches called the citation helper with their own batch_index,
+    # so the audit layer can distinguish them.
+    assert (
+        "11111111-1111-1111-1111-111111111111",
+        "thread-abc",
+        1,
+    ) in calls
+    assert (
+        "11111111-1111-1111-1111-111111111111",
+        "thread-abc",
+        2,
+    ) in calls
+
+
+def test_build_audit_touched_only_counts_as_attempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the DB shows touched messages, the compile produced content even
+    when the scanned trace missed the tool names (e.g. via an indirect
+    write). The U1 denominator treats that as attempted.
+    """
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id, batch_index=-1: (2, 2, 1.0),
+    )
+    trace = _mk_trace(
+        [_mk_tool_obs("read_file", inputs='{"file_path": "/raw/m.md"}')],
+        run_id="11111111-1111-1111-1111-111111111111",
+        thread_id="t1",
+    )
+    a = _build_audit(trace)
+    assert a.attempted_content_page is True
+    assert a.touched_messages == 2
+    assert a.content_cited_messages == 2
+
+
 def test_build_audit_filing_cabinet(monkeypatch: pytest.MonkeyPatch) -> None:
     """Touched 3 messages, content-cited only 1 → filing_cabinet."""
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (3, 1, 1 / 3),
+        lambda run_id, thread_id, batch_index=-1: (3, 1, 1 / 3),
     )
     trace = _mk_trace(
         [_mk_tool_obs("create_entity")],
@@ -228,7 +430,7 @@ def test_build_audit_no_content_attempt_flagged(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace([_mk_tool_obs("read_file")])
     a = _build_audit(trace)
@@ -243,7 +445,7 @@ def test_build_audit_log_insight_missed_despite_friction(
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace(
         [
@@ -270,7 +472,7 @@ def test_build_audit_trivial_skip_excluded_from_no_attempt(
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace(
         [
@@ -300,7 +502,7 @@ def test_build_audit_trivial_skip_with_writes_is_not_trivial(
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace(
         [
@@ -318,6 +520,37 @@ def test_build_audit_trivial_skip_with_writes_is_not_trivial(
     assert a.attempted_content_page is True
 
 
+def test_build_audit_trivial_skip_with_patch_page_is_not_trivial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """patch_page counts as a content write — trivial_skip classification
+    must guard against it too, not just write_draft_page. Without the
+    content_write_calls guard, a trace calling patch_page + trivial_skip
+    would be counted as BOTH trivial and attempted, inflating the
+    trivial_skip_count denominator carve-out."""
+    monkeypatch.setattr(
+        audit_50_traces,
+        "_compute_citation_rate_for_run",
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
+    )
+    trace = _mk_trace(
+        [
+            _mk_tool_obs(
+                "log_insight",
+                inputs='{"category": "trivial_skip", "message": "one OOO"}',
+            ),
+            _mk_tool_obs(
+                "patch_page",
+                inputs='{"slug": "some-topic", "section": "Updates"}',
+            ),
+        ]
+    )
+    a = _build_audit(trace)
+    assert a.trivial_skip_calls == 1
+    assert a.trivial_skip_trace is False
+    assert a.attempted_content_page is True
+
+
 def test_build_audit_already_captured_excluded_from_no_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -330,7 +563,7 @@ def test_build_audit_already_captured_excluded_from_no_attempt(
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     trace = _mk_trace(
         [
@@ -626,11 +859,50 @@ def test_render_markdown_has_expected_sections() -> None:
         generated_at=datetime(2026, 4, 16, 12, 0, tzinfo=UTC),
     )
     assert "# 50-trace audit" in md
+    # Healthy sample → no invalid banner.
+    assert "SAMPLE INVALID" not in md
     assert "## Aggregate flag counts" in md
     assert "## Per-model breakdown" in md
     assert "## Verdict" in md
     assert "## Per-trace notes" in md
     assert "compile:m1:a" in md
+
+
+def test_render_markdown_prepends_invalid_sample_banner() -> None:
+    """When invalid_sample=True, a banner MUST appear at the top of the md (U1)."""
+    audits = [
+        TraceAudit(
+            trace_id="a",
+            model="m1",
+            name="compile:m1:a",
+            created_at="2026-04-16T12:00:00Z",
+            thread_id="t1",
+            attempted_content_page=True,
+            content_citation_rate=1.0,
+        ),
+    ]
+    audits[0].flags = audit_50_traces._flag_labels(audits[0])
+    audits[0].note = audit_50_traces._note_for(audits[0])
+    agg = _aggregate(audits)
+    from datetime import UTC
+    from datetime import datetime
+
+    md = _render_markdown(
+        audits,
+        agg,
+        since_tag="24h",
+        limit=10,
+        fetch_failures=4,
+        generated_at=datetime(2026, 4, 16, 12, 0, tzinfo=UTC),
+        invalid_sample=True,
+    )
+    # Banner is at the top, before the main H1 title.
+    banner_idx = md.find("SAMPLE INVALID")
+    title_idx = md.find("# 50-trace audit")
+    assert banner_idx >= 0
+    assert title_idx >= 0
+    assert banner_idx < title_idx
+    assert "4/10 fetches failed" in md
 
 
 # ----------------------------- CLI abort ---------------------------------
@@ -662,16 +934,21 @@ def test_cli_aborts_on_fetch_failure_threshold(
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     monkeypatch.setattr(audit_50_traces, "REPO_ROOT", tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(audit_50_traces.main, ["--limit", "10"])
     assert result.exit_code == 3
-    # Audit file should still be written.
+    # Audit file should still be written — and carry the invalid-sample
+    # banner so the written doc self-describes the bad state (U1).
     audit_dir = tmp_path / "docs" / "audits"
-    assert any(p.name.startswith("audit-") for p in audit_dir.iterdir())
+    audit_files = list(audit_dir.glob("audit-*.md"))
+    assert audit_files, "audit file not written"
+    content = audit_files[0].read_text(encoding="utf-8")
+    assert "SAMPLE INVALID" in content
+    assert "3/10 fetches failed" in content
 
 
 def test_cli_ok_under_threshold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -692,7 +969,7 @@ def test_cli_ok_under_threshold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.setattr(
         audit_50_traces,
         "_compute_citation_rate_for_run",
-        lambda run_id, thread_id: (0, 0, None),
+        lambda run_id, thread_id, batch_index=-1: (0, 0, None),
     )
     monkeypatch.setattr(audit_50_traces, "REPO_ROOT", tmp_path)
 

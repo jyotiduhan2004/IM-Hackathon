@@ -1027,3 +1027,211 @@ def test_render_citation_breakdown_skips_empty_rows() -> None:
     out = _render_citation_breakdown(rows)
     assert "_no compiled attempts in window_" in out
     assert "empty" not in out
+
+
+# ----------------- U1: batch-aware trace identity --------------------
+
+
+def test_coerce_batch_index_handles_int_and_strings() -> None:
+    """Langfuse metadata may return int or stringified int; both coerce cleanly."""
+    from scripts.trace_scorecard import _coerce_batch_index
+
+    assert _coerce_batch_index(3) == 3
+    assert _coerce_batch_index("7") == 7
+    assert _coerce_batch_index("  42 ") == 42
+
+
+def test_coerce_batch_index_missing_field_returns_sentinel() -> None:
+    """Missing / unparseable batch_index collapses to sentinel ``-1``."""
+    from scripts.trace_scorecard import _coerce_batch_index
+
+    assert _coerce_batch_index(None) == -1
+    assert _coerce_batch_index("") == -1
+    assert _coerce_batch_index("not-a-number") == -1
+    # bool is int-subclass in Python; explicit sentinel keeps it reserved.
+    assert _coerce_batch_index(True) == -1
+
+
+def test_list_traces_by_run_keys_on_batch_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two batches on the same (run_id, thread_id) must stay distinct (U1).
+
+    Before U1 the mapping key was ``(run_id, thread_id)`` so repeated
+    same-thread batches within one run collapsed onto the same trace
+    entry, silently dropping half of them from the scorecard. The
+    fix threads ``compile_batch_index`` from metadata into the key.
+    """
+    run_id = uuid.uuid4()
+    # Fake Langfuse response: two traces, same thread_id, different batches.
+    fake_payload: list[dict[str, Any]] = [
+        {
+            "id": "trace-batch1",
+            "metadata": {
+                "compile_run_id": str(run_id),
+                "compile_thread_id": "thread-abc",
+                "compile_batch_index": 1,
+            },
+        },
+        {
+            "id": "trace-batch2",
+            "metadata": {
+                "compile_run_id": str(run_id),
+                "compile_thread_id": "thread-abc",
+                "compile_batch_index": 2,
+            },
+        },
+    ]
+
+    def fake_run_langfuse(args: list[str], env: dict[str, str]) -> Any:
+        return fake_payload
+
+    monkeypatch.setattr(trace_scorecard, "_run_langfuse", fake_run_langfuse)
+    mapping = trace_scorecard._list_traces_by_run({run_id}, {})
+    # Both batches survive as distinct rows.
+    assert (str(run_id), "thread-abc", 1) in mapping
+    assert (str(run_id), "thread-abc", 2) in mapping
+    assert mapping[(str(run_id), "thread-abc", 1)] == "trace-batch1"
+    assert mapping[(str(run_id), "thread-abc", 2)] == "trace-batch2"
+
+
+def test_list_traces_by_run_missing_batch_index_is_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trace with no batch_index falls back to ``-1`` — still distinct from batch 1."""
+    run_id = uuid.uuid4()
+    fake_payload: list[dict[str, Any]] = [
+        {
+            "id": "t-with-idx",
+            "metadata": {
+                "compile_run_id": str(run_id),
+                "compile_thread_id": "thread-abc",
+                "compile_batch_index": 1,
+            },
+        },
+        {
+            "id": "t-no-idx",
+            "metadata": {
+                "compile_run_id": str(run_id),
+                "compile_thread_id": "thread-abc",
+            },
+        },
+    ]
+    monkeypatch.setattr(trace_scorecard, "_run_langfuse", lambda args, env: fake_payload)
+
+    mapping = trace_scorecard._list_traces_by_run({run_id}, {})
+    assert (str(run_id), "thread-abc", 1) in mapping
+    assert (str(run_id), "thread-abc", -1) in mapping
+
+
+def test_fetch_trace_metrics_emits_row_per_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each (run_id, thread_id, batch_index) gets its own TraceMetrics row.
+
+    End-to-end check: `_fetch_trace_metrics` uses `_list_traces_by_run` +
+    per-trace fetches to build the map. Repeated same-thread batches
+    must survive as distinct rows.
+    """
+    run_id = uuid.uuid4()
+
+    list_payload: list[dict[str, Any]] = [
+        {
+            "id": f"trace-{i}",
+            "metadata": {
+                "compile_run_id": str(run_id),
+                "compile_thread_id": "thread-abc",
+                "compile_batch_index": i,
+            },
+        }
+        for i in (1, 2, 3)
+    ]
+
+    def fake_run_langfuse(args: list[str], env: dict[str, str]) -> Any:
+        if args[:3] == ["api", "traces", "list"]:
+            return list_payload
+        # `traces get <trace_id>` — return a synthetic trace body.
+        trace_id = args[-1]
+        return {
+            "body": {
+                "id": trace_id,
+                "metadata": {"compile_model": "m1"},
+                "observations": [
+                    {"type": "TOOL", "name": "write_draft_page", "input": "", "output": ""}
+                ],
+            }
+        }
+
+    monkeypatch.setattr(trace_scorecard, "_run_langfuse", fake_run_langfuse)
+    attempts = [
+        Attempt(
+            message_id="m1",
+            run_id=run_id,
+            thread_id="thread-abc",
+            compile_model="m1",
+            outcome="compiled",
+        )
+    ]
+    metrics = trace_scorecard._fetch_trace_metrics(attempts, {})
+    assert len(metrics) == 3
+    for i in (1, 2, 3):
+        assert (str(run_id), "thread-abc", i) in metrics
+
+
+def test_aggregate_fans_out_same_thread_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_aggregate` picks up every trace row matching a `(run_id, thread_id)` attempt.
+
+    Even though Postgres ``Attempt`` rows don't carry batch_index, the
+    aggregator must attribute every distinct-batch trace on a matching
+    thread to the right model bucket — otherwise repeated same-thread
+    batches get silently dropped after U1 keys the trace map three-wide.
+    """
+    run_id = uuid.uuid4()
+    attempts = [
+        Attempt(
+            message_id=f"m{i}",
+            run_id=run_id,
+            thread_id="thread-abc",
+            compile_model="m1",
+            outcome="compiled",
+        )
+        for i in (1, 2)
+    ]
+    # Two batches on same (run_id, thread_id) — both must be rolled up.
+    batch_metrics = {
+        (str(run_id), "thread-abc", 1): TraceMetrics(
+            trace_id="t1", model="m1", tool_calls=3, write_draft_page_calls=1
+        ),
+        (str(run_id), "thread-abc", 2): TraceMetrics(
+            trace_id="t2", model="m1", tool_calls=5, write_draft_page_calls=1
+        ),
+    }
+    rows = trace_scorecard._aggregate(attempts, batch_metrics)
+    # One per model + the "all" aggregate.
+    per_model_row = next(r for r in rows if r.model == "m1")
+    assert per_model_row.traces_included == 2
+    # write_draft_page_calls aggregates across batches.
+    assert per_model_row.write_draft_page_calls == 2
+
+
+def test_abs_path_heuristic_skips_virtual_mounts() -> None:
+    """Scorecard mirror of the audit's virtual-mount carve-out (U1).
+
+    ``/raw/...`` / ``/wiki/...`` reads are sanctioned by the prompt and
+    must not bump ``fs_absolute_calls``. Host-rootfs and ``/mnt/...``
+    paths still count.
+    """
+    trace = _mk_trace(
+        [
+            _mk_tool_obs("read_file", inputs='{"file_path": "/raw/email.md"}'),
+            _mk_tool_obs("write_file", inputs='{"file_path": "/wiki/topics/foo.md"}'),
+        ],
+        trace_id="t-virt",
+    )
+    m = _extract_trace_metrics(trace)
+    assert m.fs_absolute_calls == 0
+    assert m.fs_calls == 2
+
+
+def test_abs_path_heuristic_flags_rootfs_and_mnt() -> None:
+    """Host rootfs (``/Users/...``) and Deep Agents' ``/mnt/...`` still flag."""
+    for bad in ("/Users/x/notes.md", "/tmp/scratch.md", "/mnt/data.md"):
+        trace = _mk_trace([_mk_tool_obs("read_file", inputs=f'{{"file_path": "{bad}"}}')])
+        m = _extract_trace_metrics(trace)
+        assert m.fs_absolute_calls == 1, f"{bad} should count as abs violation"
