@@ -2554,11 +2554,109 @@ def run_compilation(
 
         token = _current_raw_paths.set(effective_raw_paths)
         try:
-            return agent.invoke(
+            result = agent.invoke(
                 {"messages": [{"role": "user", "content": instruction}]},
                 config=config,
             )
+            _check_silent_fail(result, model=model_name)
+            return result
         finally:
             _current_raw_paths.reset(token)
     finally:
         _cleanup_compile_view(view_root)
+
+
+class SilentModelFailError(RuntimeError):
+    """Raised when the agent's only model response is an empty ChatCompletion.
+
+    The LiteLLM proxy occasionally returns HTTP 200 with
+    ``completion_tokens=0 prompt_tokens=0 content=""`` on certain
+    model requests (observed on minimax/minimax-m2.7-20260318, Cycle 5).
+    The agent sees an empty AI message, terminates with no tool calls,
+    and the coordinator records a spurious ``outcome='failed'`` with
+    ``error='not cited in wiki'`` — indistinguishable from a genuine
+    agent failure.
+
+    `compile_all.py` treats this as an infrastructure error: retry the
+    batch with a different model from the pool, same as the LiteLLM
+    401/400 path. See docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md.
+    """
+
+
+def _check_silent_fail(result: dict[str, Any], *, model: str | None = None) -> None:
+    """Raise SilentModelFailError if the agent's final state is the
+    zero-token empty-content shape produced by the LiteLLM proxy on
+    malfunctioning model requests.
+
+    Conservative: we only trigger when ALL of the following hold:
+    - Exactly one non-human message exists in the result (the empty AI
+      response, no retries inside LangGraph).
+    - That AI message has empty string content AND no tool calls.
+    - `response_metadata.token_usage.total_tokens` is 0 (explicit
+      evidence that LiteLLM returned an empty body, not that the agent
+      chose to be silent).
+
+    The triple guard avoids false positives on an agent that
+    legitimately has nothing to do and returns a short acknowledgement
+    without calling a tool — though the terminal-decision prompt
+    (#135) makes that shape vanishingly rare.
+    """
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if not isinstance(messages, list):
+        return
+
+    ai_messages = [m for m in messages if _message_is_ai(m)]
+    if len(ai_messages) != 1:
+        return
+
+    ai = ai_messages[0]
+    content = _message_content(ai)
+    tool_calls = _message_tool_calls(ai)
+    if content or tool_calls:
+        return
+
+    token_total = _message_total_tokens(ai)
+    if token_total != 0:
+        return
+
+    raise SilentModelFailError(
+        f"LiteLLM returned 200-empty on model={model!r} "
+        "(completion_tokens=0 prompt_tokens=0 content=''). "
+        "Retry with a different model."
+    )
+
+
+def _message_is_ai(msg: Any) -> bool:
+    """True when this is an assistant/AI message, regardless of LangChain
+    vs plain-dict representation.
+    """
+    if isinstance(msg, dict):
+        return msg.get("type") == "ai" or msg.get("role") == "assistant"
+    return msg.__class__.__name__ == "AIMessage"
+
+
+def _message_content(msg: Any) -> str:
+    c = msg.get("content", "") if isinstance(msg, dict) else (getattr(msg, "content", "") or "")
+    return c.strip() if isinstance(c, str) else ""
+
+
+def _message_tool_calls(msg: Any) -> list[Any]:
+    if isinstance(msg, dict):
+        calls = msg.get("tool_calls") or (msg.get("additional_kwargs") or {}).get("tool_calls")
+    else:
+        calls = getattr(msg, "tool_calls", None) or getattr(msg, "additional_kwargs", {}).get(
+            "tool_calls"
+        )
+    return calls if isinstance(calls, list) else []
+
+
+def _message_total_tokens(msg: Any) -> int | None:
+    if isinstance(msg, dict):
+        meta = msg.get("response_metadata") or {}
+    else:
+        meta = getattr(msg, "response_metadata", {}) or {}
+    usage = meta.get("token_usage") if isinstance(meta, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    total = usage.get("total_tokens")
+    return int(total) if isinstance(total, (int, float)) else None

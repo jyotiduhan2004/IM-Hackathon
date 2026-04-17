@@ -1188,11 +1188,20 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
 def _is_model_unavailable_error(exc: BaseException) -> bool:
     """True if ``exc`` indicates the LiteLLM proxy refuses this model for
     this team key — 401 ``team not allowed to access model`` or 400
-    ``Invalid model name``. The batch should retry with a different pool
-    model instead of being marked failed; the 24h ``_healthy_pool`` guard
-    can't help here because the failure must accumulate over time and
-    every batch in between burns latency + telemetry rows.
+    ``Invalid model name``, OR the proxy returned HTTP 200 with an empty
+    payload (Bug J — documented in
+    docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md).
+
+    All three are infrastructure failures, not agent failures; the batch
+    should retry with a different pool model instead of being marked
+    failed. The 24h ``_healthy_pool`` guard can't help here because the
+    failure must accumulate over time and every batch in between burns
+    latency + telemetry rows.
     """
+    from src.compile.compiler import SilentModelFailError
+
+    if isinstance(exc, SilentModelFailError):
+        return True
     msg = str(exc)
     return "team not allowed to access model" in msg or "Invalid model name" in msg
 
