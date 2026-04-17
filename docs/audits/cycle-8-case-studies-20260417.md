@@ -46,7 +46,7 @@ Both cite the same `source_threads` value: `19bb72fc748876c2`.
 
 ### DB state
 
-Within this thread we currently see all three terminal shapes:
+Within this thread we currently see four terminal shapes:
 
 - compiled into `seller-bl-api-optimization`
 - compiled into `seller-bl-user-details-verification-api-optimization`
@@ -163,6 +163,10 @@ That is exactly the job `already_captured` is supposed to do.
 
 This is a healthy no-op path and should be treated as the target behavior for
 similar follow-up emails.
+
+Clarification: the leading-slash form is correct for filesystem tools like
+`read_file("/raw/...")`, but `log_insight.email_path` is a coordinator-facing
+message identifier, so the canonical form is `raw/...` without the slash.
 
 ### What to preserve
 

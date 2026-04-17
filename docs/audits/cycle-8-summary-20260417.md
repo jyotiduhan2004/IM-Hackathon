@@ -5,10 +5,17 @@ run_id: 56433cbb-aff8-4bbf-a7d0-6a6c77b83159
 started_at: 2026-04-17 12:50 IST
 ended_at: 2026-04-17 14:51 IST (~121 min)
 batches: 20
+cost: unknown
 outcomes:
   compiled: 8
   skipped: 11
   failed: 1
+effective_rate: 88.9%  # 8 / (8 + 1)
+fixes_verified:
+  H_chronological_scope: not checked in this audit
+  J_silent_fail_retry: held on the observed retry path
+  K_litellm_401_retry: not exercised in this run
+  L_email_path_autoheal: partial — leading-slash normalization held, missing-email_path recovery still failed
 observations:
   reviewer_path: healthy on successful content writes
   already_captured: working in live runs
@@ -91,11 +98,11 @@ Interpretation:
 
 ### Immediate comparison runs
 
-| Run | Compiled | Skipped | Failed |
-|---|---:|---:|---:|
-| `56433cbb-aff8-4bbf-a7d0-6a6c77b83159` | 8 | 11 | 1 |
-| `b8f19851-5852-4429-90d9-287445f11750` | 14 | 9 | 2 |
-| `90fbcef7-4540-44ac-b517-f08a93d11c35` | 11 | 11 | 3 |
+| Run | Compiled | Skipped | Failed | Effective |
+|---|---:|---:|---:|---:|
+| `56433cbb-aff8-4bbf-a7d0-6a6c77b83159` | 8 | 11 | 1 | 88.9% |
+| `b8f19851-5852-4429-90d9-287445f11750` | 14 | 9 | 2 | 87.5% |
+| `90fbcef7-4540-44ac-b517-f08a93d11c35` | 11 | 11 | 3 | 78.6% |
 
 The trend across these three runs is:
 
@@ -106,6 +113,8 @@ The trend across these three runs is:
 ## Model Mix (latest-attempt view, last 10 hours)
 
 Computed from the latest attempt per message in the last 10 hours:
+
+This table spans all runs in that window, not just `56433cbb-aff8-4bbf-a7d0-6a6c77b83159`.
 
 | Model | Compiled | Skipped | Failed |
 |---|---:|---:|---:|
@@ -137,10 +146,12 @@ Current issues:
   no longer matches the current agent behavior. Real content writes are now
   happening through `write_file`, `edit_file`, `patch_page`, and ultimately the
   `message_touched_pages` catalog.
-- The same audit still treats leading-slash virtual paths like `/raw/...` and
-  `/wiki/...` as absolute-path violations, even though the current prompt
-  explicitly teaches those virtual roots as the correct agent-visible path
-  namespace.
+- The same audit still treats leading-slash virtual filesystem paths like
+  `/raw/...` and `/wiki/...` as absolute-path violations, even though the
+  current prompt explicitly teaches those virtual roots as the correct
+  agent-visible namespace for filesystem tools. This does NOT apply to
+  `log_insight.email_path`, which is a coordinator-facing identifier whose
+  canonical form is `raw/...` without the leading slash.
 - `scripts/trace_scorecard.py::_list_traces_by_run` maps
   `(run_id, thread_id) -> trace_id`. That key is not unique once a single run
   processes multiple single-email batches from the same thread. This can
@@ -168,11 +179,12 @@ Instead it looked like:
 - the model decided the email was likely a no-op / low-signal follow-up
 - it tried to `log_insight(trivial_skip)`
 - it omitted `email_path`
-- `log_insight` returned the correct actionable error
+- `log_insight` returned a clear coordinator-facing error
 - the model retried badly and never converged
 
 That is a real residual bug, but it is a much narrower one than the old
-failing-cabinet story.
+failing-cabinet story. The recovery path is intelligible to a human operator,
+but not self-healing enough for the model in a single turn.
 
 ### 3. Same-thread page fragmentation is now a top quality risk
 
@@ -257,10 +269,12 @@ Headline examples:
 
 4. Add `get_thread_summary(scope="up_to_current")`.
    - the remaining failures are long-thread reasoning failures
+   - this would augment `get_thread_context`, not replace `resolve_page`
    - this is the highest-leverage tool addition now
 
 5. Run the next deep-dive loop against the biggest failed thread clusters.
-   Current heavy-failure clusters include:
+   Current heavy-failure clusters include multiple failed or uncited latest
+   attempts in the current audit window:
    - `19b4f4a7e8fb81a6`
    - `19ae8af3083f8aab`
    - `19bbb36128aa24c6`
