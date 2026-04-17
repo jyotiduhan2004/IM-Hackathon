@@ -21,6 +21,7 @@ def test_tagged_sections_present() -> None:
         "<workflow>",
         "<decision_tree>",
         "<page_types>",
+        "<section_titles>",
         "<tool_guidance>",
         "<sources_management>",
         "<todo_rule>",
@@ -29,6 +30,28 @@ def test_tagged_sections_present() -> None:
     )
     missing = [tag for tag in required if tag not in COMPILER_SYSTEM_PROMPT]
     assert not missing, f"prompt missing sections: {missing}"
+
+
+def test_section_titles_rule_bans_dates_and_names() -> None:
+    """Bug F: H2 titles must be canonical structure, not dated per-email
+    entries. The rule must name the anti-pattern AND the fix (inline
+    dates in bullets), not just one or the other — otherwise the model
+    has the menu but not the translation."""
+    start = COMPILER_SYSTEM_PROMPT.find("<section_titles>")
+    end = COMPILER_SYSTEM_PROMPT.find("</section_titles>")
+    assert start != -1 and end != -1 and end > start
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # The rule forbids the bad shape and surfaces the canonical vocab.
+    lowered = block.lower()
+    assert "never bake a date" in lowered
+    assert "canonical" in lowered
+    # At least two of the canonical sections must be listed explicitly so
+    # the agent has a concrete menu to reach for.
+    canonical_examples = ("## Current state", "## Testing results", "## Recent changes")
+    present = [s for s in canonical_examples if s in block]
+    assert len(present) >= 2, f"need ≥2 canonical H2 examples; got {present}"
+    # BAD/GOOD worked example keeps the rule concrete — verify both sides.
+    assert "BAD" in block and "GOOD" in block
 
 
 def test_taxonomy_covers_four_plus_two() -> None:

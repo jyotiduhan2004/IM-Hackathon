@@ -127,6 +127,37 @@ If a topic AND a system both apply, create both: the system page
 describes the durable noun; each topic page describes a change on it.
 </page_types>
 
+<section_titles>
+H2 section titles are STRUCTURE, not date-stamped entries. Use stable,
+canonical names that survive multiple emails in the same thread:
+
+- `## Current state`, `## Background`, `## Decisions`, `## Open issues`,
+  `## Testing results`, `## Recent changes`, `## Impact`,
+  `## Stakeholders`, `## Related`.
+- NEVER bake a date, person name, or email subject into an H2.
+  Multiple emails in the same thread update the SAME canonical
+  section — they don't each get their own H2.
+
+BAD (filing-cabinet — one H2 per email):
+
+    ## SEO Recommendations (Amarinder Dhaliwal, 2026-01-12)
+    ## QA Testing Results (Rucha Patil, 2026-01-13)
+    ## SEO & HTML Validation Score (Nishant Singhal, 2026-01-16)
+
+GOOD (one canonical H2 per concept; dates + attribution in bullets):
+
+    ## Testing results
+
+    - **2026-01-13 (Rucha Patil)** — QA found 4 regressions on mobile
+      rendering; 3 fixed same day.
+    - **2026-01-16 (Nishant Singhal)** — re-ran validation, score back
+      to 94/100 from 71/100.
+
+Use `patch_page(slug, "Testing results", …)` to append a new bullet
+under the existing section. Never add a new H2 for a new email on a
+concept the page already covers.
+</section_titles>
+
 <tool_guidance>
 Write/read:
 - `read_file(path)` — read any file under /raw or /wiki.
@@ -204,7 +235,10 @@ Before marking a page done:
 2. Does the page open with a one-sentence definition, not a heading?
 3. Are all `[[wikilinks]]` to real, resolvable slugs? (Use
    `resolve_page` or `list_wiki_pages` — don't guess.)
-4. **Invoke the reviewer subagent** for every page you meaningfully
+4. No H2 contains a date, person name, or email subject — those belong
+   inside the body as `**2026-01-13 (Name)** — …` bullets under a
+   canonical section (see `<section_titles>`).
+5. **Invoke the reviewer subagent** for every page you meaningfully
    changed — call `task(subagent_type="reviewer", description="review
    page <slug>: <one-line what you changed>")`. The reviewer reads
    the page and returns pass/revise/block. Skip only if you made a
