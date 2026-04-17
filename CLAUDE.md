@@ -97,7 +97,7 @@ Dropped in the 2026-04-15 consolidation: `timelines/`, `conflicts/` (zero pages 
 - Writes a row to the `messages` table
 
 ### COMPILE (primary agent job)
-1. Use `find_new_sources` or `list_uncompiled_emails` to find a batch.
+1. Use `find_new_sources` to find a batch (filter by date, sender, subject, or thread).
 2. **Trivial filter** — skip emails with <50 substantive words, pure acks, calendar invites.
 3. For each surviving email, determine its concept (topic), existing system, or new category.
 4. **Resolve existing pages first** via `resolve_page` — grow existing concept pages instead of creating duplicates.
@@ -147,9 +147,9 @@ tags: [seller, marketplace] # multi-tag; drives domain rollups
 domain: seller              # primary domain for navigation
 last_compiled: "2026-04-15T07:00:00Z"
 superseded_by: null         # wikilink slug when status=superseded
-sources:
-  - "raw/2026-04-12_....md"
-  - "raw/2026-04-05_....md"
+source_threads:
+  - "19b92d9b270daa57"
+  - "19b59cdc863ac109"
 related:
   - "[[topic/seller-isq]]"
   - "[[decision/scale-buyer-trust-50pct]]"
@@ -179,9 +179,9 @@ Policy pages additionally require:
 
 - NEVER modify files in `raw/` — not the body, not the frontmatter.
   The Postgres `messages` table owns compile state, not raw YAML.
-- NEVER invent entity slugs. Call `create_entity(email, display_name)`
-  — it returns a deterministic email-canonical slug + creates the
-  stub page. Identity is email; display names collide.
+- NEVER invent entity slugs. Call `create_entities(entities=[{email,
+  display_name}])` — it returns a deterministic email-canonical slug
+  + creates the stub page. Identity is email; display names collide.
 - NEVER call `mark_as_compiled`, `stamp_page_compiled_at`,
   `append_to_log`, or `update_wiki_index` (these are no longer agent
   tools as of 2026-04-13). The coordinator flips compile state,
@@ -268,16 +268,17 @@ reasoning budget on something `datetime.now(UTC)` does perfectly.
 - Write prose — paragraphs, summaries, history entries.
 - Merge new facts into an existing page without losing prior
   information.
-- Call `create_entity`, `write_draft_page`, `resolve_page`,
-  `log_insight` (and aspirational variants like `log_doubt`) —
-  judgement-call tools that mint or look up artefacts. Not to be
-  confused with the banned `append_to_log` from the MUST NOT section.
+- Call `create_entities`, `write_draft_page`, `resolve_page`,
+  `log_insight` — judgement-call tools that mint or look up
+  artefacts. Not to be confused with the banned `append_to_log`
+  from the MUST NOT section.
 
 **Tool-design rules the agent can rely on:**
 
-1. Every tool name is a **verb matching the agent's intent**
-   (`log_doubt`, not `log_insight(category="question")`) —
+1. Every tool name is a **verb matching the agent's intent** —
    namespacing by name offloads decision cost into the name itself.
+   (This is why `create_entities` subsumed the earlier
+   `find_entity_by_email` + `write_file` dance.)
 2. Every tool docstring opens with a **"WHEN to use / WHEN NOT to
    use"** block before listing args — Claude Code's TodoWrite
    pattern. The LLM optimizes for triggering conditions, not
@@ -301,7 +302,7 @@ reasoning budget on something `datetime.now(UTC)` does perfectly.
 7. **Truncation messages must guide, not just fail.** When a tool
    caps output, return "Showing first N of M. Refine with `filter=`
    or `slug_prefix=` to narrow." — never a bare `"truncated"`.
-8. **Idempotency by default.** Tools that mutate state (`create_entity`,
+8. **Idempotency by default.** Tools that mutate state (`create_entities`,
    `write_draft_page`) must be safe to call twice.
    Either (a) return the existing resource on repeat call, or (b) use
    a stable key so the coordinator can dedupe. Timeouts + retries will
@@ -327,8 +328,7 @@ reasoning budget on something `datetime.now(UTC)` does perfectly.
 - A tool with zero prompt mentions will get zero calls, regardless
   of how good its docstring is. The prompt is the index; the
   docstring is the page. Prompt real estate is scarce, so every
-  mention is a strong steering signal. `create_entity` at 111 calls
-  vs `log_insight` at 0 is the existence proof on this codebase.
+  mention is a strong steering signal.
 
 **When writing a new tool, use this checklist:**
 
