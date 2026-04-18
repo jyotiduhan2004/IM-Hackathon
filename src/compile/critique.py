@@ -41,7 +41,7 @@ _BROKEN_PAGE_STALENESS_SECONDS = 600
 # `conflicts/` are empty on disk (retired in Tier P); dropping them from the
 # scan stops the known-slugs set from growing with nothing to hit. People
 # pages still file under `entities/` until the rename migration lands.
-_WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies")
+_WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies", "decisions")
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
 
@@ -234,7 +234,11 @@ def _check_broken_wikilinks(
     broken: list[str] = []
     for link in WIKILINK_RE.findall(body):
         target = parse_wikilink_target(link)
-        if target and target not in known_slugs:
+        # CLAUDE.md teaches prefix-style wikilinks as canonical
+        # (`[[system/foo]]`, `[[decisions/bar]]`). `known_slugs` is keyed
+        # on bare stem, so strip the category prefix before lookup.
+        slug = target.rsplit("/", 1)[-1] if target else target
+        if slug and slug not in known_slugs:
             broken.append(target)
     if not broken:
         return []

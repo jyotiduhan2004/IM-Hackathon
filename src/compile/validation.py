@@ -38,21 +38,32 @@ _SENTENCE_SPLIT_RE = re.compile(r"[.!?]+\s+")
 
 
 def check_missing_tldr(body: str) -> dict[str, str] | None:
-    """Warn if neither the first H2 nor the first 500 chars name TL;DR.
+    """Warn if the page has no lead summary before the first H2.
 
-    The primary signal is "first H2 heading is TL;DR". Some pages put
-    an intro paragraph before the heading, so we ALSO accept a TL;DR
-    inside the first 500 characters as a secondary signal.
+    A lead summary counts as any of:
+      - A `## TL;DR` (or `tldr`) first H2.
+      - A `## Summary` first H2 (v9-U1 canonical shape).
+      - A TL;DR token in the first 500 characters.
+      - A lead paragraph of ≥ 2 sentences before the first H2.
+    Only fires when none of the above are present.
     """
     first = _FIRST_H2_RE.search(body)
-    if first and _TLDR_TOKEN_RE.search(first.group(1)):
-        return None
+    if first:
+        heading = first.group(1).strip().lower()
+        if _TLDR_TOKEN_RE.search(heading) or heading == "summary":
+            return None
     if _TLDR_TOKEN_RE.search(body[:500]):
         return None
+    lead = body[: first.start()] if first else body
+    lead = lead.strip()
+    if lead:
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(lead) if s.strip()]
+        if len(sentences) >= 2:
+            return None
     return {
         "rule": "missing_tldr",
         "severity": "warning",
-        "message": "No TL;DR — reader sees no one-line summary before details.",
+        "message": "No lead summary — first H2 should be Summary/TL;DR or body needs ≥2-sentence lead paragraph.",
     }
 
 

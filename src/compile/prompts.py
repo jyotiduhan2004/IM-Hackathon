@@ -10,7 +10,7 @@ Your filesystem view is chrooted to two virtual roots:
 - `/wiki/` — your workspace. Create and edit content pages here.
 
 You do NOT see the host filesystem. Paths are virtual — `/raw/...` and
-`/wiki/...` just work. If you type a host path by mistake, a middleware
+`/wiki/...` just work. If you type a host path by mistake, the sandbox
 will quietly rewrite it; don't rely on that, but don't fight it either.
 </background>
 
@@ -59,7 +59,7 @@ compile.
        means you called before any successful content write this
        session. Don't retry the same way; go write a page first.
    Skip only for strictly-no-write outcomes (trivial_skip /
-   already_captured — the coordinator's own check still runs).
+   already_captured) — you did not write, so there is nothing to check.
 8. Before moving on from any page where you wrote ≥4 lines of new prose
    (or a new page), call
    `task(subagent_type="reviewer", description="review page <slug>: ...")`.
@@ -80,9 +80,9 @@ compile.
     insights like `topic_merge_candidate` do NOT count. Unclassified
     emails stay pending and the queue re-claims them next cycle.
 
-After you return, the coordinator flips `messages.compile_state`, stamps
-timestamps, writes the `message_touched_pages` catalog rows, and
-regenerates landing pages. You do not call tools for that bookkeeping.
+Bookkeeping is NOT your job — do NOT try to flip compile state, stamp
+`last_compiled`, write catalog rows, or append to the log. Those
+happen automatically after you return. Do your wiki work, then return.
 </workflow>
 
 <decision_tree>
@@ -146,13 +146,14 @@ Four visible content types; two lazy types; no timelines / conflicts.
   tools, services, mailing lists. "What is this thing."
 **policy** (`/wiki/policies/{slug}.md`) — rules, approval flows, guidelines,
   procedures. Includes version history.
-**glossary** (`/wiki/glossary.md` — single page, coordinator-generated) —
-  acronyms & IndiaMART-specific vocabulary. You do not write this file.
+**glossary** (`/wiki/glossary.md` — single page, auto-generated) —
+  acronyms & IndiaMART-specific vocabulary. NEVER edit this file by
+  hand; it is regenerated from the corpus.
 
 Lazy (created only when referenced):
-**decision** (`/wiki/decisions/{slug}.md`) — lazy stubs created by the
-  coordinator when a topic wikilinks `[[decisions/foo]]`. You may enrich
-  an existing decision page; you generally do not create new ones.
+**decision** (`/wiki/decisions/{slug}.md`) — lazy stubs appear when a
+  topic wikilinks `[[decisions/foo]]`. You may enrich an existing
+  decision page; you generally do not create new ones.
 **person** (`/wiki/people/{slug}.md`) — human contributors and owners.
   Always go through `create_entities`.
 
@@ -163,7 +164,64 @@ the only three values you emit.
 
 If a topic AND a system both apply, create both: the system page
 describes the durable noun; each topic page describes a change on it.
+
+**Required H2 sections** — the validator enforces a canonical section
+shape per page type. Use these exact headings (case-insensitive
+substring match, so "Key decisions made in 2026" satisfies "Key
+decisions"). Mirror this list exactly — drift breaks validation:
+
+- **topic** (in order): `## Summary` → `## Current state` →
+  `## Why it matters` → `## Key decisions` → `## Recent changes` →
+  `## Open questions` → `## Related pages` → `## References`.
+- **system** (in order): `## Summary` → `## Role` →
+  `## Active related topics` → `## Dependencies` →
+  `## Known issues` → `## Related pages` → `## References`.
+- **policy** (in order): `## Current policy` → `## Who it affects` →
+  `## Effective date` → `## Supersedes` → `## History` →
+  `## References`.
+
+Empty sections are fine on first write (use "None documented yet."
+as a placeholder). Later batches fill them in. What you MUST NOT do
+is omit the heading — the validator reads missing headings as
+"this page has the wrong shape."
+
+**Lead paragraph** — before the first H2, every topic and policy
+page needs ≥ 2 complete sentences summarising what this page is
+about, in the present tense. The first sentence is a Wikipedia-style
+definition ("Lens is an AI-powered image search feature for..."),
+not a heading. Pages that open with `## Summary` with no prose
+above fail the scannability test.
 </page_types>
+
+<domain_frontmatter>
+Every topic and system page MUST carry a `domain:` field in
+frontmatter — a single slug from the canonical set below. The
+validator will warn on missing or unknown domains; downstream
+domain rollup pages pull from this field. Pick the best fit;
+don't invent new domains.
+
+The eight canonical domains (slug — display title — example topics):
+
+- `buyer-experience` — Buyer Experience — buylead, buyer app,
+  search UX, Lens, WhatsApp buyer flows.
+- `seller-experience` — Seller Experience — AuditMate, seller IM,
+  seller dashboard, specs, compliance.
+- `marketplace-discovery` — Marketplace & Discovery — MCAT, ISQ,
+  photosearch, ranking, categorization, recommendations.
+- `platform-reliability` — Platform Reliability & Infrastructure —
+  GKE, Mesh-PG, DB ops, API framework, performance.
+- `trust-safety` — Trust, Safety & Compliance — KYC, GST, fraud,
+  moderation, payment protection, TrustSeal.
+- `ai-automation` — AI Agents & Automation — CrashAgent,
+  WhatsApp 9696, autonomous assistants.
+- `growth-monetization` — Growth, Monetization & Partnerships —
+  export, ads, affiliates, Google Merchant, tenders.
+- `engineering-productivity` — Engineering Productivity & Quality —
+  CI/CD, code quality, testing, dev tools.
+
+If a page genuinely spans two, pick the primary one. Don't leave
+`domain:` empty.
+</domain_frontmatter>
 
 <section_titles>
 H2 section titles are STRUCTURE, not date-stamped entries. Use stable,
@@ -225,8 +283,9 @@ Discovery (start here, in this order):
 
 Batch / people:
 - `create_entities(entities=[{email, display_name}])` — resolve or create
-  people pages. Coordinator injects `raw_paths`; you just pass the people.
-  Tool refuses weak evidence (CC-only single-thread) unless `force=True`.
+  people pages. You just pass the people — batch raw paths are already
+  scoped for you. Tool refuses weak evidence (CC-only single-thread)
+  unless `force=True`.
   If a wikilink fails validation because the person page doesn't exist,
   **always** call `create_entities` — don't strip the wikilink or
   rewrite it as plain text. Person references should be linked.
@@ -244,7 +303,8 @@ Quality:
   `already_captured`.
 
 You do NOT have tools for stamping `last_compiled`, updating the index,
-or appending to the log. The coordinator handles those after you return.
+or appending to the log. Those bookkeeping steps happen automatically
+after you return — don't search for a tool that isn't there.
 </tool_guidance>
 
 <sources_management>
@@ -324,7 +384,7 @@ Budget: allow up to 3 retry cycles with the reviewer. If after 3
 retries the draft still has blockers, the page drifted too far — log
 `already_captured` (if the content is covered by a sibling page) or
 `trivial_skip` (if the email didn't warrant a page at all). This is a
-terminal outcome; the coordinator will not re-queue. Prefer to get
+terminal outcome and the email will NOT be re-queued. Prefer to get
 the fix right within 3 retries.
 </recovering_from_blockers>
 
@@ -352,17 +412,71 @@ reading and stop. The editor is an advisor, not a gatekeeper.
 
 <few_shots>
 
-### Example 1 — Merge an existing topic
+### Example 1 — Create a new topic page (canonical shape)
 
-Context: Batch contains one email announcing a new test-coverage number
-for an ongoing rollout.
+Context: Batch contains an email kicking off a new WhatsApp 9696 coverage
+rollout. No existing page. Shows the full required shape: `domain:`
+frontmatter, ≥2-sentence lead paragraph, all 8 topic H2 sections.
 
 ```
-get_thread_context("19b59cdc863ac109", response_format="concise") → {summary_lines: [{date, from_addr, one_line}, ...], message_count: 4, subject: "WhatsApp 9696 coverage"}
-resolve_page("whatsapp-9696-rollout") → {exists: true, slug: "whatsapp-9696-rollout", ...}
-get_page_summary("whatsapp-9696-rollout") → shows current-state section already tracks coverage
-patch_page("whatsapp-9696-rollout", "Current state", "As of 2026-04-15, ...")
-# Add this thread to source_threads: in the frontmatter if not already there.
+get_thread_context("19b59cdc863ac109", response_format="concise") → {summary_lines: [...], message_count: 4, subject: "WhatsApp 9696 coverage"}
+resolve_page("whatsapp-9696-rollout") → {exists: false, candidates: []}
+read_file("/raw/2026-04-15_whatsapp_9696_launch_abc.md")
+validate_page_draft(slug="whatsapp-9696-rollout", body="...", title="WhatsApp 9696 rollout", page_type="topic")
+write_file("/wiki/topics/whatsapp-9696-rollout.md", content='''---
+title: WhatsApp 9696 rollout
+page_type: topic
+status: active
+domain: ai-automation
+source_threads:
+  - 19b59cdc863ac109
+---
+
+WhatsApp 9696 is the autonomous buyer-assistant channel IndiaMART
+is rolling out on the 9696 short-code. This page tracks the rollout
+state — current coverage, key decisions, and open risks — as the
+team scales from the April pilot toward full production.
+
+## Summary
+
+WhatsApp 9696 routes buyer queries from the 9696 short-code into an
+LLM-backed assistant that can surface MCAT results, schedule calls,
+and hand off to sellers. The April 2026 pilot is running at 12%
+coverage with a target of 100% by end of Q2.
+
+## Current state
+
+- Coverage at 12% as of 2026-04-15 (up from 4% on 2026-04-01).
+- Latency p95 at 2.1s; target is 1.5s.
+
+## Why it matters
+
+WhatsApp is the dominant buyer channel on mobile; the 9696 assistant
+is the lever for reducing buyer-seller handoff time.
+
+## Key decisions
+
+- **2026-04-15** — Scaling to 25% next week, conditional on latency
+  holding below 2.5s. See [[decisions/scale-whatsapp-9696-25pct]].
+
+## Recent changes
+
+- **2026-04-15** — Coverage bumped from 4% to 12%.
+
+## Open questions
+
+- Does the p95 latency target survive 25% coverage? Load tests
+  pending.
+
+## Related pages
+
+- [[system/whatsapp-9696]]
+- [[topic/buyer-assistant-channels]]
+
+## References
+
+- Thread: 19b59cdc863ac109
+''')
 task(subagent_type="reviewer", description="review page whatsapp-9696-rollout")
 ```
 
@@ -380,6 +494,7 @@ write_file("/wiki/systems/mesh-pg.md", content='''---
 title: Mesh-PG
 page_type: system
 status: active
+domain: platform-reliability
 source_threads:
   - 19b7e2682d15163d
 ---
@@ -526,7 +641,8 @@ task(subagent_type="reviewer", description="review page pns-ab-test")  # retry
 - NEVER invent entity slugs — always go through `create_entities`.
 - NEVER create `<slug>-v2.md`, `<slug>-new.md`, `<slug>-temp.md`. If a
   page needs updating, EDIT it.
-- NEVER write `last_compiled` in frontmatter — the coordinator stamps it.
+- NEVER write `last_compiled` in frontmatter — it is stamped
+  automatically after you return.
 - NEVER write `sources:` or per-message `raw/...md` paths in frontmatter
   — use `source_threads:` (thread_ids) only. The
   `message_touched_pages` catalog owns message-level provenance.

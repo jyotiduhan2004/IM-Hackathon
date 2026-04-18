@@ -395,3 +395,152 @@ def test_wikilink_recovery_example_present() -> None:
     assert "broken-wikilink" in example or "broken wikilink" in example
     assert "create_entities" in example
     assert "retry" in example.lower() or "re-run" in example.lower()
+
+
+def test_prompt_has_no_internals() -> None:
+    """v9-U1: the prompt must not leak internal implementation vocabulary
+    the LLM has no mental model for. `coordinator`, `ContextVar`,
+    `middleware`, `AgentMiddleware` are all names for *our* deterministic
+    plumbing. Naming them in the prompt wastes tokens and risks the model
+    trying to reason about internals it cannot see. Rewrite any such
+    reference as a direct prohibition ("NEVER call X — it's not a tool")
+    or passive/automatic framing ("stamped automatically after you
+    return")."""
+    forbidden = ("coordinator", "contextvar", "middleware", "agentmiddleware")
+    prompt_lower = COMPILER_SYSTEM_PROMPT.lower()
+    leaked = [word for word in forbidden if word in prompt_lower]
+    assert not leaked, (
+        f"prompt leaks internal vocabulary: {leaked}. "
+        "Rewrite as direct prohibition or passive automatic framing."
+    )
+
+
+def test_topic_required_h2_sections_taught() -> None:
+    """v9-U1: the validator enforces 8 required H2 sections on topic
+    pages (Summary / Current state / Why it matters / Key decisions /
+    Recent changes / Open questions / Related pages / References).
+    Until Cycle 9 the prompt didn't name any of them; every fresh
+    compile added to the missing-sections backlog. This test pins the
+    teaching in place so future edits can't quietly drop it."""
+    required = (
+        "## Summary",
+        "## Current state",
+        "## Why it matters",
+        "## Key decisions",
+        "## Recent changes",
+        "## Open questions",
+        "## Related pages",
+        "## References",
+    )
+    missing = [s for s in required if s not in COMPILER_SYSTEM_PROMPT]
+    assert not missing, f"prompt must name topic required H2 sections; missing: {missing}"
+
+
+def test_system_required_h2_sections_taught() -> None:
+    """v9-U1: system pages also have a canonical H2 shape enforced by
+    the validator. `## Role` and `## Active related topics` are the
+    system-specific ones; `## Summary` / `## References` / `## Related
+    pages` overlap with topic. Pin them so the prompt mirrors the
+    validator."""
+    system_specific = ("## Role", "## Active related topics", "## Dependencies", "## Known issues")
+    missing = [s for s in system_specific if s not in COMPILER_SYSTEM_PROMPT]
+    assert not missing, f"prompt must name system required H2 sections; missing: {missing}"
+
+
+def test_lead_paragraph_requirement_taught() -> None:
+    """v9-U1: validator warns when a topic or policy page lacks a
+    ≥2-sentence lead paragraph before the first H2. The prompt must
+    teach that shape. Three load-bearing tokens: the count (`2`), the
+    scope (`lead paragraph` or `first H2`), and the tense (`present
+    tense`) — without tense, the model writes past-tense recaps."""
+    prompt = COMPILER_SYSTEM_PROMPT
+    assert "lead paragraph" in prompt.lower(), "prompt must use the phrase 'lead paragraph'"
+    # ≥ 2 sentences, specifically — not "a paragraph" or "a line".
+    assert "≥ 2" in prompt or "≥2" in prompt or "two sentence" in prompt.lower(), (
+        "prompt must name the 2-sentence minimum"
+    )
+    assert "present tense" in prompt.lower(), (
+        "prompt must specify present-tense framing for the lead paragraph"
+    )
+
+
+def test_domain_frontmatter_block_present() -> None:
+    """v9-U1: add `<domain_frontmatter>` teaching the 8 canonical
+    domains. Without this, 399 pages lacked `domain:` as of Cycle 9.
+    The block must list each canonical slug explicitly so the model
+    has a concrete menu."""
+    assert "<domain_frontmatter>" in COMPILER_SYSTEM_PROMPT
+    assert "</domain_frontmatter>" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("<domain_frontmatter>")
+    end = COMPILER_SYSTEM_PROMPT.find("</domain_frontmatter>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # All 8 canonical domain slugs named in the block.
+    canonical = (
+        "buyer-experience",
+        "seller-experience",
+        "marketplace-discovery",
+        "platform-reliability",
+        "trust-safety",
+        "ai-automation",
+        "growth-monetization",
+        "engineering-productivity",
+    )
+    missing = [d for d in canonical if d not in block]
+    assert not missing, (
+        f"<domain_frontmatter> must list all 8 canonical domains; missing: {missing}"
+    )
+
+
+def test_example_1_exhibits_required_shape() -> None:
+    """v9-U1: Example 1 is the canonical-shape worked example. It must
+    show `domain:` frontmatter, a ≥2-sentence lead paragraph, and all 8
+    topic H2 sections in order so the model has a full template to
+    pattern-match against."""
+    start = COMPILER_SYSTEM_PROMPT.find("### Example 1")
+    end = COMPILER_SYSTEM_PROMPT.find("### Example 2")
+    assert start != -1 and end != -1 and end > start
+    example = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "domain:" in example, "Example 1 must show `domain:` frontmatter"
+    # Each of the 8 topic H2 sections appears in Example 1.
+    for section in (
+        "## Summary",
+        "## Current state",
+        "## Why it matters",
+        "## Key decisions",
+        "## Recent changes",
+        "## Open questions",
+        "## Related pages",
+        "## References",
+    ):
+        assert section in example, f"Example 1 missing required section heading: {section}"
+
+
+def test_prompt_domain_list_matches_compiler() -> None:
+    """v9-U1: the prompt lists 8 canonical domains in <domain_frontmatter>.
+    The source of truth for domain slugs is `src.compile.compiler._DOMAINS`;
+    if someone adds or renames a domain there without updating the prompt,
+    the agent's world-model drifts from the validator's world-model.
+    Pin the invariant."""
+    from src.compile.compiler import _DOMAIN_BY_SLUG
+
+    for slug in _DOMAIN_BY_SLUG:
+        assert slug in COMPILER_SYSTEM_PROMPT, (
+            f"domain slug {slug!r} missing from prompt — keep prompt "
+            "in sync with src.compile.compiler._DOMAINS"
+        )
+
+
+def test_prompt_topic_sections_match_validator() -> None:
+    """v9-U1: the prompt's required-topic-sections list must match the
+    validator's `REQUIRED_SECTIONS['topic']`. Drift here silently
+    produces pages the agent thinks are valid but the validator rejects —
+    the exact failure mode Cycle 9 surfaced. Pin the invariant."""
+    from scripts.validate_wiki import REQUIRED_SECTIONS
+
+    for section in REQUIRED_SECTIONS["topic"]:
+        heading = f"## {section}"
+        assert heading in COMPILER_SYSTEM_PROMPT, (
+            f"validator requires {heading!r} on topic pages but prompt "
+            "doesn't teach it — keep prompt in sync with "
+            "scripts.validate_wiki.REQUIRED_SECTIONS"
+        )
