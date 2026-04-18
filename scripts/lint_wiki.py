@@ -87,9 +87,7 @@ def check_frontmatter(wiki_dir: Path) -> list[LintIssue]:
             continue
 
         required = (
-            _INDEX_REQUIRED_FRONTMATTER
-            if fm.get("page_type") == "index"
-            else REQUIRED_FRONTMATTER
+            _INDEX_REQUIRED_FRONTMATTER if fm.get("page_type") == "index" else REQUIRED_FRONTMATTER
         )
         missing = required - set(fm.keys())
         if missing:
@@ -223,69 +221,18 @@ def _slugify(text: str) -> str:
     return re.sub(r"[\s_]+", "-", text).strip("-")
 
 
-def create_missing_stubs(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue]:
-    """Create stub pages for wikilinks pointing to non-existent pages.
-
-    For every [[target]] that doesn't resolve, create a minimal stub at
-    wiki/entities/{target}.md if target looks like a person's name, else
-    wiki/systems/{target}.md. Heuristic: hyphenated kebab with 2 parts like
-    'lucky-agarwal' → entity; single-word or with numbers → system.
-
-    Returns LintIssue entries describing what was created.
-    """
-    pages = _get_wiki_pages(wiki_dir)
-    known = set(pages.keys())
-    created: set[str] = set()
-    issues: list[LintIssue] = []
-
-    for _name, path in pages.items():
-        content = path.read_text(encoding="utf-8")
-        for link in _extract_wikilinks(content):
-            target = link.split("|")[0].strip()
-            if target in known or target in created:
-                continue
-            # Heuristic: 2 hyphen-separated parts AND no digits → likely person
-            parts = target.split("-")
-            looks_like_person = len(parts) == 2 and all(p.isalpha() for p in parts)
-            category = "entities" if looks_like_person else "systems"
-            stub_path = wiki_dir / category / f"{target}.md"
-
-            issues.append(
-                LintIssue(
-                    severity="info",
-                    category="stub_created" if not dry_run else "stub_would_create",
-                    page=str(stub_path),
-                    message=f"Stub for [[{target}]] referenced by {path.name}"
-                    f" (category: {category})",
-                    auto_fixable=True,
-                )
-            )
-
-            if not dry_run:
-                stub_path.parent.mkdir(parents=True, exist_ok=True)
-                page_type = "entity" if category == "entities" else "system"
-                display = target.replace("-", " ").title()
-                stub_path.write_text(
-                    f"""---
-title: "{display}"
-page_type: {page_type}
-status: current
-sources: []
-related: []
-last_compiled: "stub"
----
-
-# {display}
-
-*Stub page auto-created because [[{target}]] was referenced but no page existed.*
-
-Referenced from: [[{path.stem}]]
-""",
-                    encoding="utf-8",
-                )
-                created.add(target)
-
-    return issues
+# Auto-stub creation for unresolved wikilinks was REMOVED in v10-U8 (GH #12).
+# The old `create_missing_stubs` function inferred "person vs system" from
+# a slug-shape heuristic and wrote `wiki/entities/<slug>.md` — which is how
+# garbage slugs (`vishakha-indiamart`, `akash-singh6`, `arjun-gaur-clean`)
+# entered the catalog. Per CLAUDE.md ("NEVER invent entity slugs"), entity
+# pages must go through `create_entities(email=..., display_name=...)` so
+# the slug is derived from the canonical email address.
+#
+# Broken wikilinks are still surfaced — see `check_broken_wikilinks` (here)
+# and the reviewer's `broken_wikilink` rule (src/compile/reviewer.py). The
+# agent can respond by calling `create_entities()` with the proper email,
+# rewriting the wikilink, or dropping it.
 
 
 def normalize_wikilinks(wiki_dir: Path, dry_run: bool = False) -> list[LintIssue]:
@@ -469,17 +416,8 @@ def print_report(issues: list[LintIssue]) -> None:
 
 @click.command()
 @click.option("--fix", is_flag=True, help="Auto-fix safe issues (normalize wikilinks)")
-@click.option(
-    "--create-stubs",
-    is_flag=True,
-    help=(
-        "Also auto-create stub pages for unresolved [[target]] wikilinks. "
-        "Requires --fix. OFF by default — stub creation hides agent mistakes "
-        "and bloats the wiki (see docs/BACKLOG.md 'Auto-stub strategy')."
-    ),
-)
 @click.option("--category", help="Only check this category")
-def main(fix: bool, create_stubs: bool, category: str | None) -> None:
+def main(fix: bool, category: str | None) -> None:
     """Check wiki health and report issues."""
     wiki_dir = settings.wiki_dir
     if not wiki_dir.exists():
@@ -490,12 +428,6 @@ def main(fix: bool, create_stubs: bool, category: str | None) -> None:
         click.echo("Auto-fixing wikilinks (normalizing Title Case → kebab-case)...")
         fixed = normalize_wikilinks(wiki_dir, dry_run=False)
         click.echo(f"Normalized wikilinks in {len(fixed)} pages.")
-        if create_stubs:
-            click.echo("Creating stubs for unresolved wikilink targets...")
-            stubs = create_missing_stubs(wiki_dir, dry_run=False)
-            click.echo(f"Created {len(stubs)} stub pages.")
-        else:
-            click.echo("Skipping stub creation (default). Pass --create-stubs to opt back in.")
         click.echo()
 
     issues = run_all_checks(wiki_dir)

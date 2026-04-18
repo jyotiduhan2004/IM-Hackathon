@@ -34,7 +34,7 @@ langfuse-smoke: ## Verify Langfuse health + trace export with current env
 lint-wiki: ## Run wiki health checks
 	uv run python scripts/lint_wiki.py
 
-lint-wiki-fix: ## Run wiki health checks and auto-normalize wikilinks (no auto-stub creation — pass --create-stubs explicitly to opt in)
+lint-wiki-fix: ## Run wiki health checks and auto-normalize wikilinks (no auto-stub creation — see v10-U8)
 	uv run python scripts/lint_wiki.py --fix
 
 dump-agent-diagram: ## Refresh docs/architecture.md (LangGraph + tool table)
