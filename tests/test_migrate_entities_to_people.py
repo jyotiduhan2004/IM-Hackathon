@@ -277,7 +277,7 @@ def test_moved_entity_keeps_frontmatter_and_rewrites_links(
         encoding="utf-8",
     )
     runner = CliRunner()
-    result = runner.invoke(migrate.main, ["--commit"])
+    result = runner.invoke(migrate.main, ["--commit", "--yes-really"])
     assert result.exit_code == 0, result.output
     moved = (synthetic_wiki / "people" / "alice.md").read_text(encoding="utf-8")
     # (i) frontmatter flipped — NOT overwritten by the stale pre-move buffer.
@@ -376,7 +376,7 @@ def test_cli_commit_performs_migration(
     monkeypatch.setattr(migrate.settings, "wiki_dir", synthetic_wiki)
 
     runner = CliRunner()
-    result = runner.invoke(migrate.main, ["--commit"])
+    result = runner.invoke(migrate.main, ["--commit", "--yes-really"])
     assert result.exit_code == 0, result.output
     # Files moved.
     for slug in ("alice", "bob", "carol"):
@@ -452,11 +452,11 @@ def test_cli_commit_is_idempotent(
     monkeypatch.setattr(migrate.settings, "wiki_dir", synthetic_wiki)
 
     runner = CliRunner()
-    first = runner.invoke(migrate.main, ["--commit"])
+    first = runner.invoke(migrate.main, ["--commit", "--yes-really"])
     assert first.exit_code == 0, first.output
 
     # Second run: nothing to migrate.
-    second = runner.invoke(migrate.main, ["--commit"])
+    second = runner.invoke(migrate.main, ["--commit", "--yes-really"])
     assert second.exit_code == 0, second.output
     assert "nothing to migrate" in second.output
     # State unchanged: people/ still has the files, DB still clean.
@@ -485,6 +485,101 @@ def test_cli_default_is_dry_run(
     assert "dry-run" in result.output
 
 
+def test_cli_commit_requires_yes_really(
+    synthetic_wiki: Path, db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--commit`` alone must error out — ``--yes-really`` is required."""
+    _seed_catalog(db_conn, synthetic_wiki)
+    monkeypatch.setattr(migrate.settings, "wiki_dir", synthetic_wiki)
+
+    runner = CliRunner()
+    result = runner.invoke(migrate.main, ["--commit"])
+    assert result.exit_code == 2
+    assert "--yes-really" in result.output
+    # Filesystem + DB untouched.
+    assert (synthetic_wiki / "entities" / "alice.md").exists()
+    assert not (synthetic_wiki / "people" / "alice.md").exists()
+    row = db_conn.execute(
+        "SELECT COUNT(*) AS n FROM wiki_pages WHERE page_type = 'entity'"
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 3
+
+
+def test_cli_commit_removes_entities_dir(
+    synthetic_wiki: Path, db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a clean --commit, wiki/entities/ is gone (incl. placeholders)."""
+    _seed_catalog(db_conn, synthetic_wiki)
+    monkeypatch.setattr(migrate.settings, "wiki_dir", synthetic_wiki)
+    # Sanity-check pre-state: placeholders exist.
+    assert (synthetic_wiki / "entities" / "index.md").exists()
+    assert (synthetic_wiki / "entities" / ".gitkeep").exists()
+
+    runner = CliRunner()
+    result = runner.invoke(migrate.main, ["--commit", "--yes-really"])
+    assert result.exit_code == 0, result.output
+    # wiki/entities/ is entirely gone — placeholders cleaned up, dir removed.
+    assert not (synthetic_wiki / "entities").exists()
+    # Report line surfaces the cleanup outcome so the operator doesn't
+    # have to re-check the filesystem to know it happened.
+    assert "entities_dir_removed:      True" in result.output
+
+
+def test_cli_commit_keeps_entities_dir_on_collision(
+    synthetic_wiki: Path, db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-existing people/<slug>.md blocks a move → entities/<slug>.md stays
+    → cleanup is refused so the operator can retry.
+    """
+    _seed_catalog(db_conn, synthetic_wiki)
+    monkeypatch.setattr(migrate.settings, "wiki_dir", synthetic_wiki)
+    # Pre-seed the collision before the migration runs.
+    _write(
+        synthetic_wiki / "people" / "alice.md",
+        "---\ntitle: Alice\npage_type: person\n---\n\nexisting\n",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(migrate.main, ["--commit", "--yes-really"])
+    # The plan-time skip is not a hard failure (mid-flight skips are) —
+    # bob + carol still move + DB still updates. But entities/alice.md
+    # is still sitting there, so cleanup refuses.
+    assert result.exit_code == 0, result.output
+    assert (synthetic_wiki / "entities" / "alice.md").exists()
+    assert "entities_dir_removed:      False" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Cleanup unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_removes_empty_entities_dir_with_placeholders(tmp_path: Path) -> None:
+    """Dir with only placeholders → placeholders removed, dir removed, True."""
+    entities = tmp_path / "entities"
+    entities.mkdir()
+    (entities / "index.md").write_text("placeholder\n")
+    (entities / ".gitkeep").write_text("")
+    assert migrate._cleanup_entities_dir(entities) is True
+    assert not entities.exists()
+
+
+def test_cleanup_refuses_when_md_files_remain(tmp_path: Path) -> None:
+    """A leftover entity page → directory is preserved + False."""
+    entities = tmp_path / "entities"
+    entities.mkdir()
+    (entities / "leftover.md").write_text("still here\n")
+    assert migrate._cleanup_entities_dir(entities) is False
+    assert (entities / "leftover.md").exists()
+
+
+def test_cleanup_is_noop_when_dir_missing(tmp_path: Path) -> None:
+    """No directory → False, no error (e.g. migration already cleaned up)."""
+    entities = tmp_path / "nonexistent"
+    assert migrate._cleanup_entities_dir(entities) is False
+
+
 # ---------------------------------------------------------------------------
 # Regex correctness
 # ---------------------------------------------------------------------------
@@ -505,6 +600,16 @@ def test_rewrite_preserves_aliased_wikilinks() -> None:
     new, wl, _md = migrate._rewrite_content(content)
     assert new == "Ping [[people/alice|Alice]] for context."
     assert wl == 1
+
+
+def test_rewrite_preserves_anchor_wikilinks() -> None:
+    """`[[entities/alice#history]]` keeps the anchor after rewrite."""
+    content = "See [[entities/alice#history]] and [[entities/bob#role|Bob's role]]."
+    new, wl, _md = migrate._rewrite_content(content)
+    assert "[[people/alice#history]]" in new
+    assert "[[people/bob#role|Bob's role]]" in new
+    assert "entities/" not in new
+    assert wl == 2
 
 
 def test_rewrite_handles_relative_markdown_links() -> None:
@@ -576,7 +681,7 @@ def test_mid_flight_collision_does_not_clobber_protected_destination(
     monkeypatch.setattr(migrate, "_execute_moves", execute_with_collision)
 
     runner = CliRunner()
-    result = runner.invoke(migrate.main, ["--commit"])
+    result = runner.invoke(migrate.main, ["--commit", "--yes-really"])
     # The mid-flight skip exits 1 (partial migration). That's expected
     # behaviour; what we care about is that the protected file is intact.
     assert result.exit_code == 1, result.output

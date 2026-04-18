@@ -50,19 +50,28 @@ regex won't match strings that have already been rewritten.
 Usage
 -----
 
-    uv run python scripts/migrate_entities_to_people.py               # defaults to --dry-run
+    uv run python scripts/migrate_entities_to_people.py                     # defaults to --dry-run
     uv run python scripts/migrate_entities_to_people.py --dry-run
-    uv run python scripts/migrate_entities_to_people.py --commit
+    uv run python scripts/migrate_entities_to_people.py --commit --yes-really
 
-The default is the safe one — you have to pass ``--commit`` to touch
-disk or the database. Dry-run writes a plan markdown to
-``docs/audits/migration-plan-<ISO>.md``.
+``--commit`` is gated on ``--yes-really``; passing ``--commit`` alone
+errors out. Extra safety rail because this run mutates BOTH the
+filesystem (wiki pages) and the ``wiki_pages`` catalog in one shot,
+and the migration is one-shot — a wrong run has to be undone by
+hand. Dry-run writes a plan markdown to
+``docs/audits/migration-plan-<ISO>.md`` and touches nothing.
+
+After all moves succeed and the source directory is empty, the
+directory itself is removed (``rmdir wiki/entities/``) so fresh writes
+can't target the legacy path by habit.
 
 One-shot lifecycle:
-- Classification: one-shot-done
-- Last production run: 2026-04-18
-- Safe to delete after: 2026-05-15
-- Deletion gate: `migrate_legacy_pages.py` reports zero stragglers for 7 consecutive days.
+- Classification: one-shot (not yet run)
+- Safe to delete after: 2026-06-18
+- Deletion gate: the coordinator-authorised production run lands + a
+  follow-up check confirms ``wiki/entities/`` is gone and
+  ``wiki_pages`` holds zero ``page_type='entity'`` rows for 7
+  consecutive days.
 """
 
 from __future__ import annotations
@@ -560,13 +569,60 @@ def _write_plan_file(plan: Plan, timestamp: str) -> Path:
     return plan_path
 
 
+def _cleanup_entities_dir(entities_dir: Path) -> bool:
+    """Remove ``wiki/entities/`` if it's effectively empty, else leave alone.
+
+    "Effectively empty" = no ``*.md`` files other than the placeholders
+    (``index.md`` / ``.gitkeep``) we intentionally refuse to move. Those
+    placeholders are removed here, then the directory is removed.
+
+    Returns True if we removed the directory, False otherwise. A False
+    return is not an error — it means migration is still partial (some
+    entity pages remain, e.g. blocked by collisions) and the directory
+    needs to stick around for the retry.
+    """
+    if not entities_dir.exists():
+        return False
+    remaining_md = [p for p in entities_dir.glob("*.md") if p.name not in _PLACEHOLDER_NAMES]
+    if remaining_md:
+        return False
+    for placeholder in entities_dir.iterdir():
+        if placeholder.name in _PLACEHOLDER_NAMES:
+            try:
+                placeholder.unlink()
+            except OSError as exc:
+                click.echo(f"WARNING: unable to remove {placeholder} ({exc})", err=True)
+                return False
+    try:
+        entities_dir.rmdir()
+    except OSError as exc:
+        # Non-placeholder file snuck in (subdir, stray file) — bail.
+        click.echo(f"WARNING: unable to rmdir {entities_dir} ({exc})", err=True)
+        return False
+    return True
+
+
 @click.command()
 @click.option(
     "--dry-run/--commit",
     default=True,
     help="Dry-run (default, safe) or commit. Dry-run writes no files and no DB changes.",
 )
-def main(dry_run: bool) -> None:
+@click.option(
+    "--yes-really",
+    is_flag=True,
+    default=False,
+    help="Second confirmation required to pair with --commit. Without it, --commit errors out.",
+)
+def main(dry_run: bool, yes_really: bool) -> None:
+    if not dry_run and not yes_really:
+        click.echo(
+            "refusing to --commit without --yes-really. "
+            "This run would mutate the filesystem + the wiki_pages catalog; "
+            "re-invoke with both flags to proceed.",
+            err=True,
+        )
+        sys.exit(2)
     wiki_dir = (
         REPO_ROOT / settings.wiki_dir if not settings.wiki_dir.is_absolute() else settings.wiki_dir
     )
@@ -608,6 +664,13 @@ def main(dry_run: bool) -> None:
     moved_dsts = {m.dst for m in plan.moves} - guarded_dsts
     wikilinks_rewritten, markdown_rewritten = _execute_rewrites(safe_rewrites, moved_dsts)
     catalog_updated, catalog_failed = _execute_catalog_update()
+    # Cleanup: remove wiki/entities/ when migration is clean. Mid-flight
+    # skips keep the directory around so the retry has somewhere to go;
+    # plan-time skips (collision) are caught inside `_cleanup_entities_dir`
+    # by the `remaining_md` guard.
+    directory_removed = False
+    if not mid_flight_skips:
+        directory_removed = _cleanup_entities_dir(wiki_dir / "entities")
 
     click.echo("")
     click.echo("=== migration complete ===")
@@ -615,6 +678,7 @@ def main(dry_run: bool) -> None:
     click.echo(f"wikilinks_rewritten:       {wikilinks_rewritten}")
     click.echo(f"markdown_links_rewritten:  {markdown_rewritten}")
     click.echo(f"catalog_rows_updated:      {catalog_updated}")
+    click.echo(f"entities_dir_removed:      {directory_removed}")
     if catalog_failed:
         click.echo(f"catalog_rows_failed:   {catalog_failed}")
     if total_skips:
