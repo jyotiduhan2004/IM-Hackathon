@@ -67,16 +67,32 @@ def _seed_wiki(wiki: Path) -> None:
 
 
 class _FakeCursor:
-    """Minimal psycopg cursor stand-in; cf. tests/test_get_thread_context.py."""
+    """Minimal psycopg cursor stand-in; cf. tests/test_get_thread_context.py.
+
+    The concise path of `get_thread_context` issues a second `MAX(date)`
+    query to report the thread's true latest date (rather than the last
+    row of the paged window — see v10 followup P1-4 #196). `fetchone`
+    returns the max of whichever `date` fields the seeded rows carry so
+    the fake stays honest to the real SQL shape.
+    """
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = rows
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> _FakeCursor:
+        self._last_sql = sql
         return self
 
     def fetchall(self) -> list[dict[str, Any]]:
         return self._rows
+
+    def fetchone(self) -> dict[str, Any] | None:
+        max_date = None
+        for r in self._rows:
+            d = r.get("date")
+            if d and (max_date is None or d > max_date):
+                max_date = d
+        return {"max_date": max_date}
 
 
 class _FakeConn:
@@ -103,7 +119,10 @@ class TestListWikiPagesDualFormat:
         _seed_wiki(tmp_path)
         result = list_wiki_pages.invoke({"wiki_dir": str(tmp_path)})
         assert set(result.keys()) == {"pages"}
-        assert all(set(p.keys()) == {"slug", "title"} for p in result["pages"])
+        # page_type is kept (P1-5 from #196 followup) so slugs that collide
+        # across categories — e.g. `topic/seller-isq` and `system/seller-isq`
+        # — aren't collapsed into one entry in the agent's view.
+        assert all(set(p.keys()) == {"slug", "title", "page_type"} for p in result["pages"])
 
     def test_concise_shape_drops_metadata(self, tmp_path: Path) -> None:
         _seed_wiki(tmp_path)
@@ -114,13 +133,22 @@ class TestListWikiPagesDualFormat:
         # Titles come from frontmatter, not from slug.
         titles = {p["title"] for p in result["pages"]}
         assert titles == {"BuyLead", "Lens"}
-        # Concise drops path, last_compiled, status, page_type, source_count.
+        # Concise drops path, last_compiled, status, source_count — page_type
+        # stays in so cross-category slug collisions remain distinguishable.
         for page in result["pages"]:
             assert "last_compiled" not in page
             assert "status" not in page
-            assert "page_type" not in page
             assert "path" not in page
             assert "source_count" not in page
+
+    def test_concise_keeps_page_type_for_collision_disambiguation(self, tmp_path: Path) -> None:
+        """P1-5 (#196): concise must include `page_type` so `topic/seller-isq`
+        and `system/seller-isq` don't collapse into one entry for the agent.
+        """
+        _seed_wiki(tmp_path)
+        result = list_wiki_pages.invoke({"wiki_dir": str(tmp_path), "response_format": "concise"})
+        page_types = {p["page_type"] for p in result["pages"]}
+        assert page_types == {"topic", "system"}
 
     def test_detailed_shape_keeps_metadata(self, tmp_path: Path) -> None:
         _seed_wiki(tmp_path)
@@ -129,10 +157,21 @@ class TestListWikiPagesDualFormat:
         assert "topics" in result
         assert "systems" in result
         assert result["topics"][0]["slug"] == "buylead"
-        assert "last_compiled" in result["topics"][0]
-        assert "status" in result["topics"][0]
-        assert "page_type" in result["topics"][0]
-        assert "source_count" in result["topics"][0]
+        # P2 from #196 followup: pin the full detailed shape so agents / the
+        # reviewer tool can rely on every discovery signal being present.
+        for key in (
+            "last_compiled",
+            "status",
+            "page_type",
+            "source_count",
+            "source_thread_count",
+            "is_cited",
+        ):
+            assert key in result["topics"][0], f"detailed missing {key}"
+        # buylead's seed has source_threads=[<one>], sources=[] — exercise
+        # the cited/thread-count plumbing too.
+        assert result["topics"][0]["source_thread_count"] == 1
+        assert result["topics"][0]["is_cited"] is True
 
     def test_concise_is_smaller_than_detailed(self, tmp_path: Path) -> None:
         _seed_wiki(tmp_path)

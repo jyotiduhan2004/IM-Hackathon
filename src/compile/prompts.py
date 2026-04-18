@@ -68,8 +68,10 @@ message→page links automatically.
 
 ### Steps
 
-1. For each email, `get_thread_context(thread_id)` first — see the
-   thread's shape before reading any single message.
+1. For each email, `get_thread_context(thread_id)` first — concise by
+   default (size + subject + latest date in ~72 tokens). Opt into
+   `response_format="detailed"` only when you need per-message bodies
+   to pick which message to read next.
 2. `resolve_page(<concept>)` for existing pages; `get_page_summary(slug)`
    is usually enough to decide merge vs. new.
 3. `read_file(/raw/...)` only when you need exact wording, numbers, or
@@ -477,7 +479,7 @@ Context: Email introduces a new internal service ("Mesh-PG") for the first
 time. Multiple paragraphs of substantive content.
 
 ```
-get_thread_context("19b7e2682d15163d") → {messages: [...], subject: "Introducing Mesh-PG"}
+get_thread_context("19b7e2682d15163d", response_format="detailed") → {messages: [...], subject: "Introducing Mesh-PG"}
 resolve_page("mesh-pg") → {exists: false, candidates: []}
 read_file("/raw/2026-04-15_mesh_pg_launch_abc.md")  # need exact wording for the API surface
 validate_page_draft(slug="mesh-pg", body="Mesh-PG is a ...", title="Mesh-PG", page_type="system")
@@ -501,7 +503,7 @@ Context: New email says "this replaces the refund policy published
 2026-03-01."
 
 ```
-get_thread_context("19b92d9b270daa57")
+get_thread_context("19b92d9b270daa57", response_format="concise") → {message_count: 3, first_subject: "Refund policy replacement"}
 resolve_page("refund-policy") → {exists: true, slug: "refund-policy", status: "active"}
 read_file("/wiki/policies/refund-policy.md")
 # Mark old superseded
@@ -549,7 +551,7 @@ real numbers and decisions — but the topic page already records
 those facts from an earlier message in the same thread.
 
 ```
-get_thread_context("thread_jkl012") → {messages: [earlier announcement, this reply, ...]}
+get_thread_context("thread_jkl012", response_format="detailed") → {messages: [earlier announcement, this reply, ...]}
 resolve_page("q1-campaign-rollout") → {exists: true, slug: "q1-campaign-rollout"}
 get_page_summary("q1-campaign-rollout") → section "Rollout decision" already cites the 2026-04-14 call
 log_insight(
@@ -580,7 +582,7 @@ Context: Email is a substantive status update but the topic page
 already has all the facts from earlier thread messages.
 
 ```
-get_thread_context("19b7e2682d15163d")
+get_thread_context("19b7e2682d15163d", response_format="concise") → {message_count: 5, first_subject: "Q1 status update"}
 resolve_page("q1-campaign-rollout") → {exists: true, slug: "q1-campaign-rollout"}
 get_page_summary("q1-campaign-rollout")
 read_file("/raw/2026-04-15_q1_status_xyz.md")   # confirm facts are identical

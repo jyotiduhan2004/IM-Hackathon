@@ -251,6 +251,10 @@ def list_wiki_pages(
     categories: tuple[str, ...] = AGENT_VISIBLE_CATEGORIES
 
     if response_format == "concise":
+        # page_type MUST stay in concise — two pages can share a slug across
+        # categories (e.g. `topic/seller-isq` and `system/seller-isq`), so
+        # dropping it collapses them in the agent's view. Cost: +8 tokens
+        # per page which is still well under the concise budget.
         pages: list[dict[str, str]] = []
         if wiki_path.exists():
             for category in categories:
@@ -262,6 +266,7 @@ def list_wiki_pages(
                         continue
                     slug = md_file.stem
                     title = slug
+                    page_type = ""
                     try:
                         content = md_file.read_text(encoding="utf-8")
                     except (OSError, UnicodeDecodeError):
@@ -270,7 +275,8 @@ def list_wiki_pages(
                         fm = _extract_frontmatter(content)
                         if fm:
                             title = str(fm.get("title") or slug)
-                    pages.append({"slug": slug, "title": title})
+                            page_type = str(fm.get("page_type") or "")
+                    pages.append({"slug": slug, "title": title, "page_type": page_type})
         return {"pages": pages}
 
     detailed: dict[str, list[dict[str, Any]]] = {c: [] for c in categories}

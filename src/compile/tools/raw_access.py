@@ -249,26 +249,40 @@ def get_thread_context(
             """,
             params,
         ).fetchall()
-    rows = cast(list[dict[str, Any]], raw_rows)
-    truncated = len(rows) > limit
-    rows = rows[:limit]
+        rows = cast(list[dict[str, Any]], raw_rows)
+        truncated = len(rows) > limit
+        rows = rows[:limit]
 
-    if response_format == "concise":
-        first_subject = str(rows[0]["subject"] or "") if rows else ""
-        latest_date: str | None = None
-        for row in reversed(rows):
-            date_val = row["date"]
-            if date_val:
-                latest_date = date_val.isoformat()
-                break
-        return {
-            "thread_id": thread_id,
-            "message_count": len(rows),
-            "first_subject": first_subject,
-            "latest_date": latest_date,
-            "cutoff_date": cutoff,
-            "truncated": truncated,
-        }
+        if response_format == "concise":
+            # `latest_date` = the thread's actual MAX(date) under the same
+            # chronological cutoff, NOT the last row of the paged window.
+            # Without this separate query, a truncated thread would report
+            # the last visible page's tail as "latest" — misleading the
+            # agent into thinking the thread is stale when reality is the
+            # thread has unread tail messages. See v10 followup P1-4 (#196).
+            max_row = cast(
+                dict[str, Any] | None,
+                conn.execute(
+                    f"""
+                    SELECT MAX(date) AS max_date
+                      FROM messages
+                     WHERE thread_id = %s
+                           {cutoff_clause}
+                    """,
+                    (thread_id, cutoff) if cutoff else (thread_id,),
+                ).fetchone(),
+            )
+            first_subject = str(rows[0]["subject"] or "") if rows else ""
+            max_date_val = (max_row or {}).get("max_date")
+            latest_date = max_date_val.isoformat() if max_date_val else None
+            return {
+                "thread_id": thread_id,
+                "message_count": len(rows),
+                "first_subject": first_subject,
+                "latest_date": latest_date,
+                "cutoff_date": cutoff,
+                "truncated": truncated,
+            }
 
     messages: list[dict[str, Any]] = []
     for row in rows:

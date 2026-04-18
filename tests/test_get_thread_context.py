@@ -22,7 +22,13 @@ from src.compile.compiler import get_thread_context
 
 
 class _FakeCursor:
-    """Minimal stand-in for a psycopg cursor returning a preset row list."""
+    """Minimal stand-in for a psycopg cursor returning a preset row list.
+
+    `fetchone` dispatches on the last executed SQL — the MAX(date) query
+    introduced by v10 followup P1-4 (#196) expects a single-row
+    `{"max_date": ...}` shape, whereas the page query's primary result
+    is fetched via `fetchall`.
+    """
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = rows
@@ -36,6 +42,14 @@ class _FakeCursor:
 
     def fetchall(self) -> list[dict[str, Any]]:
         return self._rows
+
+    def fetchone(self) -> dict[str, Any] | None:
+        max_date = None
+        for r in self._rows:
+            d = r.get("date")
+            if d and (max_date is None or d > max_date):
+                max_date = d
+        return {"max_date": max_date}
 
 
 class _FakeConn:
@@ -201,3 +215,71 @@ def test_get_thread_context_concise_respects_cutoff() -> None:
 
     assert result["cutoff_date"] == "2026-01-09T00:00:00+00:00"
     assert "date::date <= %s::date" in (cur.last_sql or "")
+
+
+class _TruncatedFakeCursor:
+    """Fake cursor that returns the windowed slice on fetchall + the real
+    thread-wide MAX(date) on fetchone. Exercises the split-query shape
+    introduced by v10 followup P1-4 (#196): a truncated thread's
+    ``latest_date`` must reflect the newest message in the DB, not the
+    newest message that fit in the ``limit``-sized window.
+    """
+
+    def __init__(
+        self,
+        windowed_rows: list[dict[str, Any]],
+        thread_max_date: datetime,
+    ) -> None:
+        self._rows = windowed_rows
+        self._max_date = thread_max_date
+        self._last_sql = ""
+
+    def execute(self, sql: str, params: tuple[Any, ...]) -> _TruncatedFakeCursor:
+        self._last_sql = sql
+        return self
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self._rows
+
+    def fetchone(self) -> dict[str, Any]:
+        return {"max_date": self._max_date}
+
+
+def test_concise_latest_date_reflects_thread_max_not_window_tail(tmp_path: Path) -> None:
+    """P1-4 (#196): truncated concise response reports thread's real latest_date."""
+    # Window returns only messages 1-2; real thread has a message on 2026-04-20.
+    raw1 = _seed_raw(tmp_path, "m1.md", "Body 1.")
+    raw2 = _seed_raw(tmp_path, "m2.md", "Body 2.")
+    windowed_rows = [
+        {
+            "message_id": "msg-001",
+            "raw_path": raw1,
+            "subject": "Launch",
+            "from_address": "alice@indiamart.com",
+            "date": datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC),
+            "compile_state": "compiled",
+        },
+        {
+            "message_id": "msg-002",
+            "raw_path": raw2,
+            "subject": "Re: Launch",
+            "from_address": "bob@indiamart.com",
+            "date": datetime(2026, 4, 11, 9, 0, 0, tzinfo=UTC),
+            "compile_state": "pending",
+        },
+    ]
+    # MAX(date) for the full thread is two entries newer than anything
+    # in the returned window — must still surface through `latest_date`.
+    cur = _TruncatedFakeCursor(
+        windowed_rows,
+        thread_max_date=datetime(2026, 4, 20, 15, 30, 0, tzinfo=UTC),
+    )
+
+    with patch("src.db.connect", return_value=_FakeConn(cur)):  # type: ignore[arg-type]
+        result = get_thread_context.invoke(
+            {"thread_id": "long-thread", "limit": 2, "response_format": "concise"}
+        )
+
+    # `latest_date` reflects the thread's true MAX(date), not the window tail.
+    assert result["latest_date"] == "2026-04-20T15:30:00+00:00"
+    assert result["message_count"] == 2
