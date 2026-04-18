@@ -9,6 +9,12 @@ the script is safe.
 Usage:
     uv run python scripts/backfill_trivial.py --limit 50
     uv run python scripts/backfill_trivial.py --limit 5000
+
+One-shot lifecycle:
+- Classification: one-shot-done
+- Last production run: 2026-04-18
+- Safe to delete after: 2026-05-15
+- Deletion gate: `migrate_legacy_pages.py` reports zero stragglers for 7 consecutive days.
 """
 
 from __future__ import annotations

@@ -66,6 +66,8 @@ Usage
     uv run python scripts/backfill_source_threads_and_touches.py --dry-run
     uv run python scripts/backfill_source_threads_and_touches.py --commit
     uv run python scripts/backfill_source_threads_and_touches.py --limit 50 --commit
+
+Lifecycle: bootstrap-recovery — not on hot path, but required to rebuild from scratch. Do NOT delete.
 """
 
 from __future__ import annotations

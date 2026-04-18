@@ -57,6 +57,12 @@ Usage
 The default is the safe one — you have to pass ``--commit`` to touch
 disk or the database. Dry-run writes a plan markdown to
 ``docs/audits/migration-plan-<ISO>.md``.
+
+One-shot lifecycle:
+- Classification: one-shot-done
+- Last production run: 2026-04-18
+- Safe to delete after: 2026-05-15
+- Deletion gate: `migrate_legacy_pages.py` reports zero stragglers for 7 consecutive days.
 """
 
 from __future__ import annotations

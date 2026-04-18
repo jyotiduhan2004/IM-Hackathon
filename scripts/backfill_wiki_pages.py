@@ -10,6 +10,8 @@ own their identity).
 
 Usage:
     uv run python scripts/backfill_wiki_pages.py
+
+Lifecycle: bootstrap-recovery — not on hot path, but required to rebuild from scratch. Do NOT delete.
 """
 
 from __future__ import annotations

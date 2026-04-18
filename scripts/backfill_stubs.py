@@ -17,6 +17,8 @@ Usage:
     uv run python scripts/backfill_stubs.py
     uv run python scripts/backfill_stubs.py --recompile
     uv run python scripts/backfill_stubs.py --dry-run
+
+Lifecycle: bootstrap-recovery — not on hot path, but required to rebuild from scratch. Do NOT delete.
 """
 
 from __future__ import annotations

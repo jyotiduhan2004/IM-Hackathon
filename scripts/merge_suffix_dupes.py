@@ -7,6 +7,12 @@ fields are union-merged. Wikilinks in other pages get rewritten from
 Usage:
     uv run python scripts/merge_suffix_dupes.py --dry-run
     uv run python scripts/merge_suffix_dupes.py       # commits changes
+
+One-shot lifecycle:
+- Classification: one-shot-done
+- Last production run: 2026-04-18
+- Safe to delete after: 2026-05-15
+- Deletion gate: no -new.md / -v2.md suffix files exist in wiki/ (grep -r '\-new\.md\|\-v2\.md' wiki/ returns empty).
 """
 
 from __future__ import annotations

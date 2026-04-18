@@ -13,6 +13,8 @@ walk the raw files once and queue inserts in the right order per file.
 
 Usage:
     uv run python scripts/backfill_users_threads_participants.py
+
+Lifecycle: bootstrap-recovery — not on hot path, but required to rebuild from scratch. Do NOT delete.
 """
 
 from __future__ import annotations

@@ -29,6 +29,12 @@ Flags:
 Usage:
     uv run python scripts/migrate_entity_slugs.py --dry-run
     uv run python scripts/migrate_entity_slugs.py --limit 20
+
+One-shot lifecycle:
+- Classification: one-shot-done
+- Last production run: 2026-04-18
+- Safe to delete after: 2026-05-15
+- Deletion gate: `migrate_legacy_pages.py` reports zero stragglers for 7 consecutive days.
 """
 
 from __future__ import annotations

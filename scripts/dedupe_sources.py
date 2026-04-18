@@ -35,6 +35,12 @@ Usage:
     uv run python scripts/dedupe_sources.py --dry-run
     uv run python scripts/dedupe_sources.py --min-sources 20  # only dedupe big pages
     uv run python scripts/dedupe_sources.py                   # apply to all
+
+One-shot lifecycle:
+- Classification: one-shot-done
+- Last production run: 2026-04-18
+- Safe to delete after: 2026-05-15
+- Deletion gate: no duplicate source_threads entries exist in wiki/ frontmatter (verify with --dry-run returning 0 pages).
 """
 
 from __future__ import annotations

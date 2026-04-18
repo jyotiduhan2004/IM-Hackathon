@@ -21,8 +21,7 @@ from src.db import wiki_pages as wiki_repo
 def _load_module() -> Any:
     """Import scripts/migrate_legacy_pages.py as a module.
 
-    Matches the pattern test_cleanup_auto_stubs uses — scripts aren't a
-    Python package, so we spec_from_file_location.
+    Scripts aren't a Python package, so we spec_from_file_location.
     """
     path = Path(__file__).parent.parent / "scripts" / "migrate_legacy_pages.py"
     spec = importlib.util.spec_from_file_location("_migrate_legacy_pages_for_test", path)
