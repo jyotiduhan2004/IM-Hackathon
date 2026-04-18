@@ -413,7 +413,7 @@ def check_my_work(
     Returns:
         ``{"ok": "true", "status": "clean", "warnings": N,
         "raw_email_path": str, "pages_critiqued": list[str], "audit": path}``
-          when blockers are resolved or acknowledged, OR
+        when blockers are resolved or acknowledged, OR
         ``{"ok": "false", "status": "blocked", "issues": [{id, check,
         page, message}, ...], "raw_email_path": str, "pages_critiqued":
         list[str], "audit": path, "hint": ...}`` when action is required.
