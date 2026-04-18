@@ -181,6 +181,47 @@ class TestGetPageSummaryTldr:
         )
         assert result["tldr"] == "Last section in the doc."
 
+    def test_tldr_preceded_by_other_h2(self, tmp_path: Path) -> None:
+        # Regression: non-TL;DR H2 before TL;DR must not abort scanning.
+        body = (
+            "## Background\n\nSome context.\n\n"
+            "## TL;DR\n\nThe real summary.\n\n"
+            "## Further reading\n\nStuff.\n"
+        )
+        _write(
+            tmp_path / "topics" / "tldr-middle.md",
+            {"title": "Middle", "page_type": "topic", "status": "active"},
+            body=body,
+        )
+        result = get_page_summary.invoke(
+            {"slug": "tldr-middle", "wiki_dir": str(tmp_path), "response_format": "concise"}
+        )
+        assert result["tldr"] == "The real summary."
+
+    def test_oversized_tldr_truncated_with_ellipsis(self, tmp_path: Path) -> None:
+        """P2 (#198 followup): runaway TL;DR capped at ~400 chars.
+
+        A pathological page that puts a whole essay under `## TL;DR`
+        must not blow the concise token budget. Full content stays
+        accessible via `read_file`.
+        """
+        long_tldr = "Lorem ipsum dolor sit amet. " * 50  # ~1400 chars
+        body = f"Lead.\n\n## TL;DR\n\n{long_tldr}\n\n## Next\n\nMore.\n"
+        _write(
+            tmp_path / "topics" / "tldr-big.md",
+            {"title": "Big", "page_type": "topic", "status": "active"},
+            body=body,
+        )
+        result = get_page_summary.invoke(
+            {"slug": "tldr-big", "wiki_dir": str(tmp_path), "response_format": "concise"}
+        )
+        tldr = result["tldr"]
+        assert tldr is not None
+        assert len(tldr) <= 400
+        assert tldr.endswith("…")
+        # The truncated content is still a prefix of what the page had.
+        assert tldr.startswith("Lorem ipsum")
+
 
 class TestListWikiPagesSourceThreads:
     def test_detailed_includes_source_thread_count_and_is_cited(self, tmp_path: Path) -> None:

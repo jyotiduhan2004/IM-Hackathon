@@ -1884,6 +1884,9 @@ def _extract_h2_headings(body: str) -> list[str]:
     return headings
 
 
+_TLDR_MAX_CHARS = 400
+
+
 def _extract_tldr(body: str) -> str | None:
     """Return the content of the page's `## TL;DR` (or `## TLDR`) H2.
 
@@ -1892,6 +1895,11 @@ def _extract_tldr(body: str) -> str | None:
     stripped. Returns None if no such section exists. Used by
     `get_page_summary` so agents can surface durable lead prose without
     re-reading the page.
+
+    Capped at `_TLDR_MAX_CHARS` chars with an ellipsis suffix when
+    longer — a runaway TL;DR section (e.g. agent wrote a whole essay
+    under the heading) must not blow the concise token budget. Full
+    content stays accessible via `read_file`.
     """
     in_tldr = False
     collected: list[str] = []
@@ -1901,14 +1909,25 @@ def _extract_tldr(body: str) -> str | None:
             if not in_tldr and heading in ("tl;dr", "tldr"):
                 in_tldr = True
                 continue
+            # Non-TL;DR H2: if we're inside the TL;DR section, we're done;
+            # otherwise we haven't entered yet and keep scanning.
             if in_tldr:
-                break  # next H2 — TL;DR is done
+                break
+            continue
         if in_tldr:
             collected.append(line)
-    if not in_tldr:
-        return None
+    # When we never entered the TL;DR block `collected` stays empty, so
+    # `text == ""` and the `if not text` guard returns None — no
+    # separate `if not in_tldr: return None` is needed.
     text = "\n".join(collected).strip()
-    return text or None
+    if not text:
+        return None
+    if len(text) > _TLDR_MAX_CHARS:
+        # Leave room for the ellipsis marker. Preserve trailing
+        # whitespace before the truncation point — `rstrip()` + `…`
+        # reads more naturally than a mid-word cut.
+        return text[: _TLDR_MAX_CHARS - 1].rstrip() + "…"
+    return text
 
 
 @tool
@@ -1933,11 +1952,12 @@ def get_page_summary(
         slug: kebab-case page identifier (without `.md`).
         wiki_dir: Root wiki directory. Default "wiki".
         response_format:
-          - "concise" (default, ~72 tokens) — `{found, slug, title,
-            first_paragraph, tldr}`. Cheapest "what is this about?"
-            probe. `tldr` is the content of any `## TL;DR` (or `## TLDR`)
-            section, or None if absent — pages that author one let
-            future calls skip the re-read.
+          - "concise" (default, ~150 tokens when TL;DR present; ~70
+            when absent) — `{found, slug, title, first_paragraph, tldr}`.
+            Cheapest "what is this about?" probe. `tldr` is the content
+            of any `## TL;DR` (or `## TLDR`) section (capped at 400
+            chars with an ellipsis), or None if absent — pages that
+            author one let future calls skip the re-read.
           - "detailed" (~206 tokens) — adds `page_type, status,
             headings, source_count, source_thread_count, is_cited,
             last_compiled`. Use when you also need the citation /
