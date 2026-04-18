@@ -15,6 +15,7 @@ from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
 from src.compile.middleware.path_autoheal import PathAutohealMiddleware
 from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
 from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
+from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
 
 __all__ = [
     "GATE_REJECT_MESSAGE",
@@ -28,4 +29,5 @@ __all__ = [
     "PathAutohealMiddleware",
     "ReadFileTruncationHintMiddleware",
     "SameThreadTopicGuardMiddleware",
+    "SiblingDraftCheckMiddleware",
 ]

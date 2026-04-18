@@ -82,6 +82,18 @@ _current_batch_topic_slugs_written: contextvars.ContextVar[set[str] | None] = (
     contextvars.ContextVar("current_batch_topic_slugs_written", default=None)
 )
 
+# Sibling-eligible page slugs (topic + system) the agent has written in
+# this batch. Populated by `SiblingDraftCheckMiddleware` to detect
+# near-duplicate page creations within a single batch — e.g. the Cycle
+# 10 case where one batch produced both `seller-bl-api-optimization`
+# and `seller-bl-api-hit-optimisation` from the same thread. The post-
+# hoc reviewer (v9-U14) catches these too, but only AFTER both pages
+# ship; this set lets the middleware reject the second write before it
+# lands. v11-U9.
+_current_batch_sibling_slugs_written: contextvars.ContextVar[set[str] | None] = (
+    contextvars.ContextVar("current_batch_sibling_slugs_written", default=None)
+)
+
 
 # === Custom Tools for the Compiler Agent ===
 
@@ -2184,6 +2196,7 @@ def create_compiler(
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
     from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
     from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
+    from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
     from src.compile.reviewer import build_reviewer_subagent
 
     model_name = model_name or settings.llm_model
@@ -2279,6 +2292,13 @@ def create_compiler(
             EntityWriteAutohealMiddleware(),
             LegacyPageHintMiddleware(),
             SameThreadTopicGuardMiddleware(),
+            # Sibling-aware draft check (v11-U9): catches batch-local
+            # near-duplicates BEFORE they hit disk, complementing
+            # SameThreadTopicGuardMiddleware (which is a hard topic-only
+            # block) and the v9-U14 reviewer merge-candidate queue
+            # (which is a post-hoc catch). Conservative thresholds to
+            # avoid false positives that erode agent trust.
+            SiblingDraftCheckMiddleware(),
             CheckMyWorkGateMiddleware(),
             # Glob narrowed 2026-04-18 (v10-U5): 24.5% of glob calls were
             # `**/<slug>.md` slug lookups timing out at 20s. Reject those
@@ -2562,6 +2582,7 @@ def run_compilation(
         cutoff_token = _current_batch_cutoff_date.set(cutoff_date)
         thread_id_token = _current_batch_thread_id.set(batch_thread_id)
         topic_slugs_token = _current_batch_topic_slugs_written.set(set())
+        sibling_slugs_token = _current_batch_sibling_slugs_written.set(set())
         try:
             result = agent.invoke(
                 {"messages": [{"role": "user", "content": instruction}]},
@@ -2570,6 +2591,7 @@ def run_compilation(
             _check_silent_fail(result, model=model_name)
             return result
         finally:
+            _current_batch_sibling_slugs_written.reset(sibling_slugs_token)
             _current_batch_topic_slugs_written.reset(topic_slugs_token)
             _current_batch_thread_id.reset(thread_id_token)
             _current_batch_cutoff_date.reset(cutoff_token)
