@@ -15,6 +15,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -413,8 +414,6 @@ def test_detailed_payload_larger_than_concise(tmp_path: Path) -> None:
     modes grew feature-parity with the other, collapsing the point
     of having two response formats.
     """
-    import json
-
     rows = [
         {
             "message_id": f"msg-{i:03d}",

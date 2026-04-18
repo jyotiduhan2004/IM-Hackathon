@@ -187,33 +187,19 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
             "guidance": guidance,
         }
 
-    @staticmethod
-    def _should_record(result: ToolMessage | Command[Any]) -> bool:
-        """True when the handler's result is a successful persisted write.
-
-        Error results must NOT pollute the sibling-slug set: a downstream
-        middleware (e.g. `EditPayloadSanityMiddleware`, `SameThreadTopicGuardMiddleware`)
-        can reject a write after us, so nothing actually lands on disk.
-        Recording anyway would block a legitimate retry with a spurious
-        `sibling_draft_overlap`. Non-`ToolMessage` results (e.g. `Command`
-        returned by a handler that rerouted) are treated conservatively:
-        don't record, since we can't confirm the write succeeded.
-        """
-        if not isinstance(result, ToolMessage):
-            return False
-        return result.status != "error"
-
     def _record_write(self, slug: str | None, result: ToolMessage | Command[Any]) -> None:
         """After a successful write, register the slug for future comparisons.
 
-        No-ops when:
-          - the slug isn't sibling-tracked;
-          - the ContextVar is unset (tests / outside a compile run);
-          - the tool result indicates an error (see `_should_record`).
+        Skips when the slug isn't sibling-tracked, the ContextVar is
+        unset (tests / outside a compile run), OR the handler returned
+        an error. Error results (`ToolMessage(status="error")` from a
+        downstream middleware like `EditPayloadSanityMiddleware`, or a
+        `Command` we can't introspect) would otherwise block a legitimate
+        retry with a spurious `sibling_draft_overlap`.
         """
         if slug is None:
             return
-        if not self._should_record(result):
+        if not isinstance(result, ToolMessage) or result.status == "error":
             return
         from src.compile.compiler import _current_batch_sibling_slugs_written
 

@@ -32,11 +32,14 @@ def _cutoff_to_date(cutoff: str | None) -> str | None:
     is `2026-01-14T08:30:12`, messages dated `2026-01-14` at any time
     are still visible. Returning the date-only form avoids implying a
     sub-day cutoff that isn't actually enforced.
+
+    ISO 8601 always starts with `YYYY-MM-DD` so the first 10 chars are
+    the date prefix — matches `chronological_scope._cutoff_date`'s
+    `raw[:10]` trick. Empty / None / too-short inputs return None.
     """
-    if not cutoff:
+    if not cutoff or len(cutoff) < 10:
         return None
-    # Split on `T` (ISO 8601) or space — take the date prefix regardless.
-    return cutoff.split("T", 1)[0].split(" ", 1)[0]
+    return cutoff[:10]
 
 
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
