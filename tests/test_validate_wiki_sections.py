@@ -1,10 +1,14 @@
 """Section-template checks in scripts/validate_wiki.py.
 
-Topic/system/policy pages should carry the required H2 sections defined in the
-Phase 1 wiki IA plan. Default: warn-only (informational); `--strict-sections`
-promotes missing sections to errors so CI can enforce drift. Entity and
-timeline pages are deliberately not checked — their templates are out of
-scope for this validator.
+Topic/system/policy pages benefit from the suggested H2 sections defined in
+the Phase 1 wiki IA plan. Default: warn-only (informational);
+`--strict-sections` promotes missing sections to errors so CI can enforce
+drift. Entity and timeline pages are deliberately not checked — their
+templates are out of scope for this validator.
+
+v11-U7: error code is `suggested-sections-missing` (was `{topic,system,
+policy}-sections`); `check_required_sections` was renamed to
+`check_suggested_sections`. Vocabulary-only — behavior unchanged.
 """
 
 from __future__ import annotations
@@ -39,14 +43,14 @@ FIXTURE_WIKI = REPO_ROOT / "tests" / "fixtures" / "validate_sections_fixture" / 
 
 def test_warns_on_missing_sections_by_default() -> None:
     """Default mode: bad-topic + bad-system each produce 1 warning, 0 errors."""
-    errors, warnings = validator.check_required_sections(FIXTURE_WIKI)
+    errors, warnings = validator.check_suggested_sections(FIXTURE_WIKI)
     assert errors == []
     assert len(warnings) == 2
     by_page = {w.page.name: w for w in warnings}
     assert "bad-topic.md" in by_page
     assert "bad-system.md" in by_page
-    assert by_page["bad-topic.md"].check == "topic-sections"
-    assert by_page["bad-system.md"].check == "system-sections"
+    assert by_page["bad-topic.md"].check == "suggested-sections-missing"
+    assert by_page["bad-system.md"].check == "suggested-sections-missing"
     # bad-topic omits "Open questions" and "References"
     assert "Open questions" in by_page["bad-topic.md"].reason
     assert "References" in by_page["bad-topic.md"].reason
@@ -56,7 +60,7 @@ def test_warns_on_missing_sections_by_default() -> None:
 
 def test_strict_promotes_warnings_to_errors() -> None:
     """`strict=True` flips both warnings into errors, none left warning."""
-    errors, warnings = validator.check_required_sections(FIXTURE_WIKI, strict=True)
+    errors, warnings = validator.check_suggested_sections(FIXTURE_WIKI, strict=True)
     assert warnings == []
     assert len(errors) == 2
     names = {e.page.name for e in errors}
@@ -64,9 +68,9 @@ def test_strict_promotes_warnings_to_errors() -> None:
 
 
 def test_entity_and_timeline_pages_are_never_checked() -> None:
-    """Entity/timeline pages live in categories not in REQUIRED_SECTIONS —
+    """Entity/timeline pages live in categories not in SUGGESTED_SECTIONS —
     no warning or error should mention them, ever."""
-    errors, warnings = validator.check_required_sections(FIXTURE_WIKI)
+    errors, warnings = validator.check_suggested_sections(FIXTURE_WIKI)
     all_names = [e.page.name for e in errors] + [w.page.name for w in warnings]
     assert "jane-doe.md" not in all_names
     assert "migration.md" not in all_names
@@ -75,10 +79,10 @@ def test_entity_and_timeline_pages_are_never_checked() -> None:
 def test_case_insensitive_substring_match() -> None:
     """`good-topic.md` uses lowercase `## current state` — must still count.
 
-    Required sections are checked via `substring.lower() in heading.lower()`,
+    Suggested sections are checked via `substring.lower() in heading.lower()`,
     so renames like `## Current state (2026)` still satisfy `Current state`.
     """
-    errors, warnings = validator.check_required_sections(FIXTURE_WIKI)
+    errors, warnings = validator.check_suggested_sections(FIXTURE_WIKI)
     flagged = {w.page.name for w in warnings} | {e.page.name for e in errors}
     assert "good-topic.md" not in flagged
     assert "good-system.md" not in flagged
@@ -101,7 +105,7 @@ def test_headings_inside_fenced_code_blocks_do_not_count(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    errors, _warnings = validator.check_required_sections(tmp_path, strict=True)
+    errors, _warnings = validator.check_suggested_sections(tmp_path, strict=True)
     flagged = {e.page.name for e in errors}
     assert "only-fenced.md" in flagged
 

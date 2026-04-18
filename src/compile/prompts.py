@@ -145,25 +145,29 @@ the only three values you emit.
 If a topic AND a system both apply, create both: the system page
 describes the durable noun; each topic page describes a change on it.
 
-**Required H2 sections** — the validator enforces a canonical section
-shape per page type. Use these exact headings (case-insensitive
-substring match, so "Key decisions made in 2026" satisfies "Key
-decisions"). Mirror this list exactly — drift breaks validation:
+**Suggested H2 sections** — most pages benefit from this canonical
+shape. It's a template, not a law: if your content genuinely needs
+a different structure, choose structural names (not thread-subject
+vocabulary like "Launch Announcement" or "Bug report"), and the
+reviewer will evaluate whether it fits. For most topics this shape
+is the right choice — deviate only with a reason.
 
-- **topic** (in order): `## Summary` → `## Current state` →
+- **topic**: `## Summary` → `## Current state` →
   `## Why it matters` → `## Key decisions` → `## Recent changes` →
   `## Open questions` → `## Related pages` → `## References`.
-- **system** (in order): `## Summary` → `## Role` →
+- **system**: `## Summary` → `## Role` →
   `## Active related topics` → `## Dependencies` →
   `## Known issues` → `## Related pages` → `## References`.
-- **policy** (in order): `## Current policy` → `## Who it affects` →
+- **policy**: `## Current policy` → `## Who it affects` →
   `## Effective date` → `## Supersedes` → `## History` →
   `## References`.
 
-Empty sections are fine on first write (use "None documented yet."
-as a placeholder). Later batches fill them in. What you MUST NOT do
-is omit the heading — the validator reads missing headings as
-"this page has the wrong shape."
+Empty sections are fine on first write (`None documented yet.`).
+Thread-subject vocabulary as H2 (e.g., "Launch Announcement",
+"Bug report", "QA Testing Results", "Next Steps and Follow-up")
+signals the page is describing one email's narrative flow rather
+than the concept — reviewer flags this as `filing_cabinet` /
+`structure_mismatch`.
 
 **Lead paragraph** — before the first H2, every topic and policy
 page needs ≥ 2 complete sentences summarising what this page is

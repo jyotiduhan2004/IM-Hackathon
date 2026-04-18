@@ -21,9 +21,10 @@ Checks (WARN severity — stderr only, no exit-code effect):
 - Entity `email:` is a valid RFC-ish address (entity-invalid-email)
 - Entity slug matches email_to_slug(email) (entity-slug-mismatch —
   legacy display-name slugs are flagged but not blocked)
-- Topic/system/policy page has the required H2 sections for its type
-  ({topic,system,policy}-sections). Promoted to ERROR with
-  `--strict-sections`.
+- Topic/system/policy page has the suggested H2 sections for its type
+  (suggested-sections-missing). Promoted to ERROR with
+  `--strict-sections`. v11-U7: vocabulary-only rename — agents now treat
+  the shape as a template, not a law; reviewer makes the final call.
 - Topic/policy page opens with a ≥2-sentence lead paragraph before the
   first H2 ({topic,policy}-lead-paragraph). Warning-only for now — legacy
   pages have this pattern and we don't want to break CI immediately.
@@ -100,39 +101,18 @@ CATEGORY_TO_TYPE = {
     "conflicts": "conflict",
 }
 
-# Required H2 section headings per page type. Source: Phase 1 wiki IA plan in
-# `docs/issues/09-internal-wiki-structure.md` (Topic/System/Policy templates).
-# Match is substring + case-insensitive so minor renames like "Key decisions
-# made in 2026" still satisfy "Key decisions".
-REQUIRED_SECTIONS: dict[str, list[str]] = {
-    "topic": [
-        "Summary",
-        "Current state",
-        "Why it matters",
-        "Key decisions",
-        "Recent changes",
-        "Open questions",
-        "Related pages",
-        "References",
-    ],
-    "system": [
-        "Summary",
-        "Role",
-        "Active related topics",
-        "Dependencies",
-        "Known issues",
-        "Related pages",
-        "References",
-    ],
-    "policy": [
-        "Current policy",
-        "Who it affects",
-        "Effective date",
-        "Supersedes",
-        "History",
-        "References",
-    ],
-}
+# Suggested H2 section headings per page type. Sourced from the shared
+# `src.compile.section_shapes` module so the validator, the post-write
+# critique, and the prompt can't drift apart.
+#
+# Match is substring + case-insensitive so minor renames like "Key
+# decisions made in 2026" still satisfy "Key decisions".
+#
+# v11-U7 renamed the dict from REQUIRED_SECTIONS → SUGGESTED_SECTIONS
+# to match the new "deterministic propose, LLM dispose" framing —
+# critique counts (warning-severity), reviewer makes the final judgment
+# call. Validator still enforces the same shape for backlog reporting.
+from src.compile.section_shapes import SUGGESTED_SECTIONS  # noqa: E402
 
 
 @dataclass
@@ -1043,15 +1023,21 @@ def check_dated_h2_sections(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
-def check_required_sections(
+def check_suggested_sections(
     wiki_dir: Path, *, strict: bool = False
 ) -> tuple[list[Error], list[ValidationWarning]]:
-    """For topic/system/policy pages, verify required H2 headings exist.
+    """For topic/system/policy pages, report missing suggested H2 headings.
 
-    Loose match: each required section name must appear as substring of some
+    Loose match: each suggested section name must appear as substring of some
     H2 (case-insensitive). `strict=True` promotes missing sections to errors
     so CI can fail on drift; by default they're warnings so legacy pages
     don't block the pipeline.
+
+    v11-U7 vocabulary change: error code is now `suggested-sections-missing`
+    (was `{topic,system,policy}-sections`) to match the new "deterministic
+    propose, LLM dispose" split. The check still runs deterministically;
+    final judgement on "is the chosen structure OK?" lives in the reviewer
+    (`filing_cabinet` / `structure_mismatch` rules).
     """
     errors: list[Error] = []
     warnings: list[ValidationWarning] = []
@@ -1064,7 +1050,7 @@ def check_required_sections(
         cat_dir = wiki_dir / category
         if not cat_dir.exists():
             continue
-        required = REQUIRED_SECTIONS[page_type]
+        suggested = SUGGESTED_SECTIONS[page_type]
         for path in cat_dir.glob("*.md"):
             try:
                 content = path.read_text(encoding="utf-8")
@@ -1075,13 +1061,15 @@ def check_required_sections(
             # snippet can't falsely satisfy the Summary requirement.
             body_no_fences = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
             headings_lower = [h.strip().lower() for h in heading_re.findall(body_no_fences)]
-            missing = [sec for sec in required if not any(sec.lower() in h for h in headings_lower)]
+            missing = [
+                sec for sec in suggested if not any(sec.lower() in h for h in headings_lower)
+            ]
             if missing:
-                reason = f"missing required H2 sections for {page_type}: {missing}"
+                reason = f"missing suggested H2 sections for {page_type}: {missing}"
                 if strict:
                     errors.append(Error(path, reason))
                 else:
-                    warnings.append(ValidationWarning(path, reason, f"{page_type}-sections"))
+                    warnings.append(ValidationWarning(path, reason, "suggested-sections-missing"))
     return errors, warnings
 
 
@@ -1238,7 +1226,7 @@ def run(
     errors.extend(check_duplicate_headings(wiki_dir))
     errors.extend(check_broken_wikilinks(wiki_dir))
     warnings = check_entity_identity(wiki_dir)
-    section_errors, section_warnings = check_required_sections(wiki_dir, strict=strict_sections)
+    section_errors, section_warnings = check_suggested_sections(wiki_dir, strict=strict_sections)
     errors.extend(section_errors)
     warnings.extend(section_warnings)
     warnings.extend(check_lead_paragraph(wiki_dir))

@@ -96,6 +96,26 @@ Warnings (verdict=revise):
   activity). Legacy statuses (`current`, `contested`) are retired;
   writers emit `active`/`superseded`/`archived` only.
 - `filing_cabinet` — reads like stapled emails, not a concept page.
+  A strong signal is THREAD-SUBJECT TEMPLATING in H2s: if the H2 list
+  is "Launch Announcement", "Bug report", "QA Testing Results",
+  "Next Steps", "Vote of thanks", etc., the page is describing one
+  email's narrative flow instead of the concept. Structural H2s
+  survive multiple emails; thread-subject H2s fragment.
+- `structure_mismatch` — the page's H2 structure doesn't fit its
+  content. Two flavors:
+  (a) zero or near-zero canonical H2s (Summary / Current state /
+      Why it matters / Key decisions / Recent changes / Open
+      questions / Related pages / References for topics; Role /
+      Active related topics / Dependencies / Known issues for
+      systems) AND the H2s that ARE present look like thread-
+      subject vocabulary → suggest the canonical shape.
+  (b) custom H2s that look coherent and structural (e.g.,
+      "Architecture", "Deployment plan", "Phases") → PASS; the
+      agent chose a reasonable alternative structure. Don't force
+      the 8-H2 template when the content asks for a different
+      shape.
+  Use judgement. Err toward `pass` when the page is synthesised
+  and readable; toward `revise` when H2s are one-email-narrative.
 - `broken_wikilink` — `[[slug]]` that `resolve_page` can't find.
 - `dated_h2` — H2 bakes in a date/month/person name. Canonical H2s
   (`## Current state`, `## Testing results`, `## Recent changes`)

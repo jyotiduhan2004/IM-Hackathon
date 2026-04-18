@@ -87,13 +87,14 @@ def test_decision_guidance_lives_in_workflow() -> None:
 
 def test_workflow_prompt_under_budget() -> None:
     """Informational token-budget guard. v10-U4 merged two ~1700-token
-    sections into one; post-merge the prompt is ~28k chars / ~7k tokens.
-    The ceiling is 30000 chars — crossing it means a later edit
-    re-introduced duplication or bloat. Raise only on a deliberate
-    feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 30000, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v10-U4 baseline "
-        "was ~28k. If the growth is deliberate, raise this ceiling; otherwise "
+    sections into one; v11-U7 reframed Required→Suggested H2s and added
+    thread-subject anti-pattern call-outs (~200 chars). The ceiling is
+    30500 chars — crossing it means a later edit re-introduced
+    duplication or bloat. Raise only on a deliberate feature that
+    genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 30500, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v11-U7 baseline "
+        "was ~30k. If the growth is deliberate, raise this ceiling; otherwise "
         "it's probably re-introduced duplication."
     )
 
@@ -473,14 +474,14 @@ def test_prompt_has_no_internals() -> None:
     )
 
 
-def test_topic_required_h2_sections_taught() -> None:
-    """v9-U1: the validator enforces 8 required H2 sections on topic
-    pages (Summary / Current state / Why it matters / Key decisions /
-    Recent changes / Open questions / Related pages / References).
-    Until Cycle 9 the prompt didn't name any of them; every fresh
-    compile added to the missing-sections backlog. This test pins the
-    teaching in place so future edits can't quietly drop it."""
-    required = (
+def test_topic_suggested_h2_sections_taught() -> None:
+    """v11-U7: the prompt teaches 8 suggested H2 sections on topic pages
+    (Summary / Current state / Why it matters / Key decisions / Recent
+    changes / Open questions / Related pages / References) as a
+    template, not a law. Reviewer evaluates whether the chosen
+    structure fits. Pin the heading list so future edits can't
+    quietly drop the menu."""
+    suggested = (
         "## Summary",
         "## Current state",
         "## Why it matters",
@@ -490,19 +491,51 @@ def test_topic_required_h2_sections_taught() -> None:
         "## Related pages",
         "## References",
     )
-    missing = [s for s in required if s not in COMPILER_SYSTEM_PROMPT]
-    assert not missing, f"prompt must name topic required H2 sections; missing: {missing}"
+    missing = [s for s in suggested if s not in COMPILER_SYSTEM_PROMPT]
+    assert not missing, f"prompt must name topic suggested H2 sections; missing: {missing}"
 
 
-def test_system_required_h2_sections_taught() -> None:
-    """v9-U1: system pages also have a canonical H2 shape enforced by
-    the validator. `## Role` and `## Active related topics` are the
+def test_system_suggested_h2_sections_taught() -> None:
+    """v11-U7: system pages have a canonical H2 shape suggested in the
+    prompt. `## Role` and `## Active related topics` are the
     system-specific ones; `## Summary` / `## References` / `## Related
     pages` overlap with topic. Pin them so the prompt mirrors the
-    validator."""
+    template."""
     system_specific = ("## Role", "## Active related topics", "## Dependencies", "## Known issues")
     missing = [s for s in system_specific if s not in COMPILER_SYSTEM_PROMPT]
-    assert not missing, f"prompt must name system required H2 sections; missing: {missing}"
+    assert not missing, f"prompt must name system suggested H2 sections; missing: {missing}"
+
+
+def test_suggested_h2_section_framing_present() -> None:
+    """v11-U7: the prompt frames the H2 list as "Suggested" not "Required",
+    and explicitly calls out thread-subject vocabulary as the anti-pattern
+    the reviewer flags via `filing_cabinet` / `structure_mismatch`."""
+    assert "Suggested H2 sections" in COMPILER_SYSTEM_PROMPT, (
+        "v11-U7 expects 'Suggested H2 sections' framing in <page_types>"
+    )
+    # Old "Required" / "MUST NOT omit" / "drift breaks validation" framing
+    # must be gone — that vocabulary teaches the agent the wrong contract.
+    assert "Required H2 sections" not in COMPILER_SYSTEM_PROMPT, (
+        "v11-U7 dropped 'Required H2 sections' framing — use 'Suggested'"
+    )
+    assert "MUST NOT do\nis omit the heading" not in COMPILER_SYSTEM_PROMPT
+    assert "drift breaks validation" not in COMPILER_SYSTEM_PROMPT
+
+
+def test_thread_subject_vocabulary_named_as_antipattern() -> None:
+    """v11-U7: the prompt must name concrete thread-subject H2 examples
+    so the agent recognises the failure pattern. Without examples the
+    nudge is abstract and the model defaults to its priors (templating
+    H2s off the thread Subject line)."""
+    examples = ("Launch Announcement", "Bug report", "QA Testing Results")
+    present = [ex for ex in examples if ex in COMPILER_SYSTEM_PROMPT]
+    assert len(present) >= 2, (
+        f"prompt must name at least 2 thread-subject H2 anti-patterns; got {present}"
+    )
+    # The reviewer rule names must be referenced so the agent knows
+    # what verdict to expect.
+    assert "filing_cabinet" in COMPILER_SYSTEM_PROMPT
+    assert "structure_mismatch" in COMPILER_SYSTEM_PROMPT
 
 
 def test_lead_paragraph_requirement_taught() -> None:
@@ -589,18 +622,22 @@ def test_prompt_domain_list_matches_compiler() -> None:
 
 
 def test_prompt_topic_sections_match_validator() -> None:
-    """v9-U1: the prompt's required-topic-sections list must match the
-    validator's `REQUIRED_SECTIONS['topic']`. Drift here silently
-    produces pages the agent thinks are valid but the validator rejects —
-    the exact failure mode Cycle 9 surfaced. Pin the invariant."""
-    from scripts.validate_wiki import REQUIRED_SECTIONS
+    """v9-U1: the prompt's suggested-topic-sections list must match the
+    validator's `SUGGESTED_SECTIONS['topic']`. Drift here silently
+    produces pages the agent thinks are valid but the validator
+    flags as missing — the exact failure mode Cycle 9 surfaced. Pin
+    the invariant.
 
-    for section in REQUIRED_SECTIONS["topic"]:
+    v11-U7: dict was renamed REQUIRED_SECTIONS → SUGGESTED_SECTIONS
+    and now lives in `src.compile.section_shapes`."""
+    from src.compile.section_shapes import SUGGESTED_SECTIONS
+
+    for section in SUGGESTED_SECTIONS["topic"]:
         heading = f"## {section}"
         assert heading in COMPILER_SYSTEM_PROMPT, (
-            f"validator requires {heading!r} on topic pages but prompt "
+            f"validator suggests {heading!r} on topic pages but prompt "
             "doesn't teach it — keep prompt in sync with "
-            "scripts.validate_wiki.REQUIRED_SECTIONS"
+            "src.compile.section_shapes.SUGGESTED_SECTIONS"
         )
 
 

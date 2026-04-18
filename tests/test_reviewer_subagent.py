@@ -178,6 +178,42 @@ def test_reviewer_prompt_frames_reviewer_as_editor_not_linter() -> None:
     assert "editorial_notes" in prompt
 
 
+def test_reviewer_prompt_teaches_filing_cabinet_thread_subject_signal() -> None:
+    """v11-U7: `filing_cabinet` rule must name the THREAD-SUBJECT
+    TEMPLATING signal — without concrete examples (Launch Announcement,
+    Bug report, QA Testing Results, etc.) the rule is too fuzzy to fire
+    on the failure pattern Cycle 10 surfaced (3/3 topic pages with zero
+    canonical H2s)."""
+    spec = build_reviewer_subagent()
+    prompt = spec["system_prompt"]
+    assert isinstance(prompt, str)
+    assert "filing_cabinet" in prompt
+    # The expanded rule must call out thread-subject templating
+    # explicitly so the reviewer recognises the pattern.
+    assert "THREAD-SUBJECT" in prompt or "thread-subject" in prompt.lower()
+    # Concrete examples from the audit so the rule has anchors to fire on.
+    examples = ("Launch Announcement", "Bug report", "QA Testing Results")
+    present = [ex for ex in examples if ex in prompt]
+    assert len(present) >= 2, (
+        f"reviewer prompt must name at least 2 thread-subject H2 examples; got {present}"
+    )
+
+
+def test_reviewer_prompt_teaches_structure_mismatch_rule() -> None:
+    """v11-U7: new `structure_mismatch` rule. Reviewer evaluates whether
+    the chosen H2 structure fits the page — flag (a) zero canonical H2s
+    + thread-subject templating, PASS (b) coherent custom structures."""
+    spec = build_reviewer_subagent()
+    prompt = spec["system_prompt"]
+    assert isinstance(prompt, str)
+    assert "structure_mismatch" in prompt
+    # The rule must teach BOTH flavors so the reviewer doesn't
+    # over-trigger on legitimate alternative structures.
+    lowered = prompt.lower()
+    assert "canonical" in lowered
+    assert "alternative structure" in lowered or "different shape" in lowered
+
+
 def test_reviewer_prompt_teaches_structural_integrity_checks() -> None:
     # Deep-audit follow-up: the reviewer must flag edit_file corruption
     # patterns the deterministic coordinator can't reliably catch. Four

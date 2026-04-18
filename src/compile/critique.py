@@ -27,6 +27,7 @@ from pathlib import Path
 
 import yaml
 
+from src.compile.section_shapes import SUGGESTED_SECTIONS
 from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
 from src.utils.wikilinks import WIKILINK_RE
@@ -271,6 +272,57 @@ def _check_stray_bracket(page: Path, repo_root: Path, body: str) -> list[Issue]:
     return []
 
 
+# Threshold per page type for "too few suggested H2s present". Set to
+# half-or-less of the canonical list — enough latitude for genuinely
+# alternative structures, tight enough to flag thread-subject-templated
+# pages with zero canonical H2s. Reviewer takes the final call.
+_SUGGESTED_H2_FLOOR: dict[str, int] = {
+    "topic": 4,  # 4/8
+    "system": 4,  # 4/7
+    "policy": 3,  # 3/6
+}
+
+
+def _check_suggested_h2_sections(
+    page: Path, repo_root: Path, body: str, page_type: str | None
+) -> list[Issue]:
+    """Warning-only: count present canonical H2s vs. SUGGESTED_SECTIONS.
+
+    Skips decision/people/glossary — only topic/system/policy carry the
+    canonical shape. The rule emits one warning per page when the count
+    falls below `_SUGGESTED_H2_FLOOR[page_type]`. Severity is always
+    `warning`; final judgment ("does the chosen structure fit?") lives
+    in the reviewer (`filing_cabinet` / `structure_mismatch`).
+    """
+    if page_type not in SUGGESTED_SECTIONS:
+        return []
+    suggested = SUGGESTED_SECTIONS[page_type]
+    floor = _SUGGESTED_H2_FLOOR[page_type]
+
+    headings_lower = [h.strip().lower() for h in _H2_RE.findall(body)]
+    present = [s for s in suggested if any(s.lower() in h for h in headings_lower)]
+    missing = [s for s in suggested if s not in present]
+    if len(present) >= floor:
+        return []
+
+    relp = _relpath(page, repo_root)
+    msg = (
+        f"present {len(present)}/{len(suggested)} suggested H2s: {present}; "
+        f"missing: {missing}. If these don't apply to this page, explain in "
+        "the body or add placeholder sections with 'None documented yet.' "
+        "Reviewer will evaluate if the chosen structure fits."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "missing_suggested_h2s", msg),
+            "warning",
+            "missing_suggested_h2s",
+            relp,
+            msg,
+        )
+    ]
+
+
 def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> CritiqueResult:
     """Run all checks against the given wiki pages."""
     known_slugs: set[str] = set()
@@ -304,10 +356,18 @@ def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> Critiq
             continue
 
         _, body = split_frontmatter(content)
+        # `_check_frontmatter` above already parsed the FM and would have
+        # bailed via fm_blocked if it were unparseable — so the second
+        # parse here via `extract_frontmatter` is safe and never errors.
+        # Worth the second parse for the simpler call site.
+        pt = extract_frontmatter(content).get("page_type")
+        page_type = pt if isinstance(pt, str) else None
+
         issues.extend(_check_duplicate_h2(page, repo_root, body))
         issues.extend(_check_broken_wikilinks(page, repo_root, body, known_slugs))
         issues.extend(_check_h1_in_body(page, repo_root, body))
         issues.extend(_check_stray_bracket(page, repo_root, body))
+        issues.extend(_check_suggested_h2_sections(page, repo_root, body, page_type))
 
     return CritiqueResult(issues=issues, pages_critiqued=pages_rel)
 

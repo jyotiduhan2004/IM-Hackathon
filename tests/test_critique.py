@@ -199,3 +199,60 @@ def test_critique_flags_missing_required_fields(tmp_path: Path, missing_field: s
     assert any(
         b.check == "required-field" and missing_field in b.message for b in result.blockers
     ), result.issues
+
+
+def test_missing_suggested_h2s_warns(tmp_path: Path) -> None:
+    """v11-U7: a topic page with thread-subject-templated H2s and
+    zero canonical sections must surface a `missing_suggested_h2s`
+    warning naming the present + missing slots. Severity is always
+    `warning` — reviewer takes the final call."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "launch-foo.md"
+    _write_page(
+        page,
+        "Launch Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n## Launch Announcement\nDetails.\n\n"
+        "## Bug report\nThings.\n\n## QA Testing Results\nResults.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [w for w in result.warnings if w.check == "missing_suggested_h2s"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    msg = matches[0].message
+    assert "Summary" in msg
+    assert "Current state" in msg
+    assert "missing" in msg
+    # Severity is warning — never blocker.
+    assert all(b.check != "missing_suggested_h2s" for b in result.blockers)
+
+
+def test_suggested_h2s_complete_no_warning(tmp_path: Path) -> None:
+    """A topic page that hits the floor (≥4/8) does NOT warn."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "complete.md"
+    _write_page(
+        page,
+        "Complete",
+        ["raw/x.md"],
+        "\nLead paragraph here.\n\n## Summary\nA.\n\n"
+        "## Current state\nB.\n\n## Why it matters\nC.\n\n"
+        "## Key decisions\nD.\n\n## Recent changes\nE.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "missing_suggested_h2s" for w in result.warnings)
+
+
+def test_suggested_h2s_skips_decision_pages(tmp_path: Path) -> None:
+    """Decision pages have no canonical shape — the rule must not fire
+    on `page_type: decision`."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "decisions" / "scale-foo.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "---\ntitle: Scale Foo\npage_type: decision\nstatus: active\n"
+        "sources:\n- raw/x.md\n---\n\n"
+        "Lead paragraph.\n\n## Random Heading\nBody.\n",
+        encoding="utf-8",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "missing_suggested_h2s" for w in result.warnings)
