@@ -158,11 +158,17 @@ class _PageOutcome:
 
 
 def _has_domain(fm: dict[str, object]) -> bool:
-    """True iff frontmatter's `domain:` is a non-empty string.
+    """True iff frontmatter declares at least one domain.
 
-    Matches the skip logic in `check_missing_domain` in
-    `scripts/validate_wiki.py`: empty string counts as missing.
+    Accepts either the singular `domain:` string or the plural
+    `domains:` list (v10-U2). Matches the skip logic in
+    `check_missing_domain` in `scripts/validate_wiki.py` so this
+    backfill doesn't rewrite pages that already self-declared
+    via the multi-value form.
     """
+    plural = fm.get("domains")
+    if isinstance(plural, list) and plural:
+        return True
     domain = fm.get("domain")
     return isinstance(domain, str) and bool(domain.strip())
 

@@ -805,13 +805,48 @@ def check_lead_paragraph(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
+def _extract_domain_values(fm: dict[str, Any]) -> tuple[list[str], str | None]:
+    """Return (domain_values, source_field) from frontmatter.
+
+    A page may use either the singular `domain:` string or the plural
+    `domains:` list (v10-U2). When both are set, `domains:` wins and
+    `domain:` is ignored — the precedence matches the viewer's
+    `_render_domain_badges` so validator + viewer agree on "which
+    domains does this page belong to?". Keeps the failure mode simple:
+    a page only needs to be invalid under ONE field.
+
+    An empty plural list (`domains: []`) falls back to the singular
+    form — otherwise a well-meaning "clear the list" edit would flip
+    a valid page into `domain-missing`.
+
+    Returns `([], None)` when neither field is populated; callers treat
+    that as `domain-missing`.
+    """
+    plural = fm.get("domains")
+    if isinstance(plural, list) and plural:
+        return ([v for v in plural if v is not None], "domains")
+    singular = fm.get("domain")
+    if singular is None or (isinstance(singular, str) and not singular.strip()):
+        return ([], None)
+    return ([singular], "domain")
+
+
 def check_missing_domain(wiki_dir: Path) -> list[ValidationWarning]:
-    """Topic/system pages should carry a `domain:` slug in frontmatter.
+    """Topic/system pages should carry `domain:` or `domains:` in frontmatter.
 
     Two WARN-level signals:
-    - `domain-missing`: no `domain:` field in frontmatter
-    - `domain-unknown`: `domain:` is set but isn't one of the eight
-      canonical north-star domain slugs
+    - `domain-missing`: no `domain:` AND no `domains:` field
+    - `domain-unknown`: a declared value isn't one of the eight
+      canonical north-star domain slugs. Fires once per bad value so
+      `domains: [trust-safety, foo, bar]` surfaces both `foo` and
+      `bar` rather than stopping at the first. Reason string leads
+      with `unknown-domain-value: <val>` so operators can grep the
+      warning log for a specific bad slug.
+
+    v10-U2 adds the plural list form — a topic that genuinely spans two
+    domains (e.g. payment-fraud touching `trust-safety` +
+    `growth-monetization`) can list both. Either form is valid; pick the
+    one matching the page's scope.
 
     Warning-only by design — Tier A's prompt rewrite teaches the agent
     to emit this, and every legacy page pre-dates that prompt. Errors
@@ -833,25 +868,28 @@ def check_missing_domain(wiki_dir: Path) -> list[ValidationWarning]:
             if not fm:
                 # Frontmatter corruption is already an ERROR in validate_page.
                 continue
-            domain = fm.get("domain")
-            if domain is None or (isinstance(domain, str) and not domain.strip()):
+            values, source_field = _extract_domain_values(fm)
+            if not values:
                 warnings.append(
                     ValidationWarning(
                         path,
-                        f"no `domain:` in frontmatter (expected one of: {_EXPECTED_DOMAINS_HINT})",
+                        "no `domain:` or `domains:` in frontmatter "
+                        f"(expected one of: {_EXPECTED_DOMAINS_HINT})",
                         "domain-missing",
                     )
                 )
                 continue
-            if not isinstance(domain, str) or domain.strip() not in CANONICAL_DOMAINS:
-                warnings.append(
-                    ValidationWarning(
-                        path,
-                        f"`domain:` {domain!r} not in canonical set "
-                        f"(expected one of: {_EXPECTED_DOMAINS_HINT})",
-                        "domain-unknown",
+            label = source_field or "domain"
+            for value in values:
+                if not isinstance(value, str) or value.strip() not in CANONICAL_DOMAINS:
+                    warnings.append(
+                        ValidationWarning(
+                            path,
+                            f"unknown-domain-value: {value!r} in `{label}:` "
+                            f"(expected one of: {_EXPECTED_DOMAINS_HINT})",
+                            "domain-unknown",
+                        )
                     )
-                )
     return warnings
 
 

@@ -160,15 +160,19 @@ def _absolute_file_path(rel_path: str) -> Path:
 
 
 def _has_domain_value(fm: dict[str, Any]) -> bool:
-    """True when the frontmatter has a non-empty `domain:` key.
+    """True when the frontmatter declares at least one domain.
 
-    Accepts both scalar (`domain: foo`) and list (`domain: [foo, bar]`)
-    forms — the compiler's `_assign_domains` accepts either.
+    Accepts the singular `domain:` scalar or the plural `domains:`
+    list (v10-U2). A non-empty value under either key means the page
+    doesn't need the migration placeholder.
     """
-    raw = fm.get("domain")
-    if isinstance(raw, str) and raw.strip():
+    plural = fm.get("domains")
+    if isinstance(plural, list) and plural:
         return True
-    return bool(isinstance(raw, list) and raw)
+    singular = fm.get("domain")
+    if isinstance(singular, str) and singular.strip():
+        return True
+    return bool(isinstance(singular, list) and singular)
 
 
 def _classify(row: dict[str, Any]) -> LegacyPage | None:

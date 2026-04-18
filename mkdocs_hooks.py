@@ -220,6 +220,30 @@ def _render_status_badge(fm: dict) -> str:
     return f'<span class="ns-status ns-status-{css_key}">{label}</span>'
 
 
+def _render_domain_badges(fm: dict) -> str:
+    """Return one badge per declared domain, concatenated with spaces.
+
+    Reads both `domains:` (v10-U2 multi-value list) and the legacy
+    singular `domain:` field. When both are present the plural wins and
+    `domain:` is ignored — matches the validator's precedence in
+    `scripts/validate_wiki._extract_domain_values` so the viewer and the
+    validator agree on "which domains does this page belong to?".
+    Returns empty string when neither is populated or every value is a
+    non-string.
+    """
+    values: list[str] = []
+    plural = fm.get("domains")
+    if isinstance(plural, list) and plural:
+        values = [v for v in plural if isinstance(v, str) and v.strip()]
+    else:
+        singular = fm.get("domain")
+        if isinstance(singular, str) and singular.strip():
+            values = [singular.strip()]
+    if not values:
+        return ""
+    return " ".join(f'<span class="ns-domain">{v}</span>' for v in values)
+
+
 # Three ref shapes we rewrite — each captures the filename in group 1. The
 # link pattern uses a `(?<!!)` lookbehind so it doesn't double-match the
 # markdown image form, which shares the `[…](…)` tail.
@@ -431,19 +455,25 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
         else:
             body = banner + body
 
-    # Inject a colored status pill immediately under the h1 — must run AFTER
-    # the banner so the pill sits closest to the title (visual precedence:
-    # H1 → pill → banner → body). Idempotency mirrors the banner's.
+    # Inject a colored status pill + domain badges immediately under the h1
+    # — must run AFTER the banner so the pill sits closest to the title
+    # (visual precedence: H1 → pill + domain badges → banner → body).
+    # Idempotency guards against double-injection when the MkDocs plugin
+    # chain re-enters the hook.
     status_html = _render_status_badge(fm)
-    if status_html and "ns-status-" not in "\n".join(body.splitlines()[:10]):
+    domain_html = _render_domain_badges(fm)
+    combined = " ".join(part for part in (status_html, domain_html) if part)
+    body_head = "\n".join(body.splitlines()[:10])
+    already_decorated = "ns-status-" in body_head or "ns-domain" in body_head
+    if combined and not already_decorated:
         body_lines = body.splitlines(keepends=False)
         h1_idx = _find_h1_index(body_lines)
         if h1_idx >= 0:
             body_lines.insert(h1_idx + 1, "")
-            body_lines.insert(h1_idx + 2, status_html)
+            body_lines.insert(h1_idx + 2, combined)
             body = "\n".join(body_lines)
         else:
-            body = status_html + "\n\n" + body
+            body = combined + "\n\n" + body
 
     if not sources_list or re.search(r"^##\s+Sources\b", body, flags=re.MULTILINE):
         return body

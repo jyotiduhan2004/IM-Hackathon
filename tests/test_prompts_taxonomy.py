@@ -544,3 +544,14 @@ def test_prompt_topic_sections_match_validator() -> None:
             "doesn't teach it — keep prompt in sync with "
             "scripts.validate_wiki.REQUIRED_SECTIONS"
         )
+
+
+def test_domain_frontmatter_teaches_multi_value_form() -> None:
+    """v10-U2: topics that span two domains (e.g. payment-fraud touching
+    trust-safety + growth-monetization) should use the plural `domains:`
+    list form. Prompt must mention the list form explicitly so the model
+    doesn't force-pick one domain when the concept genuinely spans two."""
+    assert "domains: [" in COMPILER_SYSTEM_PROMPT, (
+        "prompt must teach the `domains: [a, b]` multi-value form "
+        "so topics spanning two domains render on both hubs"
+    )

@@ -219,8 +219,19 @@ The eight canonical domains (slug — display title — example topics):
 - `engineering-productivity` — Engineering Productivity & Quality —
   CI/CD, code quality, testing, dev tools.
 
-If a page genuinely spans two, pick the primary one. Don't leave
-`domain:` empty.
+Most pages belong to exactly one domain. Use the singular form:
+
+    domain: seller-experience
+
+Multi-domain is valid when a topic genuinely spans two. Common
+example: payment-fraud sits across both `trust-safety` and
+`growth-monetization`. Use the plural list form in that case:
+
+    domains: [trust-safety, growth-monetization]
+
+Either `domain:` (single) or `domains:` (list) is accepted; pick
+the form that matches the page's actual scope. If it fits one
+domain, use `domain:`. Don't leave both empty.
 </domain_frontmatter>
 
 <section_titles>
@@ -630,6 +641,35 @@ create_entities(entities=[
 ])
 task(subagent_type="reviewer", description="review page pns-ab-test")  # retry
 # reviewer passes
+```
+
+### Example 10 — Multi-domain topic (`domains: [a, b]`)
+
+Context: Email kicks off a payment-fraud sweep. The topic legitimately
+spans two domains — `trust-safety` (fraud detection) and
+`growth-monetization` (the payments rail). Use the `domains:` list
+form rather than picking one.
+
+```
+resolve_page("payment-fraud-sweep-q2") → {exists: false}
+write_file("/wiki/topics/payment-fraud-sweep-q2.md", content='''---
+title: Payment fraud sweep (Q2 2026)
+page_type: topic
+status: active
+domains: [trust-safety, growth-monetization]
+source_threads:
+  - 19c01aa2de45f678
+---
+
+The Q2 2026 payment-fraud sweep targets chargeback rings that span
+paid-lead buyers and cash-on-delivery rails. This page tracks the
+joint trust-safety + monetization response as the detection model
+rolls out.
+
+## Summary
+...
+''')
+task(subagent_type="reviewer", description="review page payment-fraud-sweep-q2")
 ```
 
 </few_shots>

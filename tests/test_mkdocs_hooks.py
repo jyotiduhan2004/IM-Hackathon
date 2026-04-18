@@ -412,3 +412,67 @@ def test_hook_person_page_external_badge_renders() -> None:
     body = "Email: jane@external.com\n\nSome content.\n"
     out = on_page_markdown(body, page=_page("people/jane.md", meta), config={}, files=[])
     assert BADGE_HTML in out
+
+
+# --- domain badges (v10-U2) -----------------------------------------------
+#
+# v10-U2 extends the frontmatter schema to accept `domains: [a, b]`
+# alongside the legacy singular `domain: a`. The viewer renders one
+# `ns-domain` badge per declared value on the page header so readers
+# can see at a glance which domain hub(s) a topic belongs to.
+
+
+def test_hook_renders_single_domain_badge() -> None:
+    meta = {
+        "title": "Seller Topic",
+        "page_type": "topic",
+        "status": "active",
+        "domain": "seller-experience",
+    }
+    out = on_page_markdown(
+        "# Seller Topic\n\nBody.\n", page=_page("topics/st.md", meta), config={}, files=[]
+    )
+    assert '<span class="ns-domain">seller-experience</span>' in out
+
+
+def test_hook_renders_multi_domain_badges() -> None:
+    """`domains: [a, b]` produces one badge per declared value."""
+    meta = {
+        "title": "Payment Fraud Sweep",
+        "page_type": "topic",
+        "status": "active",
+        "domains": ["trust-safety", "growth-monetization"],
+    }
+    out = on_page_markdown(
+        "# Payment Fraud Sweep\n\nBody.\n",
+        page=_page("topics/pfs.md", meta),
+        config={},
+        files=[],
+    )
+    assert '<span class="ns-domain">trust-safety</span>' in out
+    assert '<span class="ns-domain">growth-monetization</span>' in out
+
+
+def test_hook_plural_wins_over_singular_domain() -> None:
+    """Both fields set — plural drives rendering, singular is ignored."""
+    meta = {
+        "title": "Dual",
+        "page_type": "topic",
+        "status": "active",
+        "domain": "ai-automation",
+        "domains": ["seller-experience", "buyer-experience"],
+    }
+    out = on_page_markdown(
+        "# Dual\n\nBody.\n", page=_page("topics/d.md", meta), config={}, files=[]
+    )
+    assert '<span class="ns-domain">seller-experience</span>' in out
+    assert '<span class="ns-domain">buyer-experience</span>' in out
+    assert '<span class="ns-domain">ai-automation</span>' not in out
+
+
+def test_hook_no_domain_badge_when_fields_missing() -> None:
+    meta = {"title": "Legacy", "page_type": "topic", "status": "active"}
+    out = on_page_markdown(
+        "# Legacy\n\nBody.\n", page=_page("topics/legacy.md", meta), config={}, files=[]
+    )
+    assert "ns-domain" not in out

@@ -1175,11 +1175,22 @@ def _assign_domains(fm: dict[str, Any], body: str) -> list[str]:
     """Decide which domain hub(s) a page belongs to.
 
     Preference order (per North Star):
-    1. Explicit `domain:` frontmatter — trusted verbatim (1 hub).
-    2. `tags:` list — every tag matching a domain slug attaches the page.
-    3. Keyword match against the page title + first paragraph — transitional
+    1. Explicit `domains:` list frontmatter — v10-U2 multi-value form;
+       every canonical slug in the list attaches the page (a topic that
+       spans e.g. trust-safety + growth-monetization shows up on both
+       hubs). Non-canonical entries are dropped silently — the validator
+       emits `unknown-domain-value` warnings so operators see them.
+    2. Explicit `domain:` frontmatter — trusted verbatim (1 hub).
+    3. `tags:` list — every tag matching a domain slug attaches the page.
+    4. Keyword match against the page title + first paragraph — transitional
        fallback, logged so operators see which pages still need explicit tags.
     """
+    plural = fm.get("domains")
+    if isinstance(plural, list):
+        plural_hits = [v for v in plural if isinstance(v, str) and v in _DOMAIN_BY_SLUG]
+        if plural_hits:
+            return plural_hits
+
     explicit = fm.get("domain")
     if isinstance(explicit, str) and explicit in _DOMAIN_BY_SLUG:
         return [explicit]

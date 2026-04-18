@@ -126,10 +126,15 @@ def _detect_legacy_reasons(fm: dict[str, Any]) -> list[str]:
 
     # `domain:` is only meaningful for topics and systems. Relying on
     # directory heuristics would mis-fire on index.md files, so we
-    # key off the frontmatter-declared page_type.
+    # key off the frontmatter-declared page_type. v10-U2: accept the
+    # plural `domains: [a, b]` form too — a non-empty list satisfies
+    # the requirement.
     if isinstance(page_type, str) and page_type.strip() in _DOMAIN_REQUIRED_TYPES:
+        domains = fm.get("domains")
+        has_plural = isinstance(domains, list) and bool(domains)
         domain = fm.get("domain")
-        if domain is None or (isinstance(domain, str) and not domain.strip()):
+        has_singular = isinstance(domain, str) and bool(domain.strip())
+        if not (has_plural or has_singular):
             reasons.append(f"missing domain: (on {page_type.strip()} page)")
 
     return reasons
