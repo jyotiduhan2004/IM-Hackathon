@@ -10,6 +10,7 @@ from src.compile.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
 from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
 from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
 from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
+from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
 from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
 from src.compile.middleware.path_autoheal import PathAutohealMiddleware
 from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
@@ -21,6 +22,7 @@ __all__ = [
     "ChronologicalScopeMiddleware",
     "EditPayloadSanityMiddleware",
     "EntityWriteAutohealMiddleware",
+    "GlobNarrowingMiddleware",
     "LegacyPageHintMiddleware",
     "PathAutohealMiddleware",
     "SameThreadTopicGuardMiddleware",

@@ -2064,6 +2064,7 @@ def create_compiler(
     from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
     from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
+    from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
     from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
@@ -2119,8 +2120,12 @@ def create_compiler(
     #   legacy-ontology wiki pages — once-per-page-per-run)
     #   + check_my_work_gate (short-circuits check_my_work calls made before
     #   any content-page write succeeds — live traces show 59-78% of
-    #   batches hit the validator before writing anything).
-    # - Subagent: reviewer (read-only, structured verdict).
+    #   batches hit the validator before writing anything)
+    #   + glob_narrowing (rejects `**/<slug>.md` slug-lookup globs;
+    #   24.5% of glob calls were timing out at the 20s deepagents cap —
+    #   per-obs scores issue #185).
+    # - Subagent: reviewer (read-only, structured verdict; retains glob
+    #   for its grep-heavy review workflow).
     # Bookkeeping tools (mark_as_compiled, stamp_page_compiled_at,
     # append_to_log, update_wiki_index) remain importable but NOT bound —
     # the coordinator handles them deterministically post-run.
@@ -2159,6 +2164,12 @@ def create_compiler(
             LegacyPageHintMiddleware(),
             SameThreadTopicGuardMiddleware(),
             CheckMyWorkGateMiddleware(),
+            # Glob narrowed 2026-04-18 (v10-U5): 24.5% of glob calls were
+            # `**/<slug>.md` slug lookups timing out at 20s. Reject those
+            # with a pointer to resolve_page; legitimate enumeration
+            # patterns (wiki/topics/*.md) pass through. Reviewer subagent
+            # keeps glob — see src/compile/reviewer.py.
+            GlobNarrowingMiddleware(),
         ],
         subagents=[cast(Any, reviewer_spec)],
     )
