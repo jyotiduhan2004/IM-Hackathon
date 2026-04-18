@@ -1746,9 +1746,7 @@ def main(
                 f"Process them chronologically as a conversation. When multiple replies "
                 f"build on the same decision/policy/feature, merge them into a single "
                 f"coherent wiki page rather than one page per message. "
-                f"Do NOT call any tool to mark these emails compiled — the coordinator "
-                f"handles that deterministically after you return. Focus on writing the "
-                f"right wiki content.\n\n"
+                f"Focus on writing the right wiki content.\n\n"
                 f"Files to compile:\n{batch_files}"
             )
 
