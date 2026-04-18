@@ -29,6 +29,8 @@ import yaml
 
 from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
+from src.utils.wikilinks import WIKILINK_RE
+from src.utils.wikilinks import parse_wikilink_target
 
 # Broken pages (unparseable frontmatter) count as touched when their mtime
 # is within this window — catches pages the agent just corrupted without
@@ -42,7 +44,6 @@ _BROKEN_PAGE_STALENESS_SECONDS = 600
 _WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies")
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
-_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
 @dataclass
@@ -231,8 +232,8 @@ def _check_broken_wikilinks(
     page: Path, repo_root: Path, body: str, known_slugs: set[str]
 ) -> list[Issue]:
     broken: list[str] = []
-    for link in _WIKILINK_RE.findall(body):
-        target = link.split("|")[0].strip()
+    for link in WIKILINK_RE.findall(body):
+        target = parse_wikilink_target(link)
         if target and target not in known_slugs:
             broken.append(target)
     if not broken:

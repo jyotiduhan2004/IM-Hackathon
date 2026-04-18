@@ -42,6 +42,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import settings  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.utils.wikilinks import WIKILINK_RE  # noqa: E402
+from src.utils.wikilinks import parse_wikilink_target  # noqa: E402
 
 # Categories we scan for light-format normalization. Policies/timelines/
 # conflicts keep their own templates (history tables, etc.) — out of scope
@@ -68,9 +70,6 @@ AGENT_NAV_HEADINGS = frozenset(
 
 # `^## <text>$` — one H2 heading line.
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-# `[[slug]]` or `[[slug|display]]`. Strip the `|display` portion; we only
-# care about the link target.
-_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 
 
 @dataclass
@@ -135,11 +134,10 @@ def _slug_from_related_entry(entry: str) -> str | None:
     if not isinstance(entry, str):
         return None
     s = entry.strip()
-    m = _WIKILINK_RE.fullmatch(s)
+    m = WIKILINK_RE.fullmatch(s)
     if m:
         s = m.group(1)
-    # strip the `|display` tail if present
-    s = s.split("|", 1)[0].strip()
+    s = parse_wikilink_target(s)
     if not s:
         return None
     return s
@@ -165,8 +163,8 @@ def _collect_related_slugs(
             if slug:
                 collected.add(slug)
 
-    for m in _WIKILINK_RE.finditer(body):
-        target = m.group(1).split("|", 1)[0].strip()
+    for m in WIKILINK_RE.finditer(body):
+        target = parse_wikilink_target(m.group(1))
         if target:
             collected.add(target)
 

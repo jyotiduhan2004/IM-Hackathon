@@ -145,6 +145,8 @@ class ValidationWarning:
 
 
 from src.utils import split_frontmatter  # noqa: E402
+from src.utils.wikilinks import WIKILINK_RE  # noqa: E402
+from src.utils.wikilinks import parse_wikilink_target  # noqa: E402
 
 # Entity identity helpers — prefer the canonical implementation in
 # src.compile.entities (shipped by W0). Fallback to inline regex when that
@@ -654,8 +656,6 @@ def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
         if cat.exists():
             known.update(p.stem for p in cat.glob("*.md"))
 
-    import re as _re
-
     for category in CATEGORY_TO_TYPE:
         cat = wiki_dir / category
         if not cat.exists():
@@ -666,9 +666,9 @@ def check_broken_wikilinks(wiki_dir: Path) -> list[Error]:
             except (OSError, UnicodeDecodeError):
                 continue
             broken = [
-                link.split("|")[0].strip()
-                for link in _re.findall(r"\[\[([^\]]+)\]\]", content)
-                if link.split("|")[0].strip() not in known
+                target
+                for link in WIKILINK_RE.findall(content)
+                if (target := parse_wikilink_target(link)) and target not in known
             ]
             if broken:
                 # Report one line per page, listing first 3 broken targets
