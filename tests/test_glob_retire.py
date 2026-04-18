@@ -74,6 +74,10 @@ def _success_handler(name: str = "glob") -> Callable[[ToolCallRequest], ToolMess
         "**/foo.md",
         "**/cap-notif-frequency.md",
         "  **/spaces-ok.md  ",  # leading/trailing whitespace
+        # v10-U5 followup P2 (#190): rooted form used by the sandbox
+        # filesystem adapter must be narrowed too.
+        "/**/seller-isq.md",
+        "/**/foo.md",
     ],
 )
 def test_slug_lookup_patterns_are_rejected(pattern: str) -> None:

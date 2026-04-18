@@ -47,8 +47,13 @@ def _is_slug_lookup_pattern(pattern: str) -> bool:
     These are the 24.5%-timeout cases per issue #185. Legitimate enumeration
     patterns that start with `**/` but match many files (e.g. `**/*.md`)
     contain a `*` in the filename stem and pass through.
+
+    A leading slash is stripped before matching so the rooted form
+    `/**/seller-isq.md` is caught as easily as the relative form
+    `**/seller-isq.md` (v10-U5 followup P2, #190). The sandbox's
+    filesystem adapter accepts either, so both have to be guarded.
     """
-    stripped = pattern.strip()
+    stripped = pattern.strip().lstrip("/")
     if not stripped.startswith("**/"):
         return False
     if not stripped.endswith(".md"):
