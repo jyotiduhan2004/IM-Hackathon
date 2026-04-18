@@ -233,10 +233,10 @@ def _capture_scores(client: MagicMock) -> dict[str, dict[str, Any]]:
     return out
 
 
-def test_emit_scores_pushes_all_six_when_message_id_provided(
+def test_emit_scores_pushes_all_trace_level_when_message_id_provided(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """All six score names land on Langfuse when message_id is supplied (U7)."""
+    """All trace-level score names land on Langfuse when message_id is supplied."""
     # No DB hit needed — short-circuit the citation lookup with False.
     monkeypatch.setattr(langfuse_scores, "_is_content_page_cited", lambda _c, _m: True)
     client = MagicMock()
@@ -247,6 +247,8 @@ def test_emit_scores_pushes_all_six_when_message_id_provided(
     emit_scores_for_trace(client, "trace-1", observations, message_id="m1")
 
     scores = _capture_scores(client)
+    # U13 added reviewer_unacted_merge_requests on top of the original 6.
+    # Per-obs scores are absent here because the fixture obs lack `id`.
     assert set(scores) == {
         "content_page_cited",
         "gate_rejected_check_my_work",
@@ -254,6 +256,7 @@ def test_emit_scores_pushes_all_six_when_message_id_provided(
         "wrote_todos_early",
         "reviewer_verdict",
         "compile_outcome",
+        "reviewer_unacted_merge_requests",
     }
     # content_page_cited honours the lookup — we stubbed True, expect 1.0
     assert scores["content_page_cited"]["value"] == 1.0
@@ -267,9 +270,13 @@ def test_emit_scores_pushes_all_six_when_message_id_provided(
     assert scores["auto_corrected"]["value"] == 0.0
     assert scores["gate_rejected_check_my_work"]["value"] == 0.0
     assert scores["gate_rejected_check_my_work"]["data_type"] == "NUMERIC"
-    # All scores attached to the same trace_id
+    # Trace-level rollup with no reviewer obs => 0
+    assert scores["reviewer_unacted_merge_requests"]["value"] == 0.0
+    assert scores["reviewer_unacted_merge_requests"]["data_type"] == "NUMERIC"
+    # All trace-level scores attached to the same trace_id with no obs id
     for kw in scores.values():
         assert kw["trace_id"] == "trace-1"
+        assert kw.get("observation_id") is None
 
 
 def test_emit_scores_omits_content_page_when_no_message_id() -> None:
@@ -278,13 +285,14 @@ def test_emit_scores_omits_content_page_when_no_message_id() -> None:
     emit_scores_for_trace(client, "trace-2", [_mk_tool_obs("ls")], message_id=None)
     scores = _capture_scores(client)
     assert "content_page_cited" not in scores
-    # The other 5 still emit (includes compile_outcome added in U7)
+    # The other trace-level scores still emit (U13 added the merge rollup).
     assert set(scores) == {
         "gate_rejected_check_my_work",
         "auto_corrected",
         "wrote_todos_early",
         "reviewer_verdict",
         "compile_outcome",
+        "reviewer_unacted_merge_requests",
     }
 
 
@@ -302,21 +310,15 @@ def test_emit_scores_verdict_none_when_reviewer_didnt_run(
 def test_emit_scores_swallows_create_score_failures() -> None:
     """One create_score raising shouldn't block the rest of the scores."""
     client = MagicMock()
-    # First call raises; subsequent calls succeed.
-    client.create_score.side_effect = [
-        RuntimeError("Langfuse 524 Origin Time-out"),
-        None,
-        None,
-        None,
-        None,
-        None,
-    ]
+    # All calls raise; the loop must keep pushing.
+    client.create_score.side_effect = RuntimeError("Langfuse 524 Origin Time-out")
     observations = [_mk_tool_obs("ls")]
     # Must not raise
     emit_scores_for_trace(client, "trace-4", observations, message_id=None)
-    # All five push attempts made (no message_id so content_page_cited is skipped),
-    # even though the first failed
-    assert client.create_score.call_count == 5
+    # 6 trace-level pushes attempted even though every one failed
+    # (no message_id so content_page_cited is skipped; fixture obs have
+    # no `id` so per-obs emission is a no-op).
+    assert client.create_score.call_count == 6
 
 
 def test_emit_scores_db_error_falls_back_to_false(
@@ -510,8 +512,10 @@ def test_emit_scores_for_run_pushes_one_trace_per_thread(
 
     result = emit_scores_for_run(uuid.uuid4())
     assert result == 1
-    # 6 score names per trace (U7 added compile_outcome), 1 trace scored
-    assert client.create_score.call_count == 6
+    # 7 trace-level scores (U7 added compile_outcome, U13 added
+    # reviewer_unacted_merge_requests), 1 trace scored. No per-obs
+    # scores because the fixture observation lacks an `id`.
+    assert client.create_score.call_count == 7
     client.flush.assert_called_once()
 
 

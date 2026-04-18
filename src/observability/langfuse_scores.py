@@ -4,7 +4,7 @@ Each trace gets a small set of scores attached. Langfuse aggregates them
 automatically and exposes them in the Scores tab + custom dashboards —
 much better than re-running scripts/trace_scorecard.py manually.
 
-Score schema (one per trace):
+Score schema (per trace):
 
 - ``content_page_cited``           BOOLEAN   1.0 / 0.0
 - ``gate_rejected_check_my_work``  NUMERIC   count of D1 gate rejections
@@ -16,6 +16,22 @@ Score schema (one per trace):
                                                 ghost (U7 — single bucket per
                                                 trace, letting dashboards slice
                                                 cleanly by outcome class)
+- ``reviewer_unacted_merge_requests``  NUMERIC   trace-level rollup of
+                                                 ``merge_candidates`` the
+                                                 main agent ignored across
+                                                 all reviewer runs (U13).
+
+Per-observation schema (U13 — attaches to the individual TOOL/AGENT
+observation via ``observation_id`` so the dashboard can surface a single
+bad call instead of averaging it away):
+
+- ``resolve_page_candidates_alphabetical``  BOOLEAN  per resolve_page
+                                                     TOOL obs — flags the
+                                                     "alphabetical fuzzy
+                                                     fallback" regression.
+- ``glob_timed_out``                        BOOLEAN  per glob TOOL obs.
+- ``glob_latency_ms``                       NUMERIC  per glob TOOL obs.
+- ``reviewer_merge_candidates_count``       NUMERIC  per reviewer AGENT obs.
 
 Reuses extraction logic from ``scripts/trace_scorecard.py`` so score
 values match what the manual scorecard reports — single source of truth
@@ -54,6 +70,9 @@ from src.observability.trace_signals import CONTENT_PAGE_TYPES
 from src.observability.trace_signals import GATE_REJECT_PAT
 from src.observability.trace_signals import REVIEWER_VERDICT_PAT
 from src.observability.trace_signals import TODOS_EARLY_WINDOW
+from src.observability.trace_signals import extract_reviewer_merge_count
+from src.observability.trace_signals import is_alphabetical_candidate_list
+from src.observability.trace_signals import is_glob_timeout
 
 logger = structlog.get_logger(__name__)
 
@@ -278,27 +297,154 @@ def _push_score(
     value: float | str,
     data_type: str,
     comment: str | None = None,
+    observation_id: str | None = None,
 ) -> None:
     """Wrap ``client.create_score`` with logging + best-effort error handling.
 
     Langfuse 524s + connection drops are common on the self-hosted
     server; we never want one failed score to break the post-batch hook.
+
+    When ``observation_id`` is provided the score is attached to that
+    specific observation (TOOL / AGENT / GENERATION) inside the trace,
+    giving per-call granularity in the Langfuse UI. Otherwise the score
+    is attached at the trace level.
+
+    NOTE on ``observation_id=None`` (verified on langfuse 3.14.6):
+    the SDK's ``ScoreBody.dict()`` uses ``exclude_unset=True`` and
+    ``exclude_none=True`` in a ``deep_union_pydantic_dicts`` merge, which
+    results in an explicit ``None`` being forwarded to the API as
+    ``"observationId": null`` in the JSON body — rather than stripped.
+    To avoid sending explicit nulls for trace-level scores we only
+    include the ``observation_id`` kwarg when the caller actually has
+    one.
     """
+    kwargs: dict[str, Any] = {
+        "trace_id": trace_id,
+        "name": name,
+        "value": value,
+        "data_type": data_type,
+    }
+    if observation_id is not None:
+        kwargs["observation_id"] = observation_id
+    if comment is not None:
+        kwargs["comment"] = comment
     try:
-        client.create_score(
-            trace_id=trace_id,
-            name=name,
-            value=value,
-            data_type=data_type,
-            comment=comment,
-        )
+        client.create_score(**kwargs)
     except Exception as exc:  # noqa: BLE001 — observability must never break compile
         logger.warning(
             "langfuse_score_push_failed",
             trace_id=trace_id,
+            observation_id=observation_id,
             name=name,
             error=str(exc)[:200],
         )
+
+
+def _observation_latency_ms(obs: dict[str, Any]) -> float | None:
+    """Return (endTime - startTime) in milliseconds, or None on missing fields.
+
+    Observations serialized via ``obs.dict(by_alias=True)`` expose
+    ``startTime`` / ``endTime`` as datetime objects. In-flight
+    observations may lack ``endTime``; we return None so the caller can
+    skip the score.
+    """
+    start = obs.get("startTime")
+    end = obs.get("endTime")
+    if start is None or end is None:
+        return None
+    try:
+        delta = end - start
+        return float(delta.total_seconds() * 1000.0)
+    except (TypeError, AttributeError):
+        # Dates arrived as strings (legacy serializer) — we don't have
+        # a timezone-aware parser guarantee here, so skip rather than
+        # guess.
+        return None
+
+
+def _emit_per_observation_scores(
+    client: Any,
+    trace_id: str,
+    observations: list[dict[str, Any]],
+) -> None:
+    """Push per-observation scores for the U13 regressions.
+
+    Four scores ride this path:
+
+    - ``resolve_page_candidates_alphabetical`` (BOOLEAN, per resolve_page
+      TOOL obs) — alphabetical candidate fallback symptom.
+    - ``glob_timed_out`` (BOOLEAN, per glob TOOL obs) — deepagents'
+      filesystem middleware plain-text timeout marker.
+    - ``glob_latency_ms`` (NUMERIC, per glob TOOL obs) — so a slow glob
+      shows up as a point even when it didn't tip over into the timeout.
+    - ``reviewer_merge_candidates_count`` (NUMERIC, per reviewer AGENT
+      obs) — surfaces the "merge debt" the main agent ignored.
+
+    Each score attaches to the observation's own ``id``, giving the
+    dashboard per-call granularity instead of a trace average.
+    """
+    for obs in observations:
+        obs_id_raw = obs.get("id")
+        if not isinstance(obs_id_raw, str) or not obs_id_raw:
+            continue
+        obs_type = obs.get("type")
+        name = str(obs.get("name") or "")
+        raw_output = str(obs.get("output") or "")
+
+        if obs_type == "TOOL" and name == "resolve_page":
+            _push_score(
+                client,
+                trace_id=trace_id,
+                observation_id=obs_id_raw,
+                name="resolve_page_candidates_alphabetical",
+                value=1.0 if is_alphabetical_candidate_list(raw_output) else 0.0,
+                data_type="BOOLEAN",
+            )
+        elif obs_type == "TOOL" and name == "glob":
+            _push_score(
+                client,
+                trace_id=trace_id,
+                observation_id=obs_id_raw,
+                name="glob_timed_out",
+                value=1.0 if is_glob_timeout(raw_output) else 0.0,
+                data_type="BOOLEAN",
+            )
+            latency_ms = _observation_latency_ms(obs)
+            if latency_ms is not None:
+                _push_score(
+                    client,
+                    trace_id=trace_id,
+                    observation_id=obs_id_raw,
+                    name="glob_latency_ms",
+                    value=latency_ms,
+                    data_type="NUMERIC",
+                )
+        elif obs_type == "AGENT" and name == "reviewer":
+            _push_score(
+                client,
+                trace_id=trace_id,
+                observation_id=obs_id_raw,
+                name="reviewer_merge_candidates_count",
+                value=float(extract_reviewer_merge_count(raw_output)),
+                data_type="NUMERIC",
+            )
+
+
+def _sum_reviewer_merge_candidates(observations: list[dict[str, Any]]) -> int:
+    """Sum `merge_candidates` across all reviewer AGENT observations.
+
+    The trace-level rollup the dashboard uses to surface "unacted merge
+    debt" — the main agent saw N merge candidates across all reviewer
+    runs in this trace and didn't act on them.
+    """
+    total = 0
+    for obs in observations:
+        if obs.get("type") != "AGENT":
+            continue
+        if str(obs.get("name") or "") != "reviewer":
+            continue
+        total += extract_reviewer_merge_count(str(obs.get("output") or ""))
+    return total
 
 
 def _safe_flush(client: Any) -> None:
@@ -317,14 +463,22 @@ def emit_scores_for_trace(
     *,
     content_page_cited: bool | None = None,
 ) -> None:
-    """Compute the 6 headline scores for one trace and push them to Langfuse.
+    """Compute the headline scores for one trace and push them to Langfuse.
+
+    Emits 7 trace-level scores (U13 added ``reviewer_unacted_merge_requests``
+    on top of the original 6) plus up to 4 per-observation scores
+    (U13 — ``resolve_page_candidates_alphabetical`` / ``glob_timed_out`` /
+    ``glob_latency_ms`` / ``reviewer_merge_candidates_count``) attached
+    to the specific TOOL / AGENT observation they describe.
 
     Args:
         client: Langfuse client (``langfuse.Langfuse`` instance).
         trace_id: The Langfuse trace id to attach scores to.
         observations: Trace observations (from the trace fetch
             response). Each observation is a dict with ``type``, ``name``,
-            ``input``, ``output`` keys.
+            ``input``, ``output``, ``id``, ``startTime``, ``endTime``
+            keys (camelCase — the Langfuse SDK serializer preserves the
+            API's JSON aliases).
         message_id: When provided (and ``content_page_cited`` isn't),
             used to look up the citation flag from the ``messages``
             joined to ``message_touched_pages`` joined to ``wiki_pages``
@@ -409,6 +563,18 @@ def emit_scores_for_trace(
         value=_classify_compile_outcome(observations, cited),
         data_type="CATEGORICAL",
     )
+
+    # U13: trace-level rollup of reviewer merge debt, plus per-obs
+    # scores on resolve_page / glob / reviewer AGENT observations so the
+    # dashboard can show a single bad call rather than averaging it away.
+    _push_score(
+        client,
+        trace_id=trace_id,
+        name="reviewer_unacted_merge_requests",
+        value=float(_sum_reviewer_merge_candidates(observations)),
+        data_type="NUMERIC",
+    )
+    _emit_per_observation_scores(client, trace_id, observations)
 
 
 def _build_client() -> Any | None:
