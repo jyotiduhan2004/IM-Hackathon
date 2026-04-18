@@ -19,18 +19,25 @@ For every ``.md`` file under the canonical content folders in
 ``wiki/`` (see ``_CONTENT_DIRS`` — ``topics/`` / ``systems/`` /
 ``policies/`` / ``people/`` / ``entities/`` / ``decisions/`` /
 ``domains/`` / ``glossary/`` / ``timelines/`` / ``conflicts/``,
-whichever exist):
+whichever exist), run three passes over a single shared DB connection:
 
-1. Read frontmatter. Skip if no ``sources:`` list.
-2. For each ``raw_path`` in ``sources:``:
-   - ``messages.find_by_raw_path`` → ``message_id``.
-   - One follow-up query resolves ``thread_id`` (we already have the
-     connection open; a single ``SELECT thread_id FROM messages WHERE
-     message_id = %s`` keeps the lookup table simple).
-   - Drift case (no matching ``messages`` row): log, continue.
-3. ``wiki_pages.find_by_slug`` → ``page_id`` for the current file.
-   Missing row is logged + the page is skipped (catalog sync needed
-   first).
+1. **Pass 1 — read frontmatter.** For each page, extract the
+   ``sources:`` and ``source_threads:`` lists. Pages without sources
+   are skipped.
+2. **Pass 2 — two batch lookups.** Collect every raw_path and every
+   slug across all pages; resolve them in chunked ``= ANY(%s)``
+   round-trips (500 per chunk) via
+   ``messages.find_by_raw_paths`` + ``wiki_pages.find_pages_by_slugs``.
+   Replaces the prior per-row ``find_by_raw_path`` + per-page
+   ``find_by_slug`` N+1 that opened a fresh connection per call.
+3. **Pass 3 — stitch + write.** Fold the two lookup dicts back onto
+   each page's sources to produce a ``PagePlan`` (resolved + drift +
+   dedup-sorted thread_ids). Missing ``wiki_pages`` row → page is
+   logged + skipped (catalog sync needed first). Missing ``messages``
+   row → per-raw_path drift, logged + counted.
+
+Commit phase (``--commit`` only):
+
 4. For each resolved ``(message_id, page_id)`` pair: ``insert_touch``
    inside a per-row SAVEPOINT (mirrors ``compile_all.py::_sync_wiki_catalog``
    — one bad row can't poison the outer transaction).
@@ -91,8 +98,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.compile.categories import WIKI_CATEGORIES  # noqa: E402
 from src.db import connect  # noqa: E402
+from src.db.messages import find_by_raw_paths  # noqa: E402
 from src.db.touched_pages import insert_touch  # noqa: E402
-from src.db.wiki_pages import find_by_slug  # noqa: E402
+from src.db.wiki_pages import find_pages_by_slugs  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
@@ -181,27 +189,25 @@ def _read_str_list(fm: dict[str, Any], key: str) -> list[str]:
     return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
 
 
-def _resolve_raw_path_to_thread(conn: Any, raw_path: str) -> tuple[str, str | None] | None:
-    """One query: ``raw_path`` → ``(message_id, thread_id)``. None on drift.
+@dataclass
+class _PageSources:
+    """Intermediate: what we pulled from one page's frontmatter.
 
-    ``conn`` is typed ``Any`` because ``psycopg.Connection`` without a
-    concrete ``row_factory`` generic parameter triggers mypy overload
-    errors on ``row["col"]`` lookups. ``src.db.connect()`` pins
-    ``dict_row`` at runtime; the type signature just can't express that.
-    Matches the same shim used in ``scripts/backfill_status_active.py``.
+    Step 1 of the batched flow. The resolver (step 2) turns these into
+    ``PagePlan`` rows by looking up raw_paths + slugs in bulk.
     """
-    row = conn.execute(
-        "SELECT message_id, thread_id FROM messages WHERE raw_path = %s",
-        (raw_path,),
-    ).fetchone()
-    if row is None:
-        return None
-    return (row["message_id"], row["thread_id"])
+
+    path: Path
+    slug: str
+    sources: list[str]
+    existing_source_threads: list[str]
 
 
-def _build_plan_for_page(conn: psycopg.Connection, path: Path) -> PagePlan | None:
-    """Read frontmatter + resolve every raw_path. ``None`` when the
-    page has no ``sources:`` list (nothing to back-fill)."""
+def _read_page_sources(path: Path) -> _PageSources | None:
+    """Read frontmatter + return the fields the batch resolver needs.
+
+    None means the page has no ``sources:`` list — nothing to back-fill.
+    """
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -211,35 +217,54 @@ def _build_plan_for_page(conn: psycopg.Connection, path: Path) -> PagePlan | Non
     sources = _read_str_list(fm, "sources")
     if not sources:
         return None
-
-    slug = path.stem
-    page_row = find_by_slug(slug)
-    page_id = int(page_row["page_id"]) if page_row else None
-
-    resolved: list[tuple[str, str, str | None]] = []
-    unresolved: list[str] = []
-    for raw_path in sources:
-        hit = _resolve_raw_path_to_thread(conn, raw_path)
-        if hit is None:
-            unresolved.append(raw_path)
-            continue
-        message_id, thread_id = hit
-        resolved.append((raw_path, message_id, thread_id))
-
-    # sorted(set(...)) — stable lexicographic order across runs keeps
-    # the frontmatter write byte-identical on re-runs.
-    thread_ids = sorted({tid for _r, _m, tid in resolved if tid is not None})
-    existing = _read_str_list(fm, "source_threads")
-
-    return PagePlan(
+    return _PageSources(
         path=path,
-        slug=slug,
-        page_id=page_id,
-        resolved=resolved,
-        unresolved=unresolved,
-        thread_ids=thread_ids,
-        existing_source_threads=existing,
+        slug=path.stem,
+        sources=sources,
+        existing_source_threads=_read_str_list(fm, "source_threads"),
     )
+
+
+def _resolve_plans(
+    sources_by_page: list[_PageSources],
+    messages_by_raw_path: dict[str, dict[str, Any]],
+    pages_by_slug: dict[str, dict[str, Any]],
+) -> list[PagePlan]:
+    """Turn ``_PageSources`` + two bulk lookups into ``PagePlan`` rows.
+
+    Pure function — no DB, no I/O. All query work was paid for by the
+    caller in two ``ANY(%s)`` round-trips before we got here.
+    """
+    plans: list[PagePlan] = []
+    for src in sources_by_page:
+        page_row = pages_by_slug.get(src.slug)
+        page_id = int(page_row["page_id"]) if page_row else None
+
+        resolved: list[tuple[str, str, str | None]] = []
+        unresolved: list[str] = []
+        for raw_path in src.sources:
+            hit = messages_by_raw_path.get(raw_path)
+            if hit is None:
+                unresolved.append(raw_path)
+                continue
+            resolved.append((raw_path, hit["message_id"], hit["thread_id"]))
+
+        # sorted(set(...)) — stable lexicographic order across runs keeps
+        # the frontmatter write byte-identical on re-runs.
+        thread_ids = sorted({tid for _r, _m, tid in resolved if tid is not None})
+
+        plans.append(
+            PagePlan(
+                path=src.path,
+                slug=src.slug,
+                page_id=page_id,
+                resolved=resolved,
+                unresolved=unresolved,
+                thread_ids=thread_ids,
+                existing_source_threads=src.existing_source_threads,
+            )
+        )
+    return plans
 
 
 def _apply_frontmatter_update(path: Path, thread_ids: list[str]) -> None:
@@ -436,20 +461,34 @@ def main(dry_run: bool, commit: bool, limit: int | None, repo_root: str | None) 
     wiki_dir = root / "wiki"
 
     report = BackfillReport()
-    plans: list[PagePlan] = []
 
     with connect() as conn:
         pages = list(_iter_wiki_pages(wiki_dir))
         if limit is not None:
             pages = pages[:limit]
 
+        # Pass 1: read every page's frontmatter. Local I/O only.
+        sources_by_page: list[_PageSources] = []
         for path in pages:
             report.pages_scanned += 1
-            plan = _build_plan_for_page(conn, path)
-            if plan is None:
+            page_sources = _read_page_sources(path)
+            if page_sources is None:
                 continue
             report.pages_with_sources += 1
-            plans.append(plan)
+            sources_by_page.append(page_sources)
+
+        # Pass 2: two batch SQL round-trips (chunked at 500) instead of
+        # one-query-per-page. Kills the N+1 that used to dominate runtime.
+        all_raw_paths: list[str] = []
+        for src in sources_by_page:
+            all_raw_paths.extend(src.sources)
+        messages_by_raw_path = find_by_raw_paths(all_raw_paths, conn=conn)
+        pages_by_slug = find_pages_by_slugs(conn, [s.slug for s in sources_by_page])
+
+        # Pass 3: stitch the lookups back onto each page — pure in-memory.
+        plans = _resolve_plans(sources_by_page, messages_by_raw_path, pages_by_slug)
+
+        for plan in plans:
             if plan.page_id is None:
                 report.pages_skipped_no_page_id += 1
                 logger.warning(

@@ -16,6 +16,7 @@ Stale-claim recovery: if a worker crashes mid-compile, the row stays
 from __future__ import annotations
 
 import uuid
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any
 from typing import cast
@@ -263,6 +264,63 @@ def find_by_raw_path(raw_path: str) -> dict[str, Any] | None:
             "SELECT message_id, compile_state FROM messages WHERE raw_path = %s",
             (raw_path,),
         ).fetchone()
+
+
+def _chunks(seq: list[str], size: int) -> list[list[str]]:
+    """Split ``seq`` into contiguous sub-lists of at most ``size`` items."""
+    return [seq[i : i + size] for i in range(0, len(seq), size)]
+
+
+def find_by_raw_paths(
+    paths: list[str],
+    *,
+    conn: psycopg.Connection | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Batch lookup: ``raw_path -> {message_id, thread_id}``.
+
+    Kills the N+1 pattern in ``scripts/backfill_source_threads_and_touches.py``
+    (and any future caller that resolves a list of raw_paths in one shot).
+    Chunks at 500 paths per query so we stay well under the default
+    ``libpq`` parameter limit even when the caller hands us every raw
+    file in the repo.
+
+    Missing paths are simply absent from the returned dict — callers
+    decide whether an unresolved path is drift-to-log or error-to-raise.
+    Duplicate ``raw_path`` values in the input are deduplicated for the
+    SQL round-trip and present exactly once in the output.
+
+    Args:
+        paths: Raw markdown paths (e.g. ``"raw/2026-01-01_subj_abc.md"``).
+        conn: Optional shared connection. When ``None``, opens and closes
+            one via ``connect()``. Callers already holding a transaction
+            should pass ``conn`` to avoid nested connections.
+    """
+    if not paths:
+        return {}
+    unique_paths = list(dict.fromkeys(paths))  # dedupe, preserve order
+    out: dict[str, dict[str, Any]] = {}
+
+    # nullcontext lets callers share an existing connection without
+    # opening a nested one; when conn is None we own the context.
+    conn_cm = nullcontext(conn) if conn is not None else connect()
+    with conn_cm as c:
+        for chunk in _chunks(unique_paths, 500):
+            # connect() pins row_factory=dict_row; cast so mypy-strict
+            # sees the real runtime shape. Same shim as
+            # shared_thread_id_for_paths below.
+            rows = cast(
+                "list[dict[str, Any]]",
+                c.execute(
+                    "SELECT message_id, raw_path, thread_id FROM messages WHERE raw_path = ANY(%s)",
+                    (chunk,),
+                ).fetchall(),
+            )
+            for row in rows:
+                out[row["raw_path"]] = {
+                    "message_id": row["message_id"],
+                    "thread_id": row["thread_id"],
+                }
+    return out
 
 
 def count_by_state() -> dict[str, int]:

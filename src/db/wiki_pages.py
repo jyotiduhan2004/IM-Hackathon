@@ -71,6 +71,43 @@ def find_by_slug(slug: str) -> dict[str, Any] | None:
         ).fetchone()
 
 
+def find_pages_by_slugs(
+    conn: psycopg.Connection,
+    slugs: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Batch companion to ``find_by_slug``. Returns ``{slug: row}``.
+
+    Used by scripts that resolve a page per markdown file — the
+    per-slug variant opens a fresh connection on every call, so walking
+    hundreds of pages costs hundreds of connections. This one takes a
+    caller-supplied connection + runs one ``= ANY(%s)`` query per 500-
+    slug chunk. Missing slugs are simply absent from the returned dict.
+    """
+    if not slugs:
+        return {}
+    unique_slugs = list(dict.fromkeys(slugs))
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(unique_slugs), 500):
+        chunk = unique_slugs[i : i + 500]
+        # connect() pins row_factory=dict_row; cast so mypy-strict
+        # sees the real runtime shape instead of psycopg's tuple stub.
+        rows = cast(
+            "list[dict[str, Any]]",
+            conn.execute(
+                """
+                SELECT page_id, slug, path, title, page_type, status,
+                       canonical_user_email, last_compiled_at, update_count
+                  FROM wiki_pages
+                 WHERE slug = ANY(%s)
+                """,
+                (chunk,),
+            ).fetchall(),
+        )
+        for row in rows:
+            out[row["slug"]] = row
+    return out
+
+
 def search_pages(query: str, limit: int = 5) -> list[dict[str, Any]]:
     """Substring search over slug + title.
 

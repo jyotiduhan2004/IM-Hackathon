@@ -13,12 +13,15 @@ import sys
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import psycopg
 import pytest
 from click.testing import CliRunner
 from src.db import messages as messages_repo
 from src.db import wiki_pages as wiki_repo
+from src.db.messages import find_by_raw_paths
+from src.db.wiki_pages import find_pages_by_slugs
 from src.utils import extract_frontmatter
 
 
@@ -368,3 +371,63 @@ def test_page_without_catalog_row_is_skipped(
     # And source_threads NOT written — page skipped whole.
     alpha_fm = _read_frontmatter(topics / "alpha.md")
     assert "source_threads" not in alpha_fm
+
+
+# ---------------------------------------------------------------------------
+# Batch lookups — N+1 guard
+# ---------------------------------------------------------------------------
+
+
+def test_batch_lookups_scale_to_many_pages(
+    script_mod, wiki_root: Path, db_conn: psycopg.Connection
+) -> None:
+    """50 pages at ~2 sources each should still run as two batch lookups.
+
+    Pins the contract that ``find_by_raw_paths`` + ``find_pages_by_slugs``
+    are used instead of per-row/per-page calls. Regression guard for the
+    v9-U6 N+1 fix.
+    """
+    topics = wiki_root / "wiki" / "topics"
+    expected_threads: dict[str, list[str]] = {}
+    for i in range(50):
+        slug = f"page-{i:02d}"
+        raw_a = f"raw/2026-01-01_{slug}_a.md"
+        raw_b = f"raw/2026-01-02_{slug}_b.md"
+        _write_page(topics / f"{slug}.md", sources=[raw_a, raw_b])
+        _seed_message(db_conn, message_id=f"{slug}-a", raw_path=raw_a, thread_id=f"t-{i}")
+        _seed_message(db_conn, message_id=f"{slug}-b", raw_path=raw_b, thread_id=f"t-{i}")
+        _seed_wiki_page(db_conn, slug=slug)
+        expected_threads[slug] = [f"t-{i}"]
+
+    # Wrap the batch helpers so we keep real behaviour but count calls.
+    # A per-row regression (N+1) would call these 50+ times; the batch
+    # path calls each exactly once (100 paths + 50 slugs fit in one chunk).
+    with (
+        patch.object(script_mod, "find_by_raw_paths", wraps=find_by_raw_paths) as mock_by_paths,
+        patch.object(script_mod, "find_pages_by_slugs", wraps=find_pages_by_slugs) as mock_by_slugs,
+    ):
+        result = CliRunner().invoke(
+            script_mod.main,
+            ["--commit", "--repo-root", str(wiki_root)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        # N+1 regression guard: both batch helpers must be called exactly
+        # once per run (50 pages + 100 paths fit in a single 500-item chunk).
+        assert mock_by_paths.call_count == 1, (
+            f"expected 1 call to find_by_raw_paths, got {mock_by_paths.call_count} "
+            f"— likely an N+1 regression"
+        )
+        assert mock_by_slugs.call_count == 1, (
+            f"expected 1 call to find_pages_by_slugs, got {mock_by_slugs.call_count} "
+            f"— likely an N+1 regression"
+        )
+    # 50 pages at 2 messages each = 100 touches.
+    assert "touches_inserted=100" in result.output
+    assert "scanned=50" in result.output
+
+    # Spot-check: frontmatter was rewritten on the first + last page.
+    first_fm = _read_frontmatter(topics / "page-00.md")
+    last_fm = _read_frontmatter(topics / "page-49.md")
+    assert first_fm["source_threads"] == expected_threads["page-00"]
+    assert last_fm["source_threads"] == expected_threads["page-49"]

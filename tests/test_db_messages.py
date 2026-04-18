@@ -270,6 +270,52 @@ def test_find_by_raw_path(db_conn: psycopg.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# find_by_raw_paths (batch) — used by backfill scripts
+# ---------------------------------------------------------------------------
+
+
+def test_find_by_raw_paths_batch(db_conn: psycopg.Connection) -> None:
+    """Resolve many paths in one round-trip; missing paths absent from output."""
+    _insert(db_conn, message_id="m1", raw_path="raw/a.md", thread_id="t-A")
+    _insert(db_conn, message_id="m2", raw_path="raw/b.md", thread_id="t-A")
+    _insert(db_conn, message_id="m3", raw_path="raw/c.md", thread_id="t-B")
+    db_conn.commit()
+
+    # Mix of hits + one miss + one duplicate (dedupe on the way in).
+    got = repo.find_by_raw_paths(
+        ["raw/a.md", "raw/b.md", "raw/missing.md", "raw/c.md", "raw/a.md"],
+        conn=db_conn,
+    )
+    assert set(got.keys()) == {"raw/a.md", "raw/b.md", "raw/c.md"}
+    assert got["raw/a.md"] == {"message_id": "m1", "thread_id": "t-A"}
+    assert got["raw/b.md"] == {"message_id": "m2", "thread_id": "t-A"}
+    assert got["raw/c.md"] == {"message_id": "m3", "thread_id": "t-B"}
+
+
+def test_find_by_raw_paths_empty_short_circuits() -> None:
+    """Empty input avoids any DB call + returns an empty dict."""
+    assert repo.find_by_raw_paths([]) == {}
+
+
+def test_find_by_raw_paths_chunks_at_500(db_conn: psycopg.Connection) -> None:
+    """Input larger than a single chunk still resolves every hit.
+
+    The chunk boundary is a 500-path ``ANY(%s)`` query. Seed 600 rows,
+    query all 600 + 10 missing, expect 600 results back.
+    """
+    for i in range(600):
+        _insert(db_conn, message_id=f"m{i}", raw_path=f"raw/{i:04d}.md", thread_id="t-X")
+    db_conn.commit()
+
+    paths = [f"raw/{i:04d}.md" for i in range(600)] + [f"raw/missing-{i}.md" for i in range(10)]
+    got = repo.find_by_raw_paths(paths, conn=db_conn)
+    assert len(got) == 600
+    assert got["raw/0000.md"]["message_id"] == "m0"
+    assert got["raw/0599.md"]["message_id"] == "m599"
+    assert "raw/missing-0.md" not in got
+
+
+# ---------------------------------------------------------------------------
 # reset_to_pending (bulk)
 # ---------------------------------------------------------------------------
 

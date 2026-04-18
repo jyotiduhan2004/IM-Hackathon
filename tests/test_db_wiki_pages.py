@@ -99,6 +99,28 @@ def test_find_by_slug_returns_row_with_defaults(db_conn: psycopg.Connection) -> 
 
 
 # ---------------------------------------------------------------------------
+# find_pages_by_slugs (batch)
+# ---------------------------------------------------------------------------
+
+
+def test_find_pages_by_slugs_batch(db_conn: psycopg.Connection) -> None:
+    """One round-trip resolves many slugs; missing slugs absent from output."""
+    _upsert(db_conn, slug="alpha", page_type="topic")
+    _upsert(db_conn, slug="beta", page_type="system")
+    db_conn.commit()
+
+    got = repo.find_pages_by_slugs(db_conn, ["alpha", "beta", "missing", "alpha"])
+    assert set(got.keys()) == {"alpha", "beta"}
+    assert got["alpha"]["page_type"] == "topic"
+    assert got["beta"]["page_type"] == "system"
+
+
+def test_find_pages_by_slugs_empty(db_conn: psycopg.Connection) -> None:
+    """Empty input returns empty dict without touching the DB."""
+    assert repo.find_pages_by_slugs(db_conn, []) == {}
+
+
+# ---------------------------------------------------------------------------
 # count_wiki_pages_by_type
 # ---------------------------------------------------------------------------
 
