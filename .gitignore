@@ -36,7 +36,7 @@ raw/attachments/**/*
 !raw/attachments/.gitkeep
 wiki/*.md
 wiki/topics/*.md
-wiki/entities/*.md
+wiki/people/*.md
 wiki/systems/*.md
 wiki/policies/*.md
 wiki/timelines/*.md
