@@ -1,13 +1,14 @@
 """Repository functions for the wiki_pages table.
 
 One row per rendered wiki page. `slug` is the stem of the markdown file;
-`path` is the repo-relative path ("wiki/entities/alice.md"); `page_type`
-mirrors the on-disk folder (topic / entity / system / ...).
+`path` is the repo-relative path ("wiki/people/alice.md" post v9-U5,
+"wiki/entities/..." for unmigrated legacy rows); `page_type` mirrors the
+on-disk folder (topic / person / system / ...; `entity` kept as legacy
+alias until the shim is removed in #67).
 
-`canonical_user_email` is populated for entity and person pages — see
-the partial unique index in schema.sql. During the C1 migration both
-categories coexist; `person` is the target, `entity` is the legacy
-alias. For topic / system pages we just leave it NULL.
+`canonical_user_email` is populated for person pages (and legacy entity
+pages) — see the partial unique index in schema.sql. Topic / system
+pages leave it NULL.
 """
 
 from __future__ import annotations
@@ -202,12 +203,13 @@ def lookup_page(
     title: str | None = None,
     canonical_user_email: str | None = None,
 ) -> dict[str, Any] | None:
-    """Find a wiki page by slug, title, or canonical entity email.
+    """Find a wiki page by slug, title, or canonical person email.
 
     Resolution order (first match wins):
       1. Exact slug match → confidence 1.0.
       2. Exact title match (case-insensitive) → confidence 0.9.
-      3. Exact email match on entity pages → confidence 1.0.
+      3. Exact email match on person pages (legacy `entity` type included
+         as a shim, retired in #67) → confidence 1.0.
       4. None if nothing matches.
 
     Raises ValueError if no lookup key is supplied.
@@ -260,10 +262,11 @@ def lookup_page(
                 return hit
 
         if canonical_user_email is not None:
-            # Accept both 'entity' (legacy) and 'person' (C1 migration) so
-            # the resolver finds people-directory pages during the transition.
-            # Prefer 'entity' matches so resolver order stays deterministic
-            # while both categories coexist.
+            # "entity" kept as shim; retired in v9-U5 data migration, full
+            # removal in #67. Accept both 'entity' (legacy) and 'person'
+            # (post-migration canonical) so the resolver still finds any
+            # unmigrated stragglers. Sort preference keeps legacy rows first
+            # so resolver order stays deterministic while both coexist.
             hit = _stamp(
                 conn.execute(
                     """

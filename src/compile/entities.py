@@ -1,6 +1,12 @@
-"""Deterministic entity-page creation, keyed by email address.
+"""Deterministic person-page creation, keyed by email address.
 
-The old compile flow let the LLM invent entity slugs from display names.
+Historical note: these pages were called "entity" pages in v0-v8; v9-U5
+migrated them to `wiki/people/` and renamed the page type to `person`.
+The module filename + public tool (`create_entities`) stay stable so
+agent prompts and callers don't re-learn the API; internals read
+"person".
+
+The old compile flow let the LLM invent person slugs from display names.
 That produced three concrete failures we had to chase:
 
 - Duplicates by minor variation (`arjun-gaur`, `arjun-gaur-clean`,
@@ -191,7 +197,7 @@ def create_entity_page(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Idempotently resolve an entity page by email.
+    """Idempotently resolve a person page by email.
 
     Existing-page lookup always wins — a page the agent created previously
     (or a legacy display-name slug with matching `email:` frontmatter) is
@@ -272,7 +278,7 @@ def create_entity_page(
                 "distinct_threads": counts["distinct_threads"],
             },
             "guidance": (
-                "This entity has only CC-only or weak appearances. "
+                "This person has only CC-only or weak appearances. "
                 "Pass force=True only if you are writing substantive content "
                 "for them in this turn."
             ),
@@ -332,10 +338,11 @@ def create_entity_pages(
     entities_dir: Path | None = None,
     raw_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Resolve or create multiple entity pages in one call.
+    """Resolve or create multiple person pages in one call.
 
     Each requested email must appear literally in at least one raw file from
-    ``raw_paths``. This blocks hallucinated or stale entity creation requests.
+    ``raw_paths``. This blocks hallucinated or stale person-page creation
+    requests.
     """
     if not raw_paths:
         return {"ok": False, "error": "raw_paths is required"}
@@ -362,7 +369,7 @@ def create_entity_pages(
                     "ok": False,
                     "reason": "invalid_request",
                     "index": idx,
-                    "guidance": "Each entity request must be an object with email/display_name/force.",
+                    "guidance": "Each person request must be an object with email/display_name/force.",
                 }
             )
             continue
@@ -376,7 +383,7 @@ def create_entity_pages(
                     "ok": False,
                     "reason": "invalid_email",
                     "index": idx,
-                    "guidance": "Each entity request needs a non-empty `email` string.",
+                    "guidance": "Each person request needs a non-empty `email` string.",
                 }
             )
             continue
@@ -414,7 +421,7 @@ def create_entity_pages(
                     "email": email_lc,
                     "raw_paths_checked": list(raw_contents),
                     "guidance": (
-                        "Only create entities for email addresses that appear literally "
+                        "Only create people pages for email addresses that appear literally "
                         "in the current batch's raw emails."
                     ),
                 }

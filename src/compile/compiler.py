@@ -666,7 +666,7 @@ def _page_summary(md_file: Path) -> dict[str, Any] | None:
     Returns None for pages with broken frontmatter so the caller can skip
     them. The `is_stub` flag is True when the page has no provenance
     evidence — neither per-message `sources:` nor post-Phase-A
-    `source_threads:` — used to hide ghost entity/system pages from the
+    `source_threads:` — used to hide ghost person/system pages from the
     landing listings.
     """
     try:
@@ -1566,11 +1566,15 @@ def _autoheal_email_path(email_path: str) -> str:
 
 
 class EntityRequest(BaseModel):
-    """One person to resolve/create as an entity page.
+    """One person to resolve/create as a person page.
 
     `email` is REQUIRED and is the identity — slugs are derived from it
     deterministically. An empty or missing `email` is a schema violation
     and will be rejected before the tool body runs.
+
+    Class name kept as ``EntityRequest`` for backwards compatibility with
+    the public ``create_entities`` tool; filename + symbol retired with
+    the shim in #67.
     """
 
     email: str = Field(
@@ -1660,8 +1664,8 @@ def create_entities(entities: list[EntityRequest]) -> dict[str, Any]:
             "results": [],
         }
 
-    entity_dicts = [e.model_dump() for e in entities]
-    return create_entity_pages(raw_paths, entity_dicts)
+    person_dicts = [e.model_dump() for e in entities]
+    return create_entity_pages(raw_paths, person_dicts)
 
 
 # === Browse / patch / validate tools (north-star recovery) ===
@@ -1872,9 +1876,10 @@ def validate_page_draft(
     - `over_quoting`: more than 30% of non-empty body lines are
       blockquotes (`> ` prefix) — a sign the page is email paste-in,
       not synthesis.
-    - `person_page_heuristic`: when `page_type` is ``person`` or
-      ``entity``, the body must contain ≥2 substantive sentences of
-      prose (not just headings, wikilinks, or CC-list mentions).
+    - `person_page_heuristic`: when `page_type` is ``person`` (or the
+      legacy ``entity`` alias, shim retired in #67), the body must
+      contain ≥2 substantive sentences of prose (not just headings,
+      wikilinks, or CC-list mentions).
     - `likely_duplicate`: another wiki page already has the same
       (case-insensitive) `title`.
 
@@ -1883,8 +1888,9 @@ def validate_page_draft(
             self-duplication in the likely-duplicate check).
         body: Markdown body being considered.
         title: Draft title. Without it, the duplicate check is skipped.
-        page_type: Draft page type (e.g. ``topic``, ``entity``, ``person``).
-            Without it, the person-page heuristic cannot fire.
+        page_type: Draft page type (e.g. ``topic``, ``person``; legacy
+            ``entity`` tolerated as a shim, retired in #67). Without it,
+            the person-page heuristic cannot fire.
         wiki_dir: Root wiki directory for duplicate-title scanning.
 
     Returns:

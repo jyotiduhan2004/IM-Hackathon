@@ -40,7 +40,8 @@ _BROKEN_PAGE_STALENESS_SECONDS = 600
 # Categories we scan for known-slug resolution on wikilinks. `timelines/` and
 # `conflicts/` are empty on disk (retired in Tier P); dropping them from the
 # scan stops the known-slugs set from growing with nothing to hit. People
-# pages still file under `entities/` until the rename migration lands.
+# pages live under `people/` post v9-U5; `entities/` is kept as a legacy
+# fallback so any unmigrated stragglers still resolve. Shim retired in #67.
 _WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies", "decisions")
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
