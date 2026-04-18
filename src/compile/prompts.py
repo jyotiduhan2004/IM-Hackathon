@@ -83,7 +83,7 @@ message→page links automatically.
    ALWAYS go through `create_entities(entities=[{email, display_name}])`
    — never invent a slug or `write_file` a people page directly.
 6. After your last page edit for the email, run
-   `check_my_work(file_path="raw/…")`. It checks every page citing
+   `check_my_work(raw_email_path="raw/…")`. It checks every page citing
    the email for duplicate H2s, broken wikilinks, malformed
    frontmatter, and stray brackets. Return shapes:
      - clean (`{"ok": "true", "status": "clean", ...}`) — proceed to

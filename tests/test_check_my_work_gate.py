@@ -96,7 +96,7 @@ def _critique_handler() -> Callable[[ToolCallRequest], ToolMessage]:
 def test_empty_session_check_my_work_is_rejected() -> None:
     """No successful writes → check_my_work is blocked with synthetic error."""
     mw = CheckMyWorkGateMiddleware()
-    request = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+    request = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
     # Handler should NOT be called — we assert by failing if it is.
     handler = MagicMock(side_effect=AssertionError("handler must not run"))
 
@@ -117,7 +117,7 @@ def test_successful_write_then_check_my_work_passes_through() -> None:
     write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
     mw.wrap_tool_call(write_req, _success_handler("write_file"))
 
-    check_req = _make_request("check_my_work", {"file_path": "raw/foo.md"}, "call_2")
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"}, "call_2")
     result = mw.wrap_tool_call(check_req, _critique_handler())
 
     assert isinstance(result, ToolMessage)
@@ -136,7 +136,7 @@ def test_write_draft_page_success_alone_is_rejected() -> None:
         "write_draft_page must NOT be tracked as a content write"
     )
 
-    check_req = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
     handler = MagicMock(side_effect=AssertionError("handler must not run"))
     result = mw.wrap_tool_call(check_req, handler)
 
@@ -154,7 +154,7 @@ def test_failed_write_does_not_count() -> None:
 
     assert mw.successful_write_tools == set()
 
-    check_req = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
     handler = MagicMock(side_effect=AssertionError("handler must not run"))
     result = mw.wrap_tool_call(check_req, handler)
 
@@ -182,7 +182,7 @@ def test_edit_file_and_patch_page_also_count() -> None:
         write_req = _make_request(tool, {"file_path": "wiki/topics/foo.md"})
         mw.wrap_tool_call(write_req, _success_handler(tool))
 
-        check_req = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+        check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
         result = mw.wrap_tool_call(check_req, _critique_handler())
 
         assert isinstance(result, ToolMessage)
@@ -213,7 +213,7 @@ def test_touched_paths_recorded_on_success() -> None:
 async def test_awrap_tool_call_rejects_empty_session() -> None:
     """Async variant rejects premature check_my_work identically."""
     mw = CheckMyWorkGateMiddleware()
-    request = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+    request = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
 
     async def handler(_req: ToolCallRequest) -> ToolMessage:
         raise AssertionError("handler must not run")
@@ -247,7 +247,7 @@ async def test_awrap_tool_call_passes_through_after_write() -> None:
     write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
     await mw.awrap_tool_call(write_req, async_success)
 
-    check_req = _make_request("check_my_work", {"file_path": "raw/foo.md"})
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"})
     result = await mw.awrap_tool_call(check_req, async_critique)
 
     assert isinstance(result, ToolMessage)

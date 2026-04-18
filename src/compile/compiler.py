@@ -355,17 +355,17 @@ def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
 
 @tool
 def check_my_work(
-    file_path: str,
+    raw_email_path: str,
     acknowledge: list[str] | None = None,
 ) -> dict[str, Any]:
-    """WHEN TO USE: Call this as the last step of compiling each raw email,
-    before moving on to the next one. It runs a quality review over every
-    wiki page that cites this email as a source and either gives you a
-    punch list to fix, or confirms you're done.
+    """Critique every wiki page that cites a given raw email.
 
-    WHEN NOT TO USE: Don't call before writing the wiki pages. Don't call
-    when you haven't touched any page for this email. This is not a search
-    or lookup tool.
+    WHEN: after you've written or edited wiki pages that cite a specific
+      raw email — critiques those pages for frontmatter completeness,
+      broken wikilinks, duplicate H2s, etc.
+    WHEN NOT: for a general wiki page sanity check (use validate_page_draft
+      on a specific slug instead); or if no page cites the raw yet (this
+      tool has nothing to critique).
 
     What it checks: malformed frontmatter, duplicate H2 headings
     (most often caused by appending instead of merging), broken wikilinks
@@ -374,7 +374,7 @@ def check_my_work(
     warnings are advisory.
 
     Feedback loop (single-thread, same session):
-      1. Finish writing. Call `check_my_work(raw_path)`.
+      1. Finish writing. Call `check_my_work(raw_email_path)`.
       2. If `blockers` is empty → you're done with this email. Move on.
       3. If `blockers` is non-empty → edit the flagged pages to resolve
          each one (usually a merge or a broken link to fix). Call the
@@ -393,17 +393,18 @@ def check_my_work(
     job is just to make the check come back clean.
 
     Args:
-        file_path: Path to the raw email markdown file
-            (e.g., ``"raw/2026-04-11_foo_abc12345.md"``).
+        raw_email_path: path to the raw email whose citing wiki pages
+            should be critiqued. Format: "raw/2026-01-14_foo_bar.md".
         acknowledge: Optional list of issue IDs from a prior blocked call
             that you've decided are false positives.
 
     Returns:
-        ``{"ok": "true", "status": "clean", "warnings": N, "audit": path}``
+        ``{"ok": "true", "status": "clean", "warnings": N,
+        "raw_email_path": str, "pages_critiqued": list[str], "audit": path}``
           when blockers are resolved or acknowledged, OR
         ``{"ok": "false", "status": "blocked", "issues": [{id, check,
-        page, message}, ...], "audit": path, "hint": ...}`` when action
-        is required.
+        page, message}, ...], "raw_email_path": str, "pages_critiqued":
+        list[str], "audit": path, "hint": ...}`` when action is required.
     """
     from src.compile.critique import critique_pages
     from src.compile.critique import find_touched_pages
@@ -413,17 +414,19 @@ def check_my_work(
     wiki_dir = repo_root / "wiki"
     audit_dir = repo_root / "docs" / "audits"
 
-    touched = find_touched_pages(file_path, wiki_dir)
+    touched = find_touched_pages(raw_email_path, wiki_dir)
     result = critique_pages(touched, wiki_dir, repo_root)
 
     ack_ids = set(acknowledge or [])
     unresolved = [i for i in result.blockers if i.id not in ack_ids]
 
     if unresolved:
-        audit_path = write_audit(result, file_path, "blocked", audit_dir, acknowledged_ids=ack_ids)
+        audit_path = write_audit(
+            result, raw_email_path, "blocked", audit_dir, acknowledged_ids=ack_ids
+        )
         logger.info(
             "check_my_work blocked",
-            file_path=file_path,
+            raw_email_path=raw_email_path,
             blockers=len(unresolved),
             audit=str(audit_path),
         )
@@ -439,6 +442,8 @@ def check_my_work(
                 }
                 for i in unresolved
             ],
+            "raw_email_path": raw_email_path,
+            "pages_critiqued": result.pages_critiqued,
             "audit": str(audit_path.relative_to(repo_root)),
             "hint": (
                 "Edit the flagged pages to fix each blocker (usually: "
@@ -449,11 +454,13 @@ def check_my_work(
             ),
         }
 
-    audit_path = write_audit(result, file_path, "clean", audit_dir, acknowledged_ids=ack_ids)
+    audit_path = write_audit(result, raw_email_path, "clean", audit_dir, acknowledged_ids=ack_ids)
     return {
         "ok": "true",
         "status": "clean",
         "warnings": len(result.warnings),
+        "raw_email_path": raw_email_path,
+        "pages_critiqued": result.pages_critiqued,
         "audit": str(audit_path.relative_to(repo_root)),
     }
 
