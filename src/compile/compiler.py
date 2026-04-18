@@ -2182,6 +2182,7 @@ def create_compiler(
     from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
+    from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
     from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
     from src.compile.reviewer import build_reviewer_subagent
 
@@ -2285,6 +2286,13 @@ def create_compiler(
             # patterns (wiki/topics/*.md) pass through. Reviewer subagent
             # keeps glob — see src/compile/reviewer.py.
             GlobNarrowingMiddleware(),
+            # v11-U3: every `read_file` ToolMessage gets a footer with
+            # `total_lines` (and a `next offset=` hint when truncated).
+            # Inherited deepagents tool defaults to limit=100 and gives
+            # zero signal that more content exists below — agent flies
+            # blind on 83% of compile traces. View-root binds at
+            # construction so we can map virtual paths to disk.
+            ReadFileTruncationHintMiddleware(view_root=view_root),
         ],
         subagents=[cast(Any, reviewer_spec)],
     )
