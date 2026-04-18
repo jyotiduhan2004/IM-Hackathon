@@ -11,30 +11,11 @@ existing ``except`` branch that marks the batch failed and moves on.
 from __future__ import annotations
 
 import concurrent.futures
-import importlib.util
-import sys
 import time
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-
-
-def _load_compile_all():
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = Path(__file__).parent.parent / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module():
-    return _load_compile_all()
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for the helper itself.

@@ -8,36 +8,13 @@ timestamps on re-edited pages).
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 import time
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from src.utils import extract_frontmatter  # noqa: E402
-from src.utils import render_with_frontmatter  # noqa: E402
-
-
-def _load_compile_all():
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = REPO_ROOT / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_stamp_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_stamp_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module():
-    return _load_compile_all()
+from src.utils import extract_frontmatter
+from src.utils import render_with_frontmatter
 
 
 @pytest.fixture
@@ -73,9 +50,7 @@ def test_skips_pages_unchanged_since_run_start(compile_all_module, wiki_dir):
 
     # since_timestamp = 1 second ago — both files are older, nothing to stamp.
     since = time.time() - 1
-    stamped, skipped = mod._stamp_recently_modified_pages(
-        str(wiki_dir), since, "test-model"
-    )
+    stamped, skipped = mod._stamp_recently_modified_pages(str(wiki_dir), since, "test-model")
 
     assert stamped == 0
     assert skipped == 0
@@ -103,9 +78,7 @@ def test_stamps_pages_modified_after_run_start(compile_all_module, wiki_dir):
     page_a.touch()
     page_b.touch()
 
-    stamped, skipped = mod._stamp_recently_modified_pages(
-        str(wiki_dir), since, "test-model"
-    )
+    stamped, skipped = mod._stamp_recently_modified_pages(str(wiki_dir), since, "test-model")
 
     assert stamped == 2
     assert skipped == 0
@@ -125,9 +98,7 @@ def test_update_count_increments_on_restamp(compile_all_module, wiki_dir):
 
     # First stamp pass — `since` is older than the page mtime so it qualifies.
     since1 = time.time() - 60
-    stamped1, _ = mod._stamp_recently_modified_pages(
-        str(wiki_dir), since1, "test-model"
-    )
+    stamped1, _ = mod._stamp_recently_modified_pages(str(wiki_dir), since1, "test-model")
     assert stamped1 == 1
     fm1 = extract_frontmatter(page.read_text(encoding="utf-8"))
     assert fm1["update_count"] == 1
@@ -137,9 +108,7 @@ def test_update_count_increments_on_restamp(compile_all_module, wiki_dir):
     since2 = time.time()
     time.sleep(0.05)
     page.touch()
-    stamped2, _ = mod._stamp_recently_modified_pages(
-        str(wiki_dir), since2, "test-model"
-    )
+    stamped2, _ = mod._stamp_recently_modified_pages(str(wiki_dir), since2, "test-model")
     assert stamped2 == 1
     fm2 = extract_frontmatter(page.read_text(encoding="utf-8"))
     assert fm2["update_count"] == 2
@@ -163,9 +132,7 @@ def test_skips_corrupt_frontmatter_pages(compile_all_module, wiki_dir):
     orphan.touch()
     healthy.touch()
 
-    stamped, skipped = mod._stamp_recently_modified_pages(
-        str(wiki_dir), since, "test-model"
-    )
+    stamped, skipped = mod._stamp_recently_modified_pages(str(wiki_dir), since, "test-model")
 
     assert stamped == 1
     assert skipped == 1

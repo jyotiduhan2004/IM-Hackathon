@@ -23,8 +23,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -72,23 +70,6 @@ def _write_page(
     path = cat_dir / f"{slug}.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
-
-
-@pytest.fixture
-def mini_wiki(tmp_path: Path) -> Path:
-    """wiki/ dir with every category subdirectory ready for fixtures."""
-    wiki = tmp_path / "wiki"
-    for cat in (
-        "topics",
-        "entities",
-        "people",
-        "systems",
-        "policies",
-        "timelines",
-        "conflicts",
-    ):
-        (wiki / cat).mkdir(parents=True)
-    return wiki
 
 
 # ---------------------------------------------------------------------------

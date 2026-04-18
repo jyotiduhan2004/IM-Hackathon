@@ -8,27 +8,7 @@ roughly half the time, leaving holes in the audit trail.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
-
-import pytest
-
-
-def _load_compile_all():
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = Path(__file__).parent.parent / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module():
-    return _load_compile_all()
 
 
 def _read_lines(path: Path) -> list[str]:
@@ -61,8 +41,12 @@ def test_three_calls_produce_three_rows_in_order(compile_all_module, tmp_path):
 
     batches = [
         (1, [{"path": "raw/a.md", "thread_id": "t1"}], "compiled", ""),
-        (2, [{"path": "raw/b.md", "thread_id": "t2"}, {"path": "raw/c.md", "thread_id": "t2"}],
-         "failed", "recursion limit hit"),
+        (
+            2,
+            [{"path": "raw/b.md", "thread_id": "t2"}, {"path": "raw/c.md", "thread_id": "t2"}],
+            "failed",
+            "recursion limit hit",
+        ),
         (3, [{"path": "raw/d.md", "thread_id": "t3"}], "partial", "1 of 2 done"),
     ]
     for idx, batch, outcome, notes in batches:
@@ -85,8 +69,10 @@ def test_header_written_only_on_first_call(compile_all_module, tmp_path):
 
     for idx in range(1, 4):
         mod._append_batch_log(
-            idx, [{"path": f"raw/{idx}.md", "thread_id": f"t{idx}"}],
-            "compiled", str(wiki_dir),
+            idx,
+            [{"path": f"raw/{idx}.md", "thread_id": f"t{idx}"}],
+            "compiled",
+            str(wiki_dir),
         )
 
     lines = _read_lines(wiki_dir / "log.md")
@@ -103,8 +89,11 @@ def test_pipes_in_notes_are_escaped(compile_all_module, tmp_path):
     wiki_dir = tmp_path / "wiki"
 
     mod._append_batch_log(
-        1, [{"path": "raw/a.md", "thread_id": "t1"}], "failed",
-        str(wiki_dir), notes="error: a|b|c crashed",
+        1,
+        [{"path": "raw/a.md", "thread_id": "t1"}],
+        "failed",
+        str(wiki_dir),
+        notes="error: a|b|c crashed",
     )
 
     row = _read_lines(wiki_dir / "log.md")[4]
@@ -119,8 +108,11 @@ def test_newlines_in_notes_collapsed(compile_all_module, tmp_path):
     wiki_dir = tmp_path / "wiki"
 
     mod._append_batch_log(
-        1, [{"path": "raw/a.md", "thread_id": "t1"}], "failed",
-        str(wiki_dir), notes="line1\nline2\nline3",
+        1,
+        [{"path": "raw/a.md", "thread_id": "t1"}],
+        "failed",
+        str(wiki_dir),
+        notes="line1\nline2\nline3",
     )
 
     lines = _read_lines(wiki_dir / "log.md")
@@ -146,7 +138,10 @@ def test_creates_wiki_dir_if_missing(compile_all_module, tmp_path):
     assert not wiki_dir.exists()
 
     mod._append_batch_log(
-        1, [{"path": "raw/a.md", "thread_id": "t1"}], "compiled", str(wiki_dir),
+        1,
+        [{"path": "raw/a.md", "thread_id": "t1"}],
+        "compiled",
+        str(wiki_dir),
     )
 
     assert wiki_dir.exists()

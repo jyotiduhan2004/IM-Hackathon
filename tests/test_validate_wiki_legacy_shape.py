@@ -14,37 +14,19 @@ errors (strict on writes, wired into compile_all's post-batch hook in Phase
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
+from tests._script_loader import load_script
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _load_validator():  # type: ignore[no-untyped-def]
-    """Import scripts/validate_wiki.py as a module (not on PYTHONPATH by default).
-
-    Mirrors the pattern in tests/test_validate_wiki_entity_checks.py —
-    register in sys.modules before exec so dataclasses resolve forward
-    references when the module isn't on PYTHONPATH.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "validate_wiki", REPO_ROOT / "scripts" / "validate_wiki.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["validate_wiki"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-validator = _load_validator()
+validator = load_script("validate_wiki")
 
 
 def _write_page(
@@ -72,23 +54,6 @@ def _write_page(
     path = cat_dir / f"{slug}.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
-
-
-@pytest.fixture
-def mini_wiki(tmp_path: Path) -> Path:
-    """A wiki/ dir with every category subdirectory ready for fixture pages."""
-    wiki = tmp_path / "wiki"
-    for cat in (
-        "topics",
-        "entities",
-        "people",
-        "systems",
-        "policies",
-        "timelines",
-        "conflicts",
-    ):
-        (wiki / cat).mkdir(parents=True)
-    return wiki
 
 
 # ---------------------------------------------------------------------------

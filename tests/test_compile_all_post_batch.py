@@ -18,33 +18,11 @@ on touched pages, the "validator sees every touched page" contract, and the
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 import time
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-
-def _load_compile_all():
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = REPO_ROOT / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_post_batch_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_post_batch_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module():
-    return _load_compile_all()
 
 
 @pytest.fixture
@@ -225,9 +203,7 @@ def test_validate_hook_skips_crashes_without_raising(
     assert errors_by_page == {}
 
 
-def test_validate_runs_on_pages_formatter_skipped(
-    compile_all_module, wiki_dir: Path
-) -> None:
+def test_validate_runs_on_pages_formatter_skipped(compile_all_module, wiki_dir: Path) -> None:
     """The validator must see every touched page, not just the subset the
     formatter rewrote.
 

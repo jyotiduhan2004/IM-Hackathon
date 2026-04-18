@@ -9,34 +9,17 @@ exit code.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
+from tests._script_loader import load_script
 
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _load_validator():
-    """Import scripts/validate_wiki.py as a module (not on PYTHONPATH by default).
-
-    The module must be registered in sys.modules before exec so dataclass()
-    can look up the owning module to resolve forward references.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "validate_wiki", REPO_ROOT / "scripts" / "validate_wiki.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["validate_wiki"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-validator = _load_validator()
+validator = load_script("validate_wiki")
 
 
 def _write_page(
@@ -64,15 +47,6 @@ def _write_page(
     path = cat_dir / f"{slug}.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
-
-
-@pytest.fixture
-def mini_wiki(tmp_path: Path) -> Path:
-    """A wiki/ dir with topics/ + systems/ ready for fixtures."""
-    wiki = tmp_path / "wiki"
-    (wiki / "topics").mkdir(parents=True)
-    (wiki / "systems").mkdir(parents=True)
-    return wiki
 
 
 def test_canonical_domain_produces_no_warning(mini_wiki: Path) -> None:
@@ -130,9 +104,6 @@ def test_canonical_domains_has_eight_entries() -> None:
 def test_warnings_do_not_contribute_to_errors(mini_wiki: Path) -> None:
     """run() must split errors from warnings — warnings never bleed into errors."""
     _write_page(mini_wiki / "topics", "no-domain-topic", "topic", omit_domain=True)
-    # Fill out the other categories so run() doesn't crash on missing dirs.
-    for cat in ("entities", "policies", "timelines", "conflicts"):
-        (mini_wiki / cat).mkdir()
     errors, warnings = validator.run(mini_wiki)
     assert errors == []
     checks = {w.check for w in warnings}

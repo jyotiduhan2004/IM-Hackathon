@@ -15,15 +15,11 @@ exclusively on the 4h short-window quarantine added in F2:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import UTC
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import psycopg
-import pytest
 
 
 def _insert_message(conn: psycopg.Connection, message_id: str) -> None:
@@ -70,22 +66,6 @@ def _finished_attempt(
         """,
         (message_id, model, outcome, age_hours * 3600, age_hours * 3600),
     )
-
-
-def _load_compile_all() -> Any:
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = Path(__file__).parent.parent / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_pool_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_pool_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module() -> Any:
-    return _load_compile_all()
 
 
 def test_short_window_quarantine_fires_at_five_failures(

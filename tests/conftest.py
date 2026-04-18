@@ -26,6 +26,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
 
 import psycopg
 import pytest
@@ -35,6 +36,7 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests._script_loader import load_script  # noqa: E402
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://email_kb_app:email_kb@localhost:5432/email_kb"
@@ -380,3 +382,25 @@ def db_conn() -> Iterator[psycopg.Connection]:
     """Direct connection to the test schema for setup/inspection in tests."""
     with _scoped_connect() as conn:
         yield conn
+
+
+@pytest.fixture
+def compile_all_module() -> ModuleType:
+    """scripts/compile_all.py loaded as a module for white-box testing."""
+    return load_script("compile_all")
+
+
+@pytest.fixture
+def mini_wiki(tmp_path: Path) -> Path:
+    """Empty wiki tree pre-seeded with the full set of category subdirs.
+
+    Includes every category any test has needed (topics, entities, people,
+    systems, policies, timelines, conflicts) so a single fixture serves the
+    whole `test_format_wiki` + `test_validate_wiki_*` family without
+    per-test overrides. Extra empty dirs are irrelevant to validators that
+    only scan specific categories.
+    """
+    wiki = tmp_path / "wiki"
+    for cat in ("topics", "entities", "people", "systems", "policies", "timelines", "conflicts"):
+        (wiki / cat).mkdir(parents=True)
+    return wiki

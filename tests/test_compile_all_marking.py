@@ -8,32 +8,12 @@ stubs no longer count as "compiled" evidence (Bug C is dead).
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import uuid
 from datetime import UTC
 from datetime import datetime
-from pathlib import Path
 
 import pytest
-
 from src.db.wiki_pages import upsert_wiki_page
-
-
-def _load_compile_all():
-    """Load scripts/compile_all.py as a module so we can test its helpers."""
-    path = Path(__file__).parent.parent / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module():
-    return _load_compile_all()
 
 
 def _insert_message(conn, *, message_id: str, raw_path: str, state: str = "pending") -> None:
@@ -131,9 +111,7 @@ def test_batch_paths_handles_dicts_and_strings(compile_all_module):
     assert mod._batch_paths(["a", {"path": "b"}]) == ["a", "b"]
 
 
-def test_mark_batch_compiled_only_flips_content_touched(
-    compile_all_module, db_conn, tmp_path
-):
+def test_mark_batch_compiled_only_flips_content_touched(compile_all_module, db_conn, tmp_path):
     """Messages with a touch on a content-type page flip to compiled;
     messages touched only on a person/entity stub stay pending (Bug C dead)."""
     mod = compile_all_module
@@ -177,9 +155,7 @@ def test_mark_batch_compiled_reports_missing(compile_all_module, db_conn, tmp_pa
     assert _state(db_conn, "m1") == "compiled"
 
 
-def test_mark_batch_compiled_all_uncited_keeps_all_pending(
-    compile_all_module, db_conn, tmp_path
-):
+def test_mark_batch_compiled_all_uncited_keeps_all_pending(compile_all_module, db_conn, tmp_path):
     """No touches in the catalog → every batch email stays pending."""
     mod = compile_all_module
     _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
@@ -195,9 +171,7 @@ def test_mark_batch_compiled_all_uncited_keeps_all_pending(
     assert _state(db_conn, "m2") == "pending"
 
 
-def test_mark_batch_compiled_skips_on_trivial_insight(
-    compile_all_module, db_conn, tmp_path
-):
+def test_mark_batch_compiled_skips_on_trivial_insight(compile_all_module, db_conn, tmp_path):
     """A message with a `trivial_skip` insight logged in the current run
     flips to ``skipped`` instead of staying pending."""
     mod = compile_all_module
@@ -209,9 +183,7 @@ def test_mark_batch_compiled_skips_on_trivial_insight(
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}]
-    compiled, skipped, not_cited, missing = mod._mark_batch_compiled(
-        batch, tmp_path, run_id=run_id
-    )
+    compiled, skipped, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path, run_id=run_id)
     assert compiled == []
     assert skipped == ["m1"]
     assert not_cited == 0
@@ -269,9 +241,7 @@ def test_mark_batch_failed_truncates_long_error(compile_all_module, db_conn):
     assert len(row["last_error"]) == 500
 
 
-def test_write_touch_catalog_filters_to_content_pages(
-    compile_all_module, db_conn, tmp_path
-):
+def test_write_touch_catalog_filters_to_content_pages(compile_all_module, db_conn, tmp_path):
     """``_write_touch_catalog`` writes a row for each (batch message,
     touched content-type page) pair and silently ignores entity/person
     stubs — core of the Bug C fix."""
@@ -324,9 +294,7 @@ def test_write_touch_catalog_idempotent(compile_all_module, db_conn, tmp_path):
     assert count["c"] == 1
 
 
-def test_collect_content_cited_message_ids_filters_by_page_type(
-    compile_all_module, db_conn
-):
+def test_collect_content_cited_message_ids_filters_by_page_type(compile_all_module, db_conn):
     """The catalog query joins ``wiki_pages`` and filters to
     ``CONTENT_PAGE_TYPES`` — entity/person touches are excluded."""
     mod = compile_all_module

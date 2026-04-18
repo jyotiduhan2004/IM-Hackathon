@@ -19,8 +19,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-import pytest
-
 REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -43,15 +41,6 @@ def _load_formatter() -> ModuleType:
 
 
 formatter = _load_formatter()
-
-
-@pytest.fixture
-def mini_wiki(tmp_path: Path) -> Path:
-    """Wiki tree with topics/, entities/, systems/ subdirectories ready to fill."""
-    wiki = tmp_path / "wiki"
-    for cat in ("topics", "entities", "systems", "policies", "timelines", "conflicts"):
-        (wiki / cat).mkdir(parents=True)
-    return wiki
 
 
 def _write_page(

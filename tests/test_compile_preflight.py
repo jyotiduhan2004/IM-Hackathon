@@ -20,33 +20,11 @@ These tests pin the three-layer guard:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from click.testing import CliRunner
-
-REPO_ROOT = Path(__file__).parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-
-def _load_compile_all() -> Any:
-    """Load scripts/compile_all.py as a named module for helper tests."""
-    path = REPO_ROOT / "scripts" / "compile_all.py"
-    spec = importlib.util.spec_from_file_location("_compile_all_for_preflight_test", path)
-    assert spec and spec.loader, f"cannot load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_compile_all_for_preflight_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture
-def compile_all_module() -> Any:
-    return _load_compile_all()
 
 
 def _seed_wiki_tree(wiki_dir: Path) -> None:
