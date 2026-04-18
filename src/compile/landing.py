@@ -131,16 +131,21 @@ def _generate_glossary(wiki_dir: Path) -> Path:
 def _recent_page_entries(wiki_dir: Path, limit: int = 10) -> list[tuple[Path, float]]:
     """Return the `limit` most recently modified topic+system pages.
 
-    Uses filesystem mtime (not frontmatter) so a manually-touched page
-    still surfaces. Sorted newest-first so callers render them in order.
+    Recency ranks off `_page_recency_key` (frontmatter `last_compiled`
+    preferred, fs mtime fallback) so the Home page's "Recent changes"
+    section agrees with the per-domain card top-3 ordering (which also
+    uses `_page_recency_key`). Sorted newest-first for direct rendering.
     """
     from src.compile.compiler import _iter_content_pages
+    from src.compile.compiler import _read_page
 
-    pages_with_mtime = [
-        (md_file, md_file.stat().st_mtime) for md_file in _iter_content_pages(wiki_dir)
-    ]
-    pages_with_mtime.sort(key=lambda p: p[1], reverse=True)
-    return pages_with_mtime[:limit]
+    pages_with_recency: list[tuple[Path, float]] = []
+    for md_file in _iter_content_pages(wiki_dir):
+        read = _read_page(md_file)
+        fm = read[0] if read else {}
+        pages_with_recency.append((md_file, _page_recency_key(fm, md_file)))
+    pages_with_recency.sort(key=lambda p: p[1], reverse=True)
+    return pages_with_recency[:limit]
 
 
 def _page_recency_key(fm: dict[str, Any], md_file: Path) -> float:
@@ -211,6 +216,8 @@ def _render_domain_card(
     blurb: str,
     entries: list[tuple[Path, float]],
     top_n: int = 3,
+    *,
+    linked: bool = True,
 ) -> list[str]:
     """Render one domain card as markdown lines.
 
@@ -218,9 +225,14 @@ def _render_domain_card(
     page reliably shows all 8 (or 9 with Uncategorized) sections. Each
     entry renders the page slug + the date portion of its recency
     timestamp; empty domains show a single italic placeholder.
+
+    `linked=False` emits a plain `## <title>` header (no `domains/<slug>.md`
+    hyperlink). Used for the Uncategorized bucket, which has no hub page —
+    a link there would 404 in the viewer.
     """
+    header = f"## [{title}](domains/{slug}.md)" if linked else f"## {title}"
     lines = [
-        f"## [{title}](domains/{slug}.md)",
+        header,
         "",
         blurb,
         "",
@@ -280,6 +292,7 @@ def _generate_home(wiki_dir: Path) -> Path:
                 _UNCATEGORIZED_TITLE,
                 _UNCATEGORIZED_BLURB,
                 uncategorized,
+                linked=False,
             )
         )
 

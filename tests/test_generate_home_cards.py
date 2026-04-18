@@ -201,7 +201,28 @@ def test_generate_home_uncategorized_hidden_when_empty(mini_wiki: Path) -> None:
         "Buyer.\n",
     )
     content = _generate_home(mini_wiki).read_text()
+    # Neither the old linked form nor the new plain form should appear
+    # when there's nothing to bucket — card is emitted only if non-empty.
     assert "## [Uncategorized]" not in content
+    assert "## Uncategorized\n" not in content
+
+
+def test_generate_home_uncategorized_has_no_dead_link(mini_wiki: Path) -> None:
+    """P1-1: the Uncategorized card must not link to a non-existent hub page."""
+    _write_page(
+        mini_wiki / "topics" / "orphan.md",
+        {
+            "title": "Orphan",
+            "page_type": "topic",
+            "last_compiled": _iso(datetime(2026, 4, 10, tzinfo=UTC)),
+        },
+        "No domain keywords anywhere.\n",
+    )
+    content = _generate_home(mini_wiki).read_text()
+    # Card header is plain, not a markdown link — no `domains/uncategorized.md` target exists.
+    assert "## Uncategorized\n" in content
+    assert "[Uncategorized](domains/uncategorized.md)" not in content
+    assert "domains/uncategorized.md" not in content
 
 
 def test_generate_home_falls_back_to_mtime_when_last_compiled_missing(
@@ -234,11 +255,16 @@ def _extract_card(content: str, domain_title: str) -> str:
     (Explore by domain, each card, Recent changes) so raw splits are
     fragile. We anchor on the exact card heading and stop at the next
     `\\n## ` boundary.
+
+    Accepts both the linked form `## [Title](domains/<slug>.md)` used
+    by canonical domains and the plain form `## Title` used by the
+    Uncategorized bucket (no hub page, so no link — see v10-U3 P1-1).
     """
-    marker = f"## [{domain_title}]"
-    start = content.index(marker)
+    linked = f"## [{domain_title}]"
+    plain = f"## {domain_title}"
+    start = content.index(linked) if linked in content else content.index(f"{plain}\n")
     remainder = content[start:]
-    next_h2 = remainder.find("\n## ", len(marker))
+    next_h2 = remainder.find("\n## ", 1)
     if next_h2 == -1:
         return remainder
     return remainder[:next_h2]
