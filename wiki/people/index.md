@@ -1,7 +1,7 @@
 ---
 title: People
 page_type: index
-status: current
+status: active
 last_compiled: '2026-04-16T08:15:30.890702+00:00'
 ---
 

@@ -36,11 +36,13 @@ raw/attachments/**/*
 !raw/attachments/.gitkeep
 wiki/*.md
 wiki/topics/*.md
+# `entities/` is the legacy path (pre-v10-U1); `people/` is the new path.
+# Ignoring both until every worktree is migrated prevents a pre-migration
+# branch from committing stale `wiki/entities/*.md` under the current config.
+wiki/entities/*.md
 wiki/people/*.md
 wiki/systems/*.md
 wiki/policies/*.md
-wiki/timelines/*.md
-wiki/conflicts/*.md
 
 # Langfuse / tracing
 .langfuse/
