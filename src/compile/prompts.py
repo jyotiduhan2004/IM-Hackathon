@@ -255,20 +255,22 @@ Write/read:
 
 Discovery (start here, in this order):
 - `get_thread_context(thread_id, response_format="concise")` — opener.
-  See the thread's structure before reading any individual email. Use
-  `"concise"` first (one-line-per-message, quote blocks stripped); switch
-  to `response_format="detailed"` only when you need full 200-char
-  previews to decide what to read.
+  Concise returns the thread's size + first subject + latest date in
+  ~72 tokens; switch to `response_format="detailed"` only when you
+  need per-message bodies to decide what to read.
 - `resolve_page(query)` — slug / title / email lookup. Returns
   `{slug, title, page_type, status, confidence, why_matched, candidates,
    auto_corrected_from, auto_corrected_to}`. Call this BEFORE creating any
   page. Normalises URL hosts (`mesh-pg.intermesh.net` → `mesh-pg`).
-- `get_page_summary(slug)` — title, page_type, status, first paragraph,
-  H2 headings. Cheap way to decide merge vs. new.
+- `get_page_summary(slug, response_format="concise"|"detailed")` —
+  concise returns `{found, slug, title, first_paragraph}`; detailed
+  adds page_type, status, headings, source_count, is_cited,
+  last_compiled. Cheap way to decide merge vs. new.
 - `list_wiki_pages(response_format="concise"|"detailed")` — fallback
-  catalog browse when `resolve_page` doesn't find a match. Use `concise`
-  for a quick inventory; `detailed` gives per-page `{title, page_type,
-  status, source_count, last_compiled}`.
+  catalog browse when `resolve_page` doesn't find a match. Concise
+  returns a flat `{pages: [{slug, title}, ...]}` inventory; detailed
+  gives per-category `{title, page_type, status, source_count,
+  last_compiled}`.
 
 Batch / people:
 - `create_entities(entities=[{email, display_name}])` — resolve or create
@@ -408,7 +410,7 @@ rollout. No existing page. Shows the full required shape: `domain:`
 frontmatter, ≥2-sentence lead paragraph, all 8 topic H2 sections.
 
 ```
-get_thread_context("19b59cdc863ac109", response_format="concise") → {summary_lines: [...], message_count: 4, subject: "WhatsApp 9696 coverage"}
+get_thread_context("19b59cdc863ac109", response_format="concise") → {message_count: 4, first_subject: "WhatsApp 9696 coverage", latest_date: "2026-04-15T10:12:00+00:00"}
 resolve_page("whatsapp-9696-rollout") → {exists: false, candidates: []}
 read_file("/raw/2026-04-15_whatsapp_9696_launch_abc.md")
 validate_page_draft(slug="whatsapp-9696-rollout", body="...", title="WhatsApp 9696 rollout", page_type="topic")

@@ -37,8 +37,12 @@ def test_list_wiki_pages_browses_agent_visible_categories(tmp_path) -> None:  # 
     """Sanity: the browse tool exposes the same 5 categories the
     prompt teaches, not a different hardcoded list. Using tmp_path
     (empty wiki) checks the tool returns the right keys even on
-    empty scan."""
-    result = list_wiki_pages.invoke({"response_format": "concise", "wiki_dir": str(tmp_path)})
+    empty scan.
+
+    v10-U6: the category-keyed shape lives in the `detailed` format.
+    Concise returns `{"pages": [...]}` — a flat inventory that drops
+    the category grouping to save tokens."""
+    result = list_wiki_pages.invoke({"response_format": "detailed", "wiki_dir": str(tmp_path)})
     assert set(result.keys()) == set(AGENT_VISIBLE_CATEGORIES)
 
 

@@ -92,7 +92,12 @@ class TestGetPageSummary:
             sources=["raw/2026-04-11_foo.md", "raw/2026-04-12_bar.md"],
         )
 
-        result = _invoke(compiler_mod.get_page_summary, slug="buylead", wiki_dir=str(wiki))
+        result = _invoke(
+            compiler_mod.get_page_summary,
+            slug="buylead",
+            wiki_dir=str(wiki),
+            response_format="detailed",
+        )
 
         assert result["found"] is True
         assert result["slug"] == "buylead"
@@ -132,7 +137,12 @@ class TestGetPageSummary:
             body=body,
         )
 
-        result = _invoke(compiler_mod.get_page_summary, slug="quiet-page", wiki_dir=str(wiki))
+        result = _invoke(
+            compiler_mod.get_page_summary,
+            slug="quiet-page",
+            wiki_dir=str(wiki),
+            response_format="detailed",
+        )
 
         assert result["found"] is True
         assert result["headings"] == []
@@ -195,7 +205,9 @@ class TestGetThreadContext:
         )
         db_conn.commit()
 
-        result = _invoke(compiler_mod.get_thread_context, thread_id="t-1")
+        result = _invoke(
+            compiler_mod.get_thread_context, thread_id="t-1", response_format="detailed"
+        )
 
         assert result["thread_id"] == "t-1"
         assert [m["message_id"] for m in result["messages"]] == ["m_old", "m_new"]
@@ -207,7 +219,9 @@ class TestGetThreadContext:
         assert result["messages"][1]["compile_state"] == "pending"
 
     def test_unknown_thread_returns_empty_list(self) -> None:
-        result = _invoke(compiler_mod.get_thread_context, thread_id="t-nope")
+        result = _invoke(
+            compiler_mod.get_thread_context, thread_id="t-nope", response_format="detailed"
+        )
         assert result == {
             "thread_id": "t-nope",
             "messages": [],

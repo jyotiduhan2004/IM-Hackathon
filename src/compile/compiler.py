@@ -217,43 +217,65 @@ def list_wiki_pages(
     wiki_dir: str = "wiki",
     response_format: Literal["concise", "detailed"] = "concise",
 ) -> dict[str, Any]:
-    """Fallback browse of the wiki catalog. Prefer `resolve_page` as the
-    first discovery call — this tool is for "I don't know the slug, let
-    me eyeball the category."
+    """List all wiki pages.
+
+    WHEN to use: need an overview of available pages, or planning which
+      pages to inspect before deciding to merge vs. create. Fallback
+      browse of the wiki catalog — prefer `resolve_page` as the first
+      discovery call.
+    WHEN NOT to use: you already know the specific slug — call
+      `get_page_summary` directly.
 
     Args:
         wiki_dir: Root wiki directory.
         response_format:
-          - "concise" (default) — `{category: [slug, ...]}`. Cheap inventory.
-          - "detailed" — `{category: [{slug, title, page_type, status,
-            source_count, last_compiled}, ...]}`. Per-page metadata; costs
-            more context but saves a follow-up `get_page_summary`.
+          - "concise" (default, ~72 tokens on a small wiki) — a flat
+            `{"pages": [{"slug", "title"}, ...]}` list across every
+            agent-visible category. Cheapest inventory for "what
+            pages exist at all?".
+          - "detailed" (~206+ tokens) — `{category: [{slug, title,
+            page_type, status, source_count, source_thread_count,
+            is_cited, last_compiled}, ...]}` keyed by category with
+            per-page metadata. Use when you need the per-category
+            breakdown or the citation/status signals to pick a
+            merge target.
 
-    Returns:
-        Dict keyed by category. Categories: topics, systems, policies,
-        decisions, people — the agent-browseable subset (see the
-        prompt's <page_types> contract + AGENT_VISIBLE_CATEGORIES in
-        src/compile/categories.py). Glossary is a single file, not a
-        directory; domains + timelines + conflicts are coordinator-
-        generated or retired and intentionally hidden from this
-        browse surface.
+    Both formats read the same frontmatter from disk — the only
+    difference is how much is returned. Categories: topics, systems,
+    policies, decisions, people (see
+    `src/compile/categories.py::AGENT_VISIBLE_CATEGORIES`).
     """
     from src.compile.categories import AGENT_VISIBLE_CATEGORIES
 
     wiki_path = Path(wiki_dir)
     categories: tuple[str, ...] = AGENT_VISIBLE_CATEGORIES
-    if not wiki_path.exists():
-        return {c: [] for c in categories}
 
     if response_format == "concise":
-        concise: dict[str, list[str]] = {c: [] for c in categories}
-        for category in categories:
-            cat_dir = wiki_path / category
-            if cat_dir.exists():
-                concise[category] = sorted(f.stem for f in cat_dir.glob("*.md"))
-        return cast(dict[str, Any], concise)
+        pages: list[dict[str, str]] = []
+        if wiki_path.exists():
+            for category in categories:
+                cat_dir = wiki_path / category
+                if not cat_dir.exists():
+                    continue
+                for md_file in sorted(cat_dir.glob("*.md")):
+                    if md_file.name == "index.md":
+                        continue
+                    slug = md_file.stem
+                    title = slug
+                    try:
+                        content = md_file.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        content = ""
+                    if content:
+                        fm = _extract_frontmatter(content)
+                        if fm:
+                            title = str(fm.get("title") or slug)
+                    pages.append({"slug": slug, "title": title})
+        return {"pages": pages}
 
     detailed: dict[str, list[dict[str, Any]]] = {c: [] for c in categories}
+    if not wiki_path.exists():
+        return cast(dict[str, Any], detailed)
     for category in categories:
         cat_dir = wiki_path / category
         if not cat_dir.exists():
@@ -1738,34 +1760,38 @@ def _extract_h2_headings(body: str) -> list[str]:
 
 
 @tool
-def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
+def get_page_summary(
+    slug: str,
+    wiki_dir: str = "wiki",
+    response_format: Literal["concise", "detailed"] = "concise",
+) -> dict[str, Any]:
     """Return a summary for a wiki page.
 
-    WHEN TO USE: when you need to know what a wiki page is about
-      before deciding whether to merge or create a new page.
-    WHEN NOT TO USE: don't call when you need the full page body —
-      use `read_file` (then `patch_page` for targeted writes) instead.
+    WHEN to use: you need to know what a wiki page is about before
+      deciding whether to merge or create a new page.
+    WHEN NOT to use: you need the full page body — use `read_file`
+      (then `patch_page` for targeted writes) instead.
 
-    Scans `wiki/<category>/<slug>.md` across every wiki category, parses
-    the frontmatter, and returns the fields an agent actually needs to
-    decide "merge here or make a new page": title, page_type, status,
-    first paragraph (≤200 chars), list of H2 headings, source count, and
-    last_compiled. Does NOT return the filesystem path — callers should
-    treat the slug as the stable identifier.
+    Scans `wiki/<category>/<slug>.md` across every wiki category and
+    returns the fields an agent actually needs to decide "merge here or
+    make a new page". Does NOT return the filesystem path — callers
+    should treat the slug as the stable identifier.
 
     Args:
         slug: kebab-case page identifier (without `.md`).
         wiki_dir: Root wiki directory. Default "wiki".
+        response_format:
+          - "concise" (default, ~72 tokens) — `{found, slug, title,
+            first_paragraph}`. Cheapest "what is this about?" probe.
+          - "detailed" (~206 tokens) — adds `page_type, status,
+            headings, source_count, source_thread_count, is_cited,
+            last_compiled`. Use when you also need the citation /
+            status signals to decide merge vs. new.
 
     Returns:
-        On hit: ``{"found": True, "slug": str, "title": str, "page_type": str,
-        "status": str, "first_paragraph": str, "headings": list[str],
-        "source_count": int, "source_thread_count": int, "is_cited": bool,
-        "last_compiled": str}``. `source_count` counts per-message raw
-        paths; `source_thread_count` counts thread_ids (the newer form).
-        `is_cited` is true when either is non-zero — the cheap merge-vs-
-        new check.
-        On miss: ``{"found": False, "slug": str, "reason": "not_found"}``.
+        On miss (both formats): ``{"found": False, "slug": str,
+        "reason": "not_found"}``. Concise and detailed return the same
+        information at different granularity.
     """
     path = _find_page_by_slug(slug, wiki_dir)
     if path is None:
@@ -1778,6 +1804,17 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
 
     fm = _extract_frontmatter(content)
     body = _extract_body(content)
+    title = str(fm.get("title") or slug)
+    first_paragraph = _first_paragraph_capped(body, cap=200)
+
+    if response_format == "concise":
+        return {
+            "found": True,
+            "slug": slug,
+            "title": title,
+            "first_paragraph": first_paragraph,
+        }
+
     sources = fm.get("sources") or []
     source_threads = fm.get("source_threads") or []
     source_count = len(sources) if isinstance(sources, list) else 0
@@ -1786,10 +1823,10 @@ def get_page_summary(slug: str, wiki_dir: str = "wiki") -> dict[str, Any]:
     return {
         "found": True,
         "slug": slug,
-        "title": str(fm.get("title") or slug),
+        "title": title,
         "page_type": str(fm.get("page_type") or ""),
         "status": str(fm.get("status") or "active"),
-        "first_paragraph": _first_paragraph_capped(body, cap=200),
+        "first_paragraph": first_paragraph,
         "headings": _extract_h2_headings(body),
         "source_count": source_count,
         "source_thread_count": source_thread_count,

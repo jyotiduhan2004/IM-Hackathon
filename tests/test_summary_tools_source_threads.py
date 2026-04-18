@@ -33,7 +33,9 @@ class TestGetPageSummarySourceThreads:
                 "source_threads": ["19b92d9b270daa57", "19b59cdc863ac109"],
             },
         )
-        result = get_page_summary.invoke({"slug": "fully-migrated", "wiki_dir": str(tmp_path)})
+        result = get_page_summary.invoke(
+            {"slug": "fully-migrated", "wiki_dir": str(tmp_path), "response_format": "detailed"}
+        )
         assert result["found"] is True
         assert result["source_count"] == 0  # no legacy sources
         assert result["source_thread_count"] == 2
@@ -50,7 +52,9 @@ class TestGetPageSummarySourceThreads:
                 "source_threads": ["19b92d9b270daa57"],
             },
         )
-        result = get_page_summary.invoke({"slug": "transitional", "wiki_dir": str(tmp_path)})
+        result = get_page_summary.invoke(
+            {"slug": "transitional", "wiki_dir": str(tmp_path), "response_format": "detailed"}
+        )
         assert result["source_count"] == 2
         assert result["source_thread_count"] == 1
         assert result["is_cited"] is True
@@ -60,7 +64,9 @@ class TestGetPageSummarySourceThreads:
             tmp_path / "topics" / "empty.md",
             {"title": "Empty", "page_type": "topic", "status": "active"},
         )
-        result = get_page_summary.invoke({"slug": "empty", "wiki_dir": str(tmp_path)})
+        result = get_page_summary.invoke(
+            {"slug": "empty", "wiki_dir": str(tmp_path), "response_format": "detailed"}
+        )
         assert result["source_count"] == 0
         assert result["source_thread_count"] == 0
         assert result["is_cited"] is False
@@ -72,7 +78,9 @@ class TestGetPageSummarySourceThreads:
             tmp_path / "topics" / "statusless.md",
             {"title": "Statusless", "page_type": "topic"},
         )
-        result = get_page_summary.invoke({"slug": "statusless", "wiki_dir": str(tmp_path)})
+        result = get_page_summary.invoke(
+            {"slug": "statusless", "wiki_dir": str(tmp_path), "response_format": "detailed"}
+        )
         assert result["status"] == "active"
 
 

@@ -1,10 +1,11 @@
-"""Tests for get_thread_context response_format variants (U8).
+"""Tests for get_thread_context response_format variants (U8 + v10-U6).
 
 Covers:
-- `"detailed"` (default) preserves the pre-U8 shape exactly — callers
-  that never pass the new arg must see no change.
-- `"concise"` returns the compact `{summary_lines: ...}` shape with
-  one_line strings capped at 120 chars and quote blocks stripped.
+- `"detailed"` preserves the pre-U8 shape exactly — callers that opt
+  into detailed must see a full per-message list.
+- `"concise"` (the v10-U6 default) returns the aggregate shape
+  `{thread_id, message_count, first_subject, latest_date, cutoff_date,
+  truncated}` — no per-message bodies.
 """
 
 from __future__ import annotations
@@ -72,7 +73,7 @@ def _reset_cutoff() -> Any:
 
 
 def test_get_thread_context_detailed_unchanged(tmp_path: Path) -> None:
-    """Default `detailed` mode must return the exact pre-U8 shape."""
+    """Explicit `detailed` mode must return the full per-message shape."""
     raw1 = _seed_raw(tmp_path, "m1.md", "First message body with plenty of context.")
     raw2 = _seed_raw(tmp_path, "m2.md", "Second message body.")
     rows = [
@@ -96,7 +97,9 @@ def test_get_thread_context_detailed_unchanged(tmp_path: Path) -> None:
     cur = _FakeCursor(rows)
 
     with patch("src.db.connect", return_value=_FakeConn(cur)):
-        result = get_thread_context.invoke({"thread_id": "thread-abc"})
+        result = get_thread_context.invoke(
+            {"thread_id": "thread-abc", "response_format": "detailed"}
+        )
 
     assert set(result.keys()) == {"thread_id", "messages", "truncated", "cutoff_date"}
     assert result["thread_id"] == "thread-abc"
@@ -122,30 +125,10 @@ def test_get_thread_context_detailed_unchanged(tmp_path: Path) -> None:
     assert m1["first_200_chars"].startswith("First message body")
 
 
-def test_get_thread_context_concise_format(tmp_path: Path) -> None:
-    """Concise mode returns compact summary_lines with stripped quotes."""
-    # Message 1: clean body.
+def test_get_thread_context_default_is_concise_aggregate(tmp_path: Path) -> None:
+    """Default (no arg) returns the aggregate concise shape — no per-message bodies."""
     raw1 = _seed_raw(tmp_path, "m1.md", "Launch plan: ship MVP Friday.")
-    # Message 2: reply with long quote block that must be stripped.
-    raw2_body = (
-        "Agreed, shipping Friday works for me.\n"
-        "----- Forwarded message -----\n"
-        "original noise that must be dropped\n"
-        "more noise\n"
-    )
-    raw2 = _seed_raw(tmp_path, "m2.md", raw2_body)
-    # Message 3: reply with angle-prefixed quotes on top, substantive line below.
-    raw3_body = (
-        "> previous thread line\n"
-        "> another quoted line\n"
-        "\n"
-        "Confirmed on my end — deployed to staging."
-    )
-    raw3 = _seed_raw(tmp_path, "m3.md", raw3_body)
-    # Message 4: body exceeds 120 chars — must be truncated.
-    long_first_line = "A" * 200
-    raw4 = _seed_raw(tmp_path, "m4.md", long_first_line)
-
+    raw2 = _seed_raw(tmp_path, "m2.md", "Second message body — later in thread.")
     rows = [
         {
             "message_id": "msg-001",
@@ -163,90 +146,48 @@ def test_get_thread_context_concise_format(tmp_path: Path) -> None:
             "date": datetime(2026, 4, 11, 9, 0, 0, tzinfo=UTC),
             "compile_state": "pending",
         },
-        {
-            "message_id": "msg-003",
-            "raw_path": raw3,
-            "subject": "Re: Launch",
-            "from_address": "carol@indiamart.com",
-            "date": datetime(2026, 4, 12, 10, 0, 0, tzinfo=UTC),
-            "compile_state": "pending",
-        },
-        {
-            "message_id": "msg-004",
-            "raw_path": raw4,
-            "subject": "Re: Launch",
-            "from_address": "dave@indiamart.com",
-            "date": datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC),
-            "compile_state": "pending",
-        },
     ]
     cur = _FakeCursor(rows)
 
     with patch("src.db.connect", return_value=_FakeConn(cur)):
-        result = get_thread_context.invoke(
-            {"thread_id": "thread-abc", "response_format": "concise"}
-        )
+        result = get_thread_context.invoke({"thread_id": "thread-abc"})
 
     assert set(result.keys()) == {
         "thread_id",
         "message_count",
+        "first_subject",
+        "latest_date",
         "cutoff_date",
-        "summary_lines",
         "truncated",
     }
     assert result["thread_id"] == "thread-abc"
-    assert result["message_count"] == 4
-    assert result["truncated"] is False
+    assert result["message_count"] == 2
+    assert result["first_subject"] == "Launch"
+    assert result["latest_date"] == "2026-04-11T09:00:00+00:00"
     assert result["cutoff_date"] is None
-
-    sl = result["summary_lines"]
-    assert len(sl) == 4
-
-    # Shape per entry.
-    for entry in sl:
-        assert set(entry.keys()) == {"message_id", "date", "from_addr", "one_line"}
-        assert len(entry["one_line"]) <= 120
-
-    # Clean body: first line preserved.
-    assert sl[0]["one_line"] == "Launch plan: ship MVP Friday."
-
-    # Forwarded marker: content before marker returned, noise dropped.
-    assert sl[1]["one_line"] == "Agreed, shipping Friday works for me."
-    assert "Forwarded" not in sl[1]["one_line"]
-    assert "noise" not in sl[1]["one_line"]
-
-    # Quoted-reply lines skipped; first non-quote line wins.
-    assert sl[2]["one_line"] == "Confirmed on my end — deployed to staging."
-    assert not sl[2]["one_line"].startswith(">")
-
-    # 200-char first line truncated to 120.
-    assert len(sl[3]["one_line"]) == 120
-    assert sl[3]["one_line"] == "A" * 120
+    assert result["truncated"] is False
+    # Concise must NOT include per-message bodies.
+    assert "messages" not in result
+    assert "summary_lines" not in result
 
 
-def test_get_thread_context_concise_missing_raw_graceful(tmp_path: Path) -> None:
-    """A row whose raw file is missing yields empty one_line, not a crash."""
-    rows = [
-        {
-            "message_id": "msg-missing",
-            "raw_path": str(tmp_path / "does_not_exist.md"),
-            "subject": "Gone",
-            "from_address": "ghost@indiamart.com",
-            "date": datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC),
-            "compile_state": "pending",
-        },
-    ]
-    cur = _FakeCursor(rows)
+def test_get_thread_context_concise_empty_thread() -> None:
+    """Concise mode on an unknown thread returns message_count=0 + empty subject."""
+    cur = _FakeCursor([])
 
     with patch("src.db.connect", return_value=_FakeConn(cur)):
         result = get_thread_context.invoke(
-            {"thread_id": "thread-abc", "response_format": "concise"}
+            {"thread_id": "thread-nope", "response_format": "concise"}
         )
 
-    assert result["summary_lines"][0]["one_line"] == ""
+    assert result["thread_id"] == "thread-nope"
+    assert result["message_count"] == 0
+    assert result["first_subject"] == ""
+    assert result["latest_date"] is None
+    assert result["truncated"] is False
 
 
-def test_get_thread_context_concise_respects_cutoff(tmp_path: Path) -> None:
+def test_get_thread_context_concise_respects_cutoff() -> None:
     """Concise mode must still honour _current_batch_cutoff_date."""
     cur = _FakeCursor([])
     token = _current_batch_cutoff_date.set("2026-01-09T00:00:00+00:00")
