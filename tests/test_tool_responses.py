@@ -324,8 +324,10 @@ class TestGetThreadContextDualFormat:
             "message_count",
             "first_subject",
             "latest_date",
-            "cutoff_date",
+            "applied_cutoff_date",
+            "note_on_cutoff",
             "truncated",
+            "messages_summary",
         }
         assert result["message_count"] == 2
         assert result["first_subject"] == "Launch thread"
@@ -345,6 +347,49 @@ class TestGetThreadContextDualFormat:
         assert result["message_count"] == 2
         assert result["first_subject"] == "Launch thread"
         assert result["latest_date"] == "2026-04-11T09:00:00+00:00"
+        # Per-message stub keeps `raw_path` and excludes the body preview.
+        assert len(result["messages_summary"]) == 2
+        for entry in result["messages_summary"]:
+            assert set(entry.keys()) == {"message_id", "raw_path", "date", "from_addr"}
+            assert entry["raw_path"].endswith(".md")
+            assert "first_200_chars" not in entry
+            assert "compile_state" not in entry
+
+    def test_concise_includes_raw_path_per_message(self, tmp_path: Path) -> None:
+        """v11-U2 (#TBD): the agent must be able to call `read_file(path=raw_path)`
+        without re-querying after a concise `get_thread_context`. Pin the
+        per-message `raw_path` so future refactors don't drop it.
+        """
+        rows = _thread_rows(tmp_path)
+        cur = _FakeCursor(rows)
+        token = _current_batch_cutoff_date.set(None)
+        try:
+            with patch("src.db.connect", return_value=_FakeConn(cur)):
+                result = get_thread_context.invoke(
+                    {"thread_id": "t-1", "response_format": "concise"}
+                )
+        finally:
+            _current_batch_cutoff_date.reset(token)
+        raw_paths = [m["raw_path"] for m in result["messages_summary"]]
+        assert raw_paths == [rows[0]["raw_path"], rows[1]["raw_path"]]
+
+    def test_concise_note_on_cutoff_present_when_cutoff_set(self, tmp_path: Path) -> None:
+        """v11-U2: when chronological scope clips the window, surface a
+        human-readable note so the agent doesn't silently miss messages.
+        """
+        cur = _FakeCursor(_thread_rows(tmp_path))
+        token = _current_batch_cutoff_date.set("2026-01-14")
+        try:
+            with patch("src.db.connect", return_value=_FakeConn(cur)):
+                result = get_thread_context.invoke(
+                    {"thread_id": "t-1", "response_format": "concise"}
+                )
+        finally:
+            _current_batch_cutoff_date.reset(token)
+        assert result["applied_cutoff_date"] == "2026-01-14"
+        assert result["note_on_cutoff"] == (
+            "Messages after 2026-01-14 are hidden per chronological scope."
+        )
 
     def test_detailed_keeps_per_message_bodies(self, tmp_path: Path) -> None:
         cur = _FakeCursor(_thread_rows(tmp_path))
@@ -370,6 +415,25 @@ class TestGetThreadContextDualFormat:
         }
         assert first["first_200_chars"].startswith("First message body")
 
+    def test_detailed_shape_unchanged_backwards_compat(self, tmp_path: Path) -> None:
+        """v11-U2 changed only the concise shape. Detailed must keep the
+        legacy `cutoff_date` key (no rename, no new fields) so any caller
+        still on the original contract keeps working.
+        """
+        cur = _FakeCursor(_thread_rows(tmp_path))
+        token = _current_batch_cutoff_date.set(None)
+        try:
+            with patch("src.db.connect", return_value=_FakeConn(cur)):
+                result = get_thread_context.invoke(
+                    {"thread_id": "t-1", "response_format": "detailed"}
+                )
+        finally:
+            _current_batch_cutoff_date.reset(token)
+        assert set(result.keys()) == {"thread_id", "messages", "truncated", "cutoff_date"}
+        # New concise-only keys must NOT have leaked into detailed.
+        for new_key in ("applied_cutoff_date", "note_on_cutoff", "messages_summary"):
+            assert new_key not in result, f"detailed leaked concise-only key: {new_key}"
+
     def test_concise_is_smaller_than_detailed(self, tmp_path: Path) -> None:
         cur_concise = _FakeCursor(_thread_rows(tmp_path))
         cur_detailed = _FakeCursor(_thread_rows(tmp_path))
@@ -387,7 +451,7 @@ class TestGetThreadContextDualFormat:
             _current_batch_cutoff_date.reset(token)
         c_tokens = _token_estimate(concise)
         d_tokens = _token_estimate(detailed)
-        assert c_tokens < 100, f"concise {c_tokens} tokens > 100 cap"
-        assert d_tokens >= 2 * c_tokens, (
-            f"detailed {d_tokens} tokens should be >= 2x concise {c_tokens}"
-        )
+        # Concise cap is 200 (not 100): the per-message `raw_path` stub
+        # is worth the budget. Detailed still must exceed concise.
+        assert c_tokens < 200, f"concise {c_tokens} tokens > 200 cap"
+        assert d_tokens > c_tokens, f"detailed {d_tokens} tokens should exceed concise {c_tokens}"

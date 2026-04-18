@@ -1,11 +1,16 @@
-"""Tests for get_thread_context response_format variants (U8 + v10-U6).
+"""Tests for get_thread_context response_format variants (U8 + v10-U6 + v11-U2).
 
 Covers:
 - `"detailed"` preserves the pre-U8 shape exactly — callers that opt
-  into detailed must see a full per-message list.
-- `"concise"` (the v10-U6 default) returns the aggregate shape
-  `{thread_id, message_count, first_subject, latest_date, cutoff_date,
-  truncated}` — no per-message bodies.
+  into detailed must see a full per-message list and the legacy
+  `cutoff_date` key.
+- `"concise"` (the v10-U6 default) returns the navigable shape
+  `{thread_id, message_count, first_subject, latest_date,
+  applied_cutoff_date, note_on_cutoff, truncated, messages_summary}`.
+  v11-U2 added `messages_summary` (per-message `raw_path` for one-hop
+  navigation) and renamed `cutoff_date` → `applied_cutoff_date` to make
+  the cutoff semantics unambiguous; `note_on_cutoff` is the human-
+  readable companion.
 """
 
 from __future__ import annotations
@@ -140,7 +145,7 @@ def test_get_thread_context_detailed_unchanged(tmp_path: Path) -> None:
 
 
 def test_get_thread_context_default_is_concise_aggregate(tmp_path: Path) -> None:
-    """Default (no arg) returns the aggregate concise shape — no per-message bodies."""
+    """Default (no arg) returns the navigable concise shape (v11-U2)."""
     raw1 = _seed_raw(tmp_path, "m1.md", "Launch plan: ship MVP Friday.")
     raw2 = _seed_raw(tmp_path, "m2.md", "Second message body — later in thread.")
     rows = [
@@ -171,18 +176,33 @@ def test_get_thread_context_default_is_concise_aggregate(tmp_path: Path) -> None
         "message_count",
         "first_subject",
         "latest_date",
-        "cutoff_date",
+        "applied_cutoff_date",
+        "note_on_cutoff",
         "truncated",
+        "messages_summary",
     }
     assert result["thread_id"] == "thread-abc"
     assert result["message_count"] == 2
     assert result["first_subject"] == "Launch"
     assert result["latest_date"] == "2026-04-11T09:00:00+00:00"
-    assert result["cutoff_date"] is None
+    assert result["applied_cutoff_date"] is None
+    assert result["note_on_cutoff"] is None
     assert result["truncated"] is False
-    # Concise must NOT include per-message bodies.
+    # v11-U2: per-message stub with `raw_path` for one-hop navigation.
+    assert len(result["messages_summary"]) == 2
+    first = result["messages_summary"][0]
+    assert set(first.keys()) == {"message_id", "raw_path", "date", "from_addr"}
+    assert first["message_id"] == "msg-001"
+    assert first["raw_path"] == raw1
+    assert first["from_addr"] == "alice@indiamart.com"
+    assert first["date"] == "2026-04-10T12:00:00+00:00"
+    # Concise must NOT include per-message bodies / preview / compile_state.
     assert "messages" not in result
     assert "summary_lines" not in result
+    assert "first_200_chars" not in first
+    assert "compile_state" not in first
+    # Renamed away from the bare `cutoff_date` to make semantics explicit.
+    assert "cutoff_date" not in result
 
 
 def test_get_thread_context_concise_empty_thread() -> None:
@@ -199,10 +219,13 @@ def test_get_thread_context_concise_empty_thread() -> None:
     assert result["first_subject"] == ""
     assert result["latest_date"] is None
     assert result["truncated"] is False
+    assert result["messages_summary"] == []
+    assert result["applied_cutoff_date"] is None
+    assert result["note_on_cutoff"] is None
 
 
 def test_get_thread_context_concise_respects_cutoff() -> None:
-    """Concise mode must still honour _current_batch_cutoff_date."""
+    """Concise mode honours _current_batch_cutoff_date and surfaces it."""
     cur = _FakeCursor([])
     token = _current_batch_cutoff_date.set("2026-01-09T00:00:00+00:00")
     try:
@@ -213,7 +236,10 @@ def test_get_thread_context_concise_respects_cutoff() -> None:
     finally:
         _current_batch_cutoff_date.reset(token)
 
-    assert result["cutoff_date"] == "2026-01-09T00:00:00+00:00"
+    assert result["applied_cutoff_date"] == "2026-01-09T00:00:00+00:00"
+    assert result["note_on_cutoff"] == (
+        "Messages after 2026-01-09T00:00:00+00:00 are hidden per chronological scope."
+    )
     assert "date::date <= %s::date" in (cur.last_sql or "")
 
 

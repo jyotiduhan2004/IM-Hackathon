@@ -185,7 +185,8 @@ class TestGetThreadContextCutoff:
         finally:
             _current_batch_cutoff_date.reset(token)
 
-        assert result["cutoff_date"] == "2026-01-09T00:00:00+00:00"
+        # v11-U2: concise renamed `cutoff_date` → `applied_cutoff_date`.
+        assert result["applied_cutoff_date"] == "2026-01-09T00:00:00+00:00"
         assert "date::date <= %s::date" in (cur.last_sql or "")
 
     def test_no_cutoff_no_filter(self) -> None:
@@ -223,5 +224,6 @@ class TestGetThreadContextCutoff:
         finally:
             _current_batch_cutoff_date.reset(token)
 
-        assert result["cutoff_date"] is None
+        # v11-U2: concise renamed `cutoff_date` → `applied_cutoff_date`.
+        assert result["applied_cutoff_date"] is None
         assert "date <= " not in (_FakeCursor.last_sql or "")

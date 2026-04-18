@@ -180,16 +180,17 @@ def get_thread_context(
     limit: int = 50,
     response_format: Literal["concise", "detailed"] = "concise",
 ) -> dict[str, Any]:
-    """Return a thread's messages (or an aggregate summary).
+    """Return a thread's messages (or a navigable summary).
 
     WHEN to use: merging a new email into an existing topic page that
       spans multiple emails — gives you the conversation arc cheaply.
       Start with `response_format="concise"` to see thread size, subject,
-      and date range in ~72 tokens, then opt into `"detailed"` for per-
-      message bodies when you need them.
-    WHEN NOT to use: you only need one message (use the email's
-      raw_path directly) or the thread isn't relevant to the current
-      concept.
+      date range, AND a per-message `raw_path` you can pass straight to
+      `read_file`. Opt into `"detailed"` only when you also need the
+      200-char body preview and compile_state per message.
+    WHEN NOT to use: you only need one message you already have the
+      raw_path for (call `read_file` directly) or the thread isn't
+      relevant to the current concept.
 
     Queries Postgres `messages` for every row matching `thread_id`,
     ordered by `date` ASC. Caps at `limit` rows to avoid flooding agent
@@ -198,34 +199,40 @@ def get_thread_context(
     **Chronological scope**: when invoked inside `run_compilation`, this
     tool automatically clips results to messages dated at or before the
     batch's latest raw — the agent processes email N of the thread "as a
-    writer at that point in time" and should not see future replies. The
-    cutoff is reported back in the ``cutoff_date`` field of the response
-    so the agent knows the scope was narrowed. Outside of a compile run
-    (unit tests, ad-hoc queries) no cutoff is applied.
+    writer at that point in time" and should not see future replies.
+    Concise mode reports the applied cutoff via `applied_cutoff_date`
+    and a human-readable `note_on_cutoff`; detailed mode preserves the
+    legacy `cutoff_date` field for backward compatibility. Outside of a
+    compile run (unit tests, ad-hoc queries) no cutoff is applied.
 
     Args:
         thread_id: Gmail thread identifier.
         limit: Maximum rows to return. Default 50.
         response_format:
-          - "concise" (default, ~72 tokens) — aggregate shape
+          - "concise" (default, ~120 tokens) — navigable shape
             `{thread_id, message_count, first_subject, latest_date,
-            cutoff_date, truncated}`. Per-message bodies are dropped.
-            Cheapest "how big is this thread, what's it about?" probe.
+            applied_cutoff_date, note_on_cutoff, truncated,
+            messages_summary: [{message_id, raw_path, date, from_addr}, ...]}`.
+            `raw_path` is the single most useful field — pass it to
+            `read_file` without re-querying. Per-message bodies and
+            compile_state are dropped to stay cheap.
           - "detailed" (~206+ tokens) — full shape with `messages`
             array: subject, raw_path, 200-char body preview, and
-            compile_state per message. Use when you need to pick
-            which message to read next or match against page content.
+            compile_state per message. Use when you need the body
+            preview to pick which message to read next.
 
     Returns:
         Concise: ``{"thread_id": str, "message_count": int,
-        "first_subject": str, "latest_date": str | None, "cutoff_date":
-        str | None, "truncated": bool}``.
+        "first_subject": str, "latest_date": str | None,
+        "applied_cutoff_date": str | None, "note_on_cutoff": str | None,
+        "truncated": bool, "messages_summary": [{"message_id",
+        "raw_path", "date", "from_addr"}, ...]}``. ``note_on_cutoff``
+        is None when no cutoff is applied.
         Detailed: ``{"thread_id": str, "messages": [{"message_id",
         "subject", "from_addr", "date", "raw_path", "first_200_chars",
         "compile_state"}, ...], "truncated": bool, "cutoff_date":
         str | None}``. Empty list / ``message_count: 0`` when the
-        thread is unknown. ``cutoff_date`` echoes the applied cutoff
-        (ISO8601), or None when the full thread was returned.
+        thread is unknown.
     """
     from src.compile.compiler import _current_batch_cutoff_date
     from src.db import connect
@@ -282,13 +289,30 @@ def get_thread_context(
                         latest_date = row["date"].isoformat()
                         break
             first_subject = str(rows[0]["subject"] or "") if rows else ""
+            # `raw_path` is the field the agent needs next — passing it
+            # to `read_file` avoids a second Postgres round-trip. Body
+            # preview + compile_state stay in detailed only.
+            messages_summary = [
+                {
+                    "message_id": str(row["message_id"] or ""),
+                    "raw_path": str(row["raw_path"] or ""),
+                    "date": row["date"].isoformat() if row["date"] else "",
+                    "from_addr": str(row["from_address"] or ""),
+                }
+                for row in rows
+            ]
+            note_on_cutoff = (
+                f"Messages after {cutoff} are hidden per chronological scope." if cutoff else None
+            )
             return {
                 "thread_id": thread_id,
                 "message_count": len(rows),
                 "first_subject": first_subject,
                 "latest_date": latest_date,
-                "cutoff_date": cutoff,
+                "applied_cutoff_date": cutoff,
+                "note_on_cutoff": note_on_cutoff,
                 "truncated": truncated,
+                "messages_summary": messages_summary,
             }
 
     messages: list[dict[str, Any]] = []
