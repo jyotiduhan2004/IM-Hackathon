@@ -171,6 +171,11 @@ def test_broken_wikilink_still_flagged_by_validator(mini_wiki: Path) -> None:
     ["people", "entities"],
 )
 def test_broken_people_link_never_materializes(mini_wiki: Path, directory: str) -> None:
+    """A broken `[[people/<slug>]]` link must never materialise a stub file.
+
+    Parametrised across `people/` (new path) and `entities/` (legacy path)
+    so either auto-create surface would fail the test. See v10-U8 drop.
+    """
     _write_page(
         mini_wiki / "topics" / "random.md",
         {"title": "Random", "page_type": "topic", "status": "active"},
