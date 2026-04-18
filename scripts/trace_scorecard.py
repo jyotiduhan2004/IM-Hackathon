@@ -202,12 +202,25 @@ class CitationCounts:
 
     @property
     def effective_denominator(self) -> int:
-        """Return `compiled_total - trivial_skip - already_captured`.
+        """Return `compiled_total - trivial_skip - already_captured`, clamped to ≥ numerator.
 
-        Clamped to 0 — negative arithmetic only happens under seriously
-        malformed data (a message with more insight rows than attempts).
+        Two clamps apply:
+
+        1. Never negative — malformed data (a message with more insight
+           rows than attempts) would otherwise produce a nonsense denom.
+        2. Never smaller than ``with_content_page`` — when skipped
+           messages also have a content-page citation (e.g. same
+           message compiled twice across runs, or overlap between the
+           no-op insight set and the cited set), the raw subtraction
+           can drop below the numerator and push the effective rate
+           above 100%. Cycle 9 produced 160% this way
+           (compiled=16, trivial_skip=0, already_captured=6,
+           with_content_page=16 → 16/10). Clamping the denominator
+           to the numerator caps the rate at 100% without hiding the
+           counts in the breakdown block.
         """
-        return max(self.compiled_total - self.trivial_skip - self.already_captured, 0)
+        raw = self.compiled_total - self.trivial_skip - self.already_captured
+        return max(raw, self.with_content_page, 0)
 
     @property
     def raw_rate(self) -> float | None:
@@ -1203,14 +1216,15 @@ def _render_citation_breakdown(rows: list[ModelAggregate]) -> str:
         if row.compiled_total == 0:
             continue
         has_any = True
-        # Clamp to 0 so malformed data (more no-op insights than compiled
-        # attempts, e.g. duplicate insight rows) can't render a negative
-        # denominator like "1 of -1" — mirrors the guard on
-        # CitationCounts.effective_denominator (P2 review follow-up).
-        effective_denom = max(
-            row.compiled_total - row.trivial_skip_count - row.already_captured_count,
-            0,
-        )
+        # Reuse CitationCounts so the rendered "Y of B" always stays in
+        # lockstep with the effective_rate shown above — the clamp rules
+        # (never negative, never below numerator) live in one place.
+        effective_denom = CitationCounts(
+            compiled_total=row.compiled_total,
+            with_content_page=row.compiled_with_content_page,
+            trivial_skip=row.trivial_skip_count,
+            already_captured=row.already_captured_count,
+        ).effective_denominator
         lines.append(
             f"- `{row.model}`: "
             f"raw = {_fmt_pct_dash(row.content_page_citation_rate_raw)} "

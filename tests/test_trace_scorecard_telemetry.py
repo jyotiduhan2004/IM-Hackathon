@@ -698,6 +698,51 @@ def test_citation_counts_zero_compiled() -> None:
     assert c.effective_rate is None
 
 
+def test_citation_counts_cycle9_effective_rate_clamped_to_100pct() -> None:
+    """Regression pin for v9-U2: Cycle 9's 160% bug stays ≤ 100%.
+
+    Cycle 9 scorecard rendered ``effective = 160.0%`` because
+    ``with_content_page(16) / (compiled(16) - trivial_skip(0) -
+    already_captured(6))`` = 16/10. The carve-out's raw subtraction
+    dropped below the numerator whenever ``already_captured`` messages
+    also had content-page citations (the overlap case: message
+    compiled twice, once flagged as no-op, later re-compiled to a
+    real page). The clamp pins denom to max(raw, numerator) so the
+    rate can never exceed 100%.
+    """
+    c = CitationCounts(
+        compiled_total=16,
+        with_content_page=16,
+        trivial_skip=0,
+        already_captured=6,
+    )
+    assert c.raw_rate == pytest.approx(1.0)
+    # Raw subtraction would be 10; clamp lifts it to the numerator.
+    assert c.effective_denominator == 16
+    assert c.effective_rate == pytest.approx(1.0)
+    assert c.effective_rate is not None and c.effective_rate <= 1.0
+
+
+def test_citation_counts_effective_rate_never_exceeds_100pct() -> None:
+    """Property-style guard: the clamp holds across the overlap spectrum.
+
+    Any combination where ``trivial_skip + already_captured`` pushes
+    the raw denominator below ``with_content_page`` must still render
+    ≤ 100%. Three shapes: balanced, half-overlap, full-overlap.
+    """
+    cases = [
+        # balanced: half overlap
+        CitationCounts(compiled_total=10, with_content_page=8, trivial_skip=0, already_captured=4),
+        # full overlap: every no-op insight duplicates a cited message
+        CitationCounts(compiled_total=5, with_content_page=5, trivial_skip=2, already_captured=2),
+        # heavy skew: more no-ops than compiled (data anomaly)
+        CitationCounts(compiled_total=3, with_content_page=3, trivial_skip=5, already_captured=0),
+    ]
+    for c in cases:
+        assert c.effective_rate is not None
+        assert c.effective_rate <= 1.0, f"rate {c.effective_rate} > 100% for {c}"
+
+
 def _seed_compile_run(conn: psycopg.Connection, run_id: uuid.UUID) -> None:
     """Insert a compile_runs row so insight FK constraints can be satisfied."""
     conn.execute(
@@ -950,24 +995,25 @@ def test_citation_counts_by_model_isolates_insights_per_run(
     # Pre-fix, this was 2 (insight fanned out to both runs).
     assert m1.trivial_skip == 1
     assert m1.already_captured == 0
-    # Effective denominator = 2 - 1 - 0 = 1, effective rate = 2/1 but
-    # clamped behavior: numerator never exceeds denominator in practice,
-    # but here with_content_page(2) / effective_denom(1) = 2.0 —
-    # that's a quirk of the current model (a message being both cited
-    # AND trivial-skipped across runs is a data-shape question, not a
-    # bug in this carve-out). Assert numerator/denom directly.
-    assert m1.effective_denominator == 1
+    # Raw denom would be 2 - 1 - 0 = 1, but the numerator is 2 (both
+    # attempt rows got the `has_content_page = True` flag in the
+    # `with_content_page` CTE). The v9-U2 clamp pins the denominator
+    # to max(raw, numerator) so the effective rate can't exceed 100%.
+    # Pre-v9-U2, this rendered as 2/1 = 200% for the same data shape.
+    assert m1.effective_denominator == 2
+    assert m1.effective_rate == pytest.approx(1.0)
 
 
 def test_render_citation_breakdown_clamps_negative_denominator() -> None:
     """Denominator never renders negative even when no-op counts exceed compiled.
 
-    Guards the P2 review follow-up. If `trivial_skip_count +
+    Guards the P2 review follow-up + v9-U2. If `trivial_skip_count +
     already_captured_count > compiled_total` (e.g. duplicate insight
     rows, noisy migration data), the raw subtraction would print
     "1 of -1" which is both confusing and internally inconsistent
-    with `CitationCounts.effective_denominator` (which already clamps
-    to 0). Clamp at render time too.
+    with `CitationCounts.effective_denominator`. v9-U2 extended the
+    clamp to also pin denom ≥ numerator; here numerator = 1, so we
+    render "1 of 1" not "1 of 0".
     """
     from scripts.trace_scorecard import ModelAggregate
 
@@ -985,7 +1031,8 @@ def test_render_citation_breakdown_clamps_negative_denominator() -> None:
         ),
     ]
     out = _render_citation_breakdown(rows)
-    assert "1 of 0" in out
+    # Post-v9-U2: clamp pins to max(raw, numerator=1, 0) = 1.
+    assert "1 of 1" in out
     # Explicitly guard against regression — the denominator "of -N" must
     # never appear. " - " (space-dash-space) is still fine because the
     # format string embeds "compiled - trivial_skip - already_captured".
