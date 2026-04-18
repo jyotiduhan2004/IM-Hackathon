@@ -120,10 +120,23 @@ def search_pages(query: str, limit: int = 5) -> list[dict[str, Any]]:
          fallback chain is self-contained)
       2. case-insensitive exact title match
       3. slug starts-with the query
-      4. any substring match on slug or title
-      5. page_id tiebreaker for determinism across test runs
+      4. slug contains the full query as a substring anywhere (so a
+         multi-token query like "price-widget" beats single-token hits
+         from the tokenised fallback patterns, even when the full
+         substring appears mid-slug)
+      5. any other match (token-only via the tokenised patterns, or
+         title substring)
+      6. within-tier: prefer `current`/`active` over superseded, then
+         order by touch-count recency (pages actively being written
+         sort before stale pages — Langfuse mining 2026-04-17 showed
+         58% of resolve_page misses returned alphabetical/creation-
+         order candidates because the previous `page_id ASC`
+         tiebreaker ≈ alphabetical on batched inserts).
 
-    `current` status beats `superseded`/`contested` at the same rank.
+    The within-tier recency sort uses `message_touched_pages`: a LEFT
+    JOIN onto the max `compiled_at` per page; pages never touched fall
+    to the bottom (NULLS LAST), then `page_id ASC` as a final
+    deterministic break.
     """
     import re
 
@@ -145,26 +158,38 @@ def search_pages(query: str, limit: int = 5) -> list[dict[str, Any]]:
             seen.add(p)
             deduped_patterns.append(p)
     starts_with = f"{query}%"
+    full_substring = f"%{query}%"
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT slug, title, page_type, path, status
-              FROM wiki_pages
-             WHERE slug ILIKE ANY(%(patterns)s)
-                OR title ILIKE ANY(%(patterns)s)
+            SELECT wp.slug, wp.title, wp.page_type, wp.path, wp.status
+              FROM wiki_pages wp
+              LEFT JOIN (
+                SELECT page_id,
+                       MAX(compiled_at) AS last_touched,
+                       COUNT(*) AS touches
+                  FROM message_touched_pages
+                 GROUP BY page_id
+              ) t ON t.page_id = wp.page_id
+             WHERE wp.slug ILIKE ANY(%(patterns)s)
+                OR wp.title ILIKE ANY(%(patterns)s)
              ORDER BY
-               CASE WHEN slug = %(q)s THEN 0
-                    WHEN lower(title) = lower(%(q)s) THEN 1
-                    WHEN slug ILIKE %(starts_with)s THEN 2
-                    ELSE 3 END,
-               (status = 'current') DESC,
-               page_id ASC
+               CASE WHEN wp.slug = %(q)s THEN 0
+                    WHEN lower(wp.title) = lower(%(q)s) THEN 1
+                    WHEN wp.slug ILIKE %(starts_with)s THEN 2
+                    WHEN wp.slug ILIKE %(full_substring)s THEN 3
+                    ELSE 4 END,
+               (wp.status IN ('current', 'active')) DESC,
+               t.last_touched DESC NULLS LAST,
+               t.touches DESC NULLS LAST,
+               wp.page_id ASC
              LIMIT %(limit)s
             """,
             {
                 "q": query,
                 "patterns": deduped_patterns,
                 "starts_with": starts_with,
+                "full_substring": full_substring,
                 "limit": limit,
             },
         ).fetchall()
