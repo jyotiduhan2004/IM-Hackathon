@@ -4,8 +4,11 @@ catalog-truth guidance.
 Tier A wholesale-rewrote the prompt into tagged sections
 (`<background>`, `<workflow>`, `<page_types>`, ...). Phase A U3 layered
 in `<chronological_scope>` + `<decision_tree>` and swapped `sources:`
-for `source_threads:` semantics. Tests assert both generations of
-markers the agent still needs.
+for `source_threads:` semantics. v10-U4 merged `<decision_tree>` back
+into `<workflow>` to remove duplicated prose — decision guidance now
+lives in `<workflow>` under a `### Decision: terminal outcomes`
+subsection. Tests assert both generations of markers the agent still
+needs.
 """
 
 from __future__ import annotations
@@ -13,13 +16,27 @@ from __future__ import annotations
 from src.compile.prompts import COMPILER_SYSTEM_PROMPT
 
 
+def _workflow_block() -> str:
+    """Return the body of the `<workflow>` section (for assertions that
+    used to target `<decision_tree>` before v10-U4 merged them)."""
+    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
+    assert start != -1 and end != -1 and end > start, "workflow section missing"
+    return COMPILER_SYSTEM_PROMPT[start:end]
+
+
 def test_tagged_sections_present() -> None:
-    """All structured sections appear in the prompt."""
+    """All structured sections appear in the prompt.
+
+    v10-U4: `<decision_tree>` was merged into `<workflow>` — it must NOT
+    be present as a separate tag anymore. The decision content now lives
+    inside `<workflow>`; see `test_decision_tree_absent_after_merge` and
+    the decision-content tests below.
+    """
     required = (
         "<background>",
         "<chronological_scope>",
         "<workflow>",
-        "<decision_tree>",
         "<page_types>",
         "<section_titles>",
         "<tool_guidance>",
@@ -31,6 +48,54 @@ def test_tagged_sections_present() -> None:
     )
     missing = [tag for tag in required if tag not in COMPILER_SYSTEM_PROMPT]
     assert not missing, f"prompt missing sections: {missing}"
+
+
+def test_decision_tree_absent_after_merge() -> None:
+    """v10-U4: `<decision_tree>` was merged into `<workflow>` to kill
+    duplicated prose (trivial_skip / already_captured definitions, the
+    terminal-outcome mandate, the "edit / create a page" bullet). The
+    tag must be gone; regression-proof the merge."""
+    assert "<decision_tree>" not in COMPILER_SYSTEM_PROMPT
+    assert "</decision_tree>" not in COMPILER_SYSTEM_PROMPT
+
+
+def test_decision_guidance_lives_in_workflow() -> None:
+    """v10-U4: after the merge, the `<workflow>` section must carry the
+    full decision guidance — the three terminal outcomes, the
+    aggressive-`already_captured` nudge, the `sibling email`/`same
+    thread`/`near-duplicate` triggers, the investigatory-insights
+    carve-out, and the `waffle` anti-pattern label. Without this the
+    agent loses its decision ladder along with the merged tag."""
+    block = _workflow_block()
+    lowered = block.lower()
+    # Three terminal outcomes named.
+    assert "trivial_skip" in block
+    assert "already_captured" in block
+    assert "cites this email's thread" in block
+    # "Aggressive" nudge + triggers.
+    assert "aggressive" in lowered
+    assert "sibling email" in lowered or "same thread" in lowered
+    assert "near-duplicate" in lowered or "zero new facts" in lowered
+    # Investigatory-insights carve-out.
+    assert "investigatory" in lowered
+    assert "do not close the loop" in lowered or "do not satisfy" in lowered
+    # Waffle anti-pattern named.
+    assert "waffle" in lowered
+    # message_touched_pages bookkeeping carve-out.
+    assert "message_touched_pages" in block
+
+
+def test_workflow_prompt_under_budget() -> None:
+    """Informational token-budget guard. v10-U4 merged two ~1700-token
+    sections into one; post-merge the prompt is ~28k chars / ~7k tokens.
+    The ceiling is 30000 chars — crossing it means a later edit
+    re-introduced duplication or bloat. Raise only on a deliberate
+    feature that genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 30000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v10-U4 baseline "
+        "was ~28k. If the growth is deliberate, raise this ceiling; otherwise "
+        "it's probably re-introduced duplication."
+    )
 
 
 def test_section_titles_rule_bans_dates_and_names() -> None:
@@ -192,14 +257,13 @@ def test_already_captured_outcome_taught() -> None:
 def test_already_captured_trigger_conditions_spelled_out() -> None:
     """Missed `already_captured` calls on substantive follow-ups are
     the dominant remaining failure class (agent loiters then bails
-    without a terminal outcome). Decision tree must spell out the
-    trigger conditions explicitly. Context lives in the PR description
-    + cycle summary, NOT in the prompt itself (the prompt is timeless
-    — no Cycle-N / Bug-letter references)."""
-    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
-    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
-    tree = COMPILER_SYSTEM_PROMPT[start:end]
-    lowered = tree.lower()
+    without a terminal outcome). The decision block (post-v10-U4:
+    inside `<workflow>`) must spell out the trigger conditions
+    explicitly. Context lives in the PR description + cycle summary,
+    NOT in the prompt itself (the prompt is timeless — no Cycle-N /
+    Bug-letter references)."""
+    block = _workflow_block()
+    lowered = block.lower()
     # Nudge telling the agent to PICK the call rather than loiter.
     assert "aggressive" in lowered
     # Specific trigger: sibling email in the same thread.
@@ -270,39 +334,35 @@ def test_terminal_decision_requirement_named() -> None:
 
 def test_three_terminal_outcomes_listed() -> None:
     """The three allowed terminal outcomes must be listed clearly in
-    the decision tree so the agent can map its work onto one of them:
+    the decision block (post-v10-U4: inside `<workflow>`) so the agent
+    can map its work onto one of them:
       1) content-page write/edit that cites the thread
       2) `log_insight("trivial_skip", ...)`
       3) `log_insight("already_captured", ...)`
     """
-    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
-    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
-    assert start != -1 and end != -1 and end > start
-    tree = COMPILER_SYSTEM_PROMPT[start:end]
-    # All three terminal outcomes named in the decision tree.
-    assert "trivial_skip" in tree
-    assert "already_captured" in tree
+    block = _workflow_block()
+    # All three terminal outcomes named in the workflow.
+    assert "trivial_skip" in block
+    assert "already_captured" in block
     # Content edit terminal outcome — phrased as a write/edit/patch
     # that cites the thread. "cites this email's thread" is the test
     # anchor because that exact phrasing rules out "investigatory"
     # tool calls like get_thread_context or log_insight.
-    assert "cites this email's thread" in tree
+    assert "cites this email's thread" in block
 
 
 def test_investigatory_insights_marked_non_terminal() -> None:
     """Investigatory insight categories (topic_merge_candidate,
     structure_suggestion, question_for_human, prompt_ambiguity,
     tool_gap, supersession_doubt) must be explicitly labelled as
-    non-terminal in the decision tree. Otherwise the agent treats
-    logging a `topic_merge_candidate` as "done" and the email stays
-    pending."""
-    start = COMPILER_SYSTEM_PROMPT.find("<decision_tree>")
-    end = COMPILER_SYSTEM_PROMPT.find("</decision_tree>")
-    tree = COMPILER_SYSTEM_PROMPT[start:end]
+    non-terminal in the decision block (post-v10-U4: inside
+    `<workflow>`). Otherwise the agent treats logging a
+    `topic_merge_candidate` as "done" and the email stays pending."""
+    block = _workflow_block()
 
-    # The investigatory categories are named in the decision tree,
-    # not just in <tool_guidance>, so the agent sees them at decision
-    # time.
+    # The investigatory categories are named at decision time in the
+    # workflow, not just in <tool_guidance>, so the agent sees them
+    # when it's picking its terminal outcome.
     investigatory = (
         "topic_merge_candidate",
         "structure_suggestion",
@@ -311,18 +371,18 @@ def test_investigatory_insights_marked_non_terminal() -> None:
         "tool_gap",
         "supersession_doubt",
     )
-    missing = [cat for cat in investigatory if cat not in tree]
+    missing = [cat for cat in investigatory if cat not in block]
     assert not missing, (
-        f"decision tree should name investigatory categories to mark them "
+        f"workflow should name investigatory categories to mark them "
         f"non-terminal; missing: {missing}"
     )
 
     # And there must be explicit language calling them investigatory /
     # non-terminal so the model doesn't read the list as a menu of
     # terminal options.
-    lowered_tree = tree.lower()
-    assert "investigatory" in lowered_tree
-    assert "do not close the loop" in lowered_tree or "do not satisfy" in lowered_tree
+    lowered = block.lower()
+    assert "investigatory" in lowered
+    assert "do not close the loop" in lowered or "do not satisfy" in lowered
 
 
 def test_check_my_work_taught_in_workflow_with_correct_contract() -> None:
@@ -349,13 +409,11 @@ def test_check_my_work_taught_in_workflow_with_correct_contract() -> None:
 
 
 def test_workflow_has_terminal_decision_check() -> None:
-    """Workflow step 11 (the pre-return check) must tell the agent to
-    verify each email has a terminal outcome before returning.
-    Without this step the <decision_tree> guidance is advisory; with
-    it the agent has an explicit self-audit hook."""
-    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
-    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
-    workflow = COMPILER_SYSTEM_PROMPT[start:end]
+    """The workflow's pre-return step must tell the agent to verify
+    each email has a terminal outcome before returning. Without this
+    step the decision guidance (post-v10-U4: inside `<workflow>`) is
+    advisory; with it the agent has an explicit self-audit hook."""
+    workflow = _workflow_block()
     assert "Before returning" in workflow
     assert "terminal outcome" in workflow
 
