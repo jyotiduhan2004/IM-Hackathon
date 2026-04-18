@@ -37,6 +37,7 @@ from scripts.validate_wiki import validate_page  # noqa: E402
 from src.budget import fetch_budget  # noqa: E402
 from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
 from src.compile.categories import WIKI_CATEGORIES as _WIKI_CATEGORIES  # noqa: E402
+from src.compile.compiler import _extract_merge_candidates  # noqa: E402
 from src.compile.compiler import _generate_changes  # noqa: E402
 from src.compile.compiler import _generate_glossary  # noqa: E402
 from src.compile.compiler import _generate_home  # noqa: E402
@@ -849,6 +850,68 @@ def _append_batch_log(
     row = f"| {timestamp} | {batch_idx} | {n_emails} | {thread_id} | {outcome} | {safe_notes} |\n"
     with log_path.open("a", encoding="utf-8") as f:
         f.write(row)
+
+
+_MERGE_CANDIDATES_HEADER = (
+    "# Merge candidates\n\n"
+    "Append-only queue populated by the reviewer subagent when it flags two\n"
+    "pages as duplicates. Each block is one batch. Apply with:\n\n"
+    "    uv run python scripts/apply_merge_candidate.py \\\n"
+    "        --pair slug-a,slug-b --keep slug-a --dry-run\n\n"
+    "Then re-run with ``--commit`` when the diff looks right.\n\n"
+)
+
+
+def _append_merge_candidates(
+    pairs: list[dict[str, Any]],
+    wiki_dir: str,
+    *,
+    trace_id: str,
+) -> int:
+    """Append reviewer-flagged merge candidates to ``wiki/merge_candidates.md``.
+
+    The queue is append-only: humans (or a future Claude session) scan the
+    file, pick pairs worth merging, and run
+    ``scripts/apply_merge_candidate.py``. Returns the number of entries
+    written (0 when ``pairs`` is empty). Filesystem failures are logged
+    and swallowed — the queue is observational, never load-bearing.
+
+    Args:
+        pairs: parsed ``[{"slug_a", "slug_b", "note"}, ...]`` from
+            :func:`src.compile.compiler._extract_merge_candidates`.
+        wiki_dir: root wiki directory.
+        trace_id: ``run_id:batch_index`` so the reader can grep back to
+            the originating compile batch.
+    """
+    if not pairs:
+        return 0
+
+    wiki_path = Path(wiki_dir)
+    try:
+        wiki_path.mkdir(parents=True, exist_ok=True)
+        queue_path = wiki_path / "merge_candidates.md"
+
+        if not queue_path.exists():
+            queue_path.write_text(_MERGE_CANDIDATES_HEADER, encoding="utf-8")
+
+        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+        lines = [f"## {timestamp} — trace `{trace_id}`", ""]
+        for pair in pairs:
+            slug_a = str(pair.get("slug_a") or "?")
+            slug_b = str(pair.get("slug_b") or "?")
+            note = str(pair.get("note") or "")[:200].replace("\n", " ").strip()
+            lines.append(f"- [{slug_a}] vs [{slug_b}]: {note}")
+        lines.append("")
+        with queue_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return len(pairs)
+    except OSError as exc:
+        logger.warning(
+            "merge_candidates_append_failed",
+            trace_id=trace_id,
+            error=str(exc)[:200],
+        )
+        return 0
 
 
 def _max_insight_id_safe(run_id: UUID) -> int:
@@ -1733,7 +1796,7 @@ def main(
                             f"retries (thread={thread_id[:12]})"
                         )
                     try:
-                        _run_with_timeout(
+                        batch_result = _run_with_timeout(
                             partial(
                                 run_compilation,
                                 instruction=instruction,
@@ -1865,7 +1928,21 @@ def main(
                         outcome="failed",
                         error="not cited in wiki",
                     )
+                # Drain reviewer-flagged merge candidates into the queue
+                # (``wiki/merge_candidates.md``) so a human can apply them
+                # via ``scripts/apply_merge_candidate.py``. Best-effort:
+                # parse errors are swallowed, and an empty reviewer output
+                # writes zero lines. Queue growth shows up in log_notes
+                # so operators see the signal without opening the file.
+                merge_pairs = _extract_merge_candidates(batch_result)
+                merge_written = _append_merge_candidates(
+                    merge_pairs,
+                    wiki_dir,
+                    trace_id=f"{run_id}:{batch_idx}",
+                )
                 suffix_parts = []
+                if merge_written:
+                    suffix_parts.append(f"merge_candidates+={merge_written}")
                 if not_cited:
                     suffix_parts.append(f"{not_cited} not-yet-cited (kept pending)")
                 if skipped_ids:
