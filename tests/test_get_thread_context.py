@@ -232,10 +232,8 @@ class _TruncatedFakeCursor:
     ) -> None:
         self._rows = windowed_rows
         self._max_date = thread_max_date
-        self._last_sql = ""
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> _TruncatedFakeCursor:
-        self._last_sql = sql
         return self
 
     def fetchall(self) -> list[dict[str, Any]]:
@@ -246,10 +244,16 @@ class _TruncatedFakeCursor:
 
 
 def test_concise_latest_date_reflects_thread_max_not_window_tail(tmp_path: Path) -> None:
-    """P1-4 (#196): truncated concise response reports thread's real latest_date."""
-    # Window returns only messages 1-2; real thread has a message on 2026-04-20.
+    """P1-4 (#196): truncated concise response reports thread's real latest_date.
+
+    The tool issues `LIMIT limit + 1` under the hood so a returned row
+    count > `limit` flags truncation. To simulate that we return 3 rows
+    for `limit=2`; the tool slices to 2 and flips `truncated=True`,
+    which is the branch that hits the MAX(date) query.
+    """
     raw1 = _seed_raw(tmp_path, "m1.md", "Body 1.")
     raw2 = _seed_raw(tmp_path, "m2.md", "Body 2.")
+    raw3 = _seed_raw(tmp_path, "m3.md", "Body 3.")
     windowed_rows = [
         {
             "message_id": "msg-001",
@@ -267,9 +271,17 @@ def test_concise_latest_date_reflects_thread_max_not_window_tail(tmp_path: Path)
             "date": datetime(2026, 4, 11, 9, 0, 0, tzinfo=UTC),
             "compile_state": "pending",
         },
+        {
+            "message_id": "msg-003",
+            "raw_path": raw3,
+            "subject": "Re: Launch",
+            "from_address": "carol@indiamart.com",
+            "date": datetime(2026, 4, 12, 9, 0, 0, tzinfo=UTC),
+            "compile_state": "pending",
+        },
     ]
-    # MAX(date) for the full thread is two entries newer than anything
-    # in the returned window — must still surface through `latest_date`.
+    # MAX(date) for the full thread is much newer than anything in the
+    # returned window — must still surface through `latest_date`.
     cur = _TruncatedFakeCursor(
         windowed_rows,
         thread_max_date=datetime(2026, 4, 20, 15, 30, 0, tzinfo=UTC),
@@ -280,6 +292,7 @@ def test_concise_latest_date_reflects_thread_max_not_window_tail(tmp_path: Path)
             {"thread_id": "long-thread", "limit": 2, "response_format": "concise"}
         )
 
+    assert result["truncated"] is True
     # `latest_date` reflects the thread's true MAX(date), not the window tail.
     assert result["latest_date"] == "2026-04-20T15:30:00+00:00"
     assert result["message_count"] == 2

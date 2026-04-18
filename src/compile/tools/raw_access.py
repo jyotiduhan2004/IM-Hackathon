@@ -254,27 +254,34 @@ def get_thread_context(
         rows = rows[:limit]
 
         if response_format == "concise":
-            # `latest_date` = the thread's actual MAX(date) under the same
-            # chronological cutoff, NOT the last row of the paged window.
-            # Without this separate query, a truncated thread would report
-            # the last visible page's tail as "latest" — misleading the
-            # agent into thinking the thread is stale when reality is the
-            # thread has unread tail messages. See v10 followup P1-4 (#196).
-            max_row = cast(
-                dict[str, Any] | None,
-                conn.execute(
-                    f"""
-                    SELECT MAX(date) AS max_date
-                      FROM messages
-                     WHERE thread_id = %s
-                           {cutoff_clause}
-                    """,
-                    (thread_id, cutoff) if cutoff else (thread_id,),
-                ).fetchone(),
-            )
+            # `latest_date` is the thread's MAX(date) under the same
+            # chronological cutoff — for truncated threads we MUST hit
+            # the DB again because the tail slipped past the LIMIT (see
+            # v10 followup P1-4 #196). When not truncated the window
+            # already contains every row, so we can compute MAX locally
+            # and skip the extra round-trip.
+            latest_date: str | None = None
+            if truncated:
+                max_row = cast(
+                    dict[str, Any] | None,
+                    conn.execute(
+                        f"""
+                        SELECT MAX(date) AS max_date
+                          FROM messages
+                         WHERE thread_id = %s
+                               {cutoff_clause}
+                        """,
+                        (thread_id, cutoff) if cutoff else (thread_id,),
+                    ).fetchone(),
+                )
+                max_date_val = (max_row or {}).get("max_date")
+                latest_date = max_date_val.isoformat() if max_date_val else None
+            else:
+                for row in reversed(rows):
+                    if row["date"]:
+                        latest_date = row["date"].isoformat()
+                        break
             first_subject = str(rows[0]["subject"] or "") if rows else ""
-            max_date_val = (max_row or {}).get("max_date")
-            latest_date = max_date_val.isoformat() if max_date_val else None
             return {
                 "thread_id": thread_id,
                 "message_count": len(rows),

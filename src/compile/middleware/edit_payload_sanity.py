@@ -131,6 +131,29 @@ def _rejection_message(tool_call_id: str, message: str) -> ToolMessage:
     )
 
 
+def _build_rejection_response(
+    request: ToolCallRequest,
+    rejection: tuple[str, str],
+    args: dict[str, Any],
+    tool_name: str,
+) -> ToolMessage:
+    """Emit the structured reject log and build the agent-facing ToolMessage.
+
+    Extracted so the sync + async `wrap_tool_call` paths don't drift on
+    log fields (v10 followup #189 added `file_path` — any future
+    additions land here once).
+    """
+    reason, message = rejection
+    logger.warning(
+        "edit_payload_sanity_reject",
+        tool=tool_name,
+        reason=reason,
+        file_path=args.get("file_path") or args.get("path") or "",
+    )
+    tool_call_id = request.tool_call.get("id") or ""
+    return _rejection_message(tool_call_id, message)
+
+
 class EditPayloadSanityMiddleware(AgentMiddleware):
     """Reject oversized or malformed-YAML edit_file / write_file payloads."""
 
@@ -150,17 +173,7 @@ class EditPayloadSanityMiddleware(AgentMiddleware):
         rejection = _maybe_reject(tool_name, args)
         if rejection is None:
             return handler(request)
-        reason, message = rejection
-        # Include file_path in the structured log so operators can diff against
-        # the catalog to see which page the agent tried to clobber.
-        logger.warning(
-            "edit_payload_sanity_reject",
-            tool=tool_name,
-            reason=reason,
-            file_path=args.get("file_path") or args.get("path") or "",
-        )
-        tool_call_id = request.tool_call.get("id") or ""
-        return _rejection_message(tool_call_id, message)
+        return _build_rejection_response(request, rejection, args, tool_name)
 
     async def awrap_tool_call(
         self,
@@ -172,12 +185,4 @@ class EditPayloadSanityMiddleware(AgentMiddleware):
         rejection = _maybe_reject(tool_name, args)
         if rejection is None:
             return await handler(request)
-        reason, message = rejection
-        logger.warning(
-            "edit_payload_sanity_reject",
-            tool=tool_name,
-            reason=reason,
-            file_path=args.get("file_path") or args.get("path") or "",
-        )
-        tool_call_id = request.tool_call.get("id") or ""
-        return _rejection_message(tool_call_id, message)
+        return _build_rejection_response(request, rejection, args, tool_name)

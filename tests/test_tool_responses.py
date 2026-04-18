@@ -69,18 +69,16 @@ def _seed_wiki(wiki: Path) -> None:
 class _FakeCursor:
     """Minimal psycopg cursor stand-in; cf. tests/test_get_thread_context.py.
 
-    The concise path of `get_thread_context` issues a second `MAX(date)`
-    query to report the thread's true latest date (rather than the last
-    row of the paged window — see v10 followup P1-4 #196). `fetchone`
-    returns the max of whichever `date` fields the seeded rows carry so
-    the fake stays honest to the real SQL shape.
+    Only the truncated branch of `get_thread_context` concise calls
+    `fetchone()` for a separate `MAX(date)` query (v10 followup P1-4
+    #196). `fetchone` returns the max of the seeded rows' `date`
+    fields so the fake stays faithful to the real SQL shape.
     """
 
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = rows
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> _FakeCursor:
-        self._last_sql = sql
         return self
 
     def fetchall(self) -> list[dict[str, Any]]:

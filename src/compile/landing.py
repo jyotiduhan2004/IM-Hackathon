@@ -128,24 +128,29 @@ def _generate_glossary(wiki_dir: Path) -> Path:
     return path
 
 
-def _recent_page_entries(wiki_dir: Path, limit: int = 10) -> list[tuple[Path, float]]:
+def _recent_page_entries(
+    buckets: dict[str, list[tuple[Path, float]]],
+    limit: int = 10,
+) -> list[tuple[Path, float]]:
     """Return the `limit` most recently modified topic+system pages.
 
-    Recency ranks off `_page_recency_key` (frontmatter `last_compiled`
-    preferred, fs mtime fallback) so the Home page's "Recent changes"
-    section agrees with the per-domain card top-3 ordering (which also
-    uses `_page_recency_key`). Sorted newest-first for direct rendering.
+    Reads from the already-computed `buckets` (as produced by
+    `_bucket_pages_by_domain`) so "Recent changes" and each domain
+    card's top-3 agree on ordering without a second disk traversal.
+    Pages carry the same `_page_recency_key` the buckets use, so the
+    Recent Changes section surfaces the most recently touched page
+    regardless of which domain it lives in.
     """
-    from src.compile.compiler import _iter_content_pages
-    from src.compile.compiler import _read_page
-
-    pages_with_recency: list[tuple[Path, float]] = []
-    for md_file in _iter_content_pages(wiki_dir):
-        read = _read_page(md_file)
-        fm = read[0] if read else {}
-        pages_with_recency.append((md_file, _page_recency_key(fm, md_file)))
-    pages_with_recency.sort(key=lambda p: p[1], reverse=True)
-    return pages_with_recency[:limit]
+    seen: set[Path] = set()
+    merged: list[tuple[Path, float]] = []
+    for entries in buckets.values():
+        for md_file, recency in entries:
+            if md_file in seen:
+                continue
+            seen.add(md_file)
+            merged.append((md_file, recency))
+    merged.sort(key=lambda p: p[1], reverse=True)
+    return merged[:limit]
 
 
 def _page_recency_key(fm: dict[str, Any], md_file: Path) -> float:
@@ -296,7 +301,7 @@ def _generate_home(wiki_dir: Path) -> Path:
             )
         )
 
-    recent = _recent_page_entries(wiki_dir, limit=10)
+    recent = _recent_page_entries(buckets, limit=10)
     lines.extend(["## Recent changes", ""])
     if recent:
         for md_file, mtime in recent:
