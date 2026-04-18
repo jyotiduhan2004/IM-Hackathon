@@ -151,7 +151,14 @@ class EditPayloadSanityMiddleware(AgentMiddleware):
         if rejection is None:
             return handler(request)
         reason, message = rejection
-        logger.warning("edit_payload_sanity_reject", tool=tool_name, reason=reason)
+        # Include file_path in the structured log so operators can diff against
+        # the catalog to see which page the agent tried to clobber.
+        logger.warning(
+            "edit_payload_sanity_reject",
+            tool=tool_name,
+            reason=reason,
+            file_path=args.get("file_path") or args.get("path") or "",
+        )
         tool_call_id = request.tool_call.get("id") or ""
         return _rejection_message(tool_call_id, message)
 
@@ -166,6 +173,11 @@ class EditPayloadSanityMiddleware(AgentMiddleware):
         if rejection is None:
             return await handler(request)
         reason, message = rejection
-        logger.warning("edit_payload_sanity_reject", tool=tool_name, reason=reason)
+        logger.warning(
+            "edit_payload_sanity_reject",
+            tool=tool_name,
+            reason=reason,
+            file_path=args.get("file_path") or args.get("path") or "",
+        )
         tool_call_id = request.tool_call.get("id") or ""
         return _rejection_message(tool_call_id, message)

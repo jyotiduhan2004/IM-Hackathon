@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from src.compile.middleware.edit_payload_sanity import MAX_PAYLOAD_BYTES
@@ -26,6 +24,16 @@ def test_extract_content_from_edit_file() -> None:
 
 def test_extract_content_from_new_string_arg() -> None:
     assert _extract_content("edit_file", {"new_string": "patched"}) == "patched"
+
+
+def test_extract_content_from_text_arg_write_file() -> None:
+    """`text=` is one of the three supported content arg keys — cover it."""
+    assert _extract_content("write_file", {"text": "payload via text"}) == "payload via text"
+
+
+def test_extract_content_from_text_arg_edit_file() -> None:
+    """Same for edit_file — the filesystem middleware surfaces all three keys."""
+    assert _extract_content("edit_file", {"text": "edited via text"}) == "edited via text"
 
 
 def test_extract_content_non_guarded_tool() -> None:
@@ -113,19 +121,16 @@ def test_non_guarded_tool_passes() -> None:
 
 
 def _make_request(tool_name: str, args: dict[str, object]) -> ToolCallRequest:
-    return cast(
-        ToolCallRequest,
-        ToolCallRequest(
-            tool_call={
-                "name": tool_name,
-                "args": args,
-                "id": "tc-1",
-                "type": "tool_call",
-            },
-            tool=None,
-            state={},
-            runtime=None,  # type: ignore[arg-type]
-        ),
+    return ToolCallRequest(
+        tool_call={
+            "name": tool_name,
+            "args": args,
+            "id": "tc-1",
+            "type": "tool_call",
+        },
+        tool=None,
+        state={},
+        runtime=None,  # type: ignore[arg-type]
     )
 
 
