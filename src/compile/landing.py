@@ -21,6 +21,25 @@ from src.utils import render_with_frontmatter
 logger = structlog.get_logger(__name__)
 
 
+# User-facing blurbs for the home-page domain cards. Keyed by slug so
+# copy can evolve without touching `_DOMAINS` (which drives keyword
+# matching); missing keys render as an empty line.
+_DOMAIN_BLURBS: dict[str, str] = {
+    "buyer-experience": "BuyMer, BuyLeads, search UX, and buyer-side WhatsApp.",
+    "seller-experience": "AuditMate, seller dashboard, specs, compliance.",
+    "marketplace-discovery": "MCAT, ISQ, photo search, ranking, categorization.",
+    "platform-reliability": "GKE, Mesh PG, DB ops, API framework, performance.",
+    "trust-safety": "KYC, GST, fraud, moderation, payment protection.",
+    "ai-automation": "CrashAgent, WhatsApp 9696, autonomous assistants.",
+    "growth-monetization": "Export, ads, affiliates, Google Merchant, tenders.",
+    "engineering-productivity": "CI/CD, code quality, testing, dev tools.",
+}
+
+_UNCATEGORIZED_SLUG = "uncategorized"
+_UNCATEGORIZED_TITLE = "Uncategorized"
+_UNCATEGORIZED_BLURB = "Pages without an explicit `domain:` (or `domains:`) frontmatter."
+
+
 # Expansion table for acronyms whose in-text definition we can't always find.
 # Keep short and high-signal — the glossary tool pulls the rest from running
 # text. Extend as the corpus reveals new canonical acronyms.
@@ -124,16 +143,117 @@ def _recent_page_entries(wiki_dir: Path, limit: int = 10) -> list[tuple[Path, fl
     return pages_with_mtime[:limit]
 
 
-def _generate_home(wiki_dir: Path) -> Path:
-    """Overwrite `wiki/home.md` with the North-Star 8-domain landing layout.
+def _page_recency_key(fm: dict[str, Any], md_file: Path) -> float:
+    """Return a sortable recency timestamp for a wiki page.
 
-    Runs after `rebuild_landing_pages` — the latter's `_write_home` leaves
-    the file in a valid but pre-North-Star shape; this overwrite is
-    intentional. The resulting page is the site's home per `mkdocs.yml`.
+    Prefers the frontmatter `last_compiled` ISO string (what the
+    coordinator stamps via `_stamp_recently_modified_pages`). Falls back
+    to filesystem mtime so manually-edited pages still rank. On parse
+    failure, returns 0.0 so bad frontmatter buckets to the bottom.
+    """
+    raw = fm.get("last_compiled")
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except ValueError:
+            pass
+    elif isinstance(raw, datetime):
+        return raw.timestamp()
+    try:
+        return md_file.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _bucket_pages_by_domain(
+    wiki_dir: Path,
+) -> dict[str, list[tuple[Path, float]]]:
+    """Group topic + system pages by assigned domain slug.
+
+    Multi-domain pages (via `domains:` list, `tags:` with multiple
+    domain slugs, or future extensions) appear in every matching
+    bucket. Pages without any assignable domain land in
+    `_UNCATEGORIZED_SLUG` so readers still find them. Returns
+    `{domain_slug: [(md_file, recency_ts), ...]}` with entries sorted
+    newest-first per bucket.
+    """
+    from src.compile.compiler import _DOMAIN_BY_SLUG
+    from src.compile.compiler import _assign_domains
+    from src.compile.compiler import _iter_content_pages
+    from src.compile.compiler import _read_page
+
+    buckets: dict[str, list[tuple[Path, float]]] = {slug: [] for slug in _DOMAIN_BY_SLUG}
+    buckets[_UNCATEGORIZED_SLUG] = []
+
+    for md_file in _iter_content_pages(wiki_dir):
+        read = _read_page(md_file)
+        if read is None:
+            continue
+        fm, body = read
+        recency = _page_recency_key(fm, md_file)
+        slugs = _assign_domains(fm, body)
+        if not slugs:
+            buckets[_UNCATEGORIZED_SLUG].append((md_file, recency))
+            continue
+        # _assign_domains only returns slugs validated against
+        # _DOMAIN_BY_SLUG, so every slug here is a bucket key.
+        for slug in slugs:
+            buckets[slug].append((md_file, recency))
+
+    for entries in buckets.values():
+        entries.sort(key=lambda e: e[1], reverse=True)
+    return buckets
+
+
+def _render_domain_card(
+    slug: str,
+    title: str,
+    blurb: str,
+    entries: list[tuple[Path, float]],
+    top_n: int = 3,
+) -> list[str]:
+    """Render one domain card as markdown lines.
+
+    Cards always emit — an empty domain still gets a header so the home
+    page reliably shows all 8 (or 9 with Uncategorized) sections. Each
+    entry renders the page slug + the date portion of its recency
+    timestamp; empty domains show a single italic placeholder.
+    """
+    lines = [
+        f"## [{title}](domains/{slug}.md)",
+        "",
+        blurb,
+        "",
+        "**Top pages**:",
+    ]
+    if not entries:
+        lines.append("- *No pages yet.*")
+    else:
+        for md_file, recency in entries[:top_n]:
+            category = md_file.parent.name
+            stamp = datetime.fromtimestamp(recency, tz=UTC).strftime("%Y-%m-%d")
+            lines.append(f"- [[{category}/{md_file.stem}]] — updated {stamp}")
+    total = len(entries)
+    noun = "page" if total == 1 else "pages"
+    lines.extend(["", f"<small>{total} {noun} total</small>", ""])
+    return lines
+
+
+def _generate_home(wiki_dir: Path) -> Path:
+    """Overwrite `wiki/home.md` with the North-Star 8-domain card layout.
+
+    One card per canonical domain plus an "Uncategorized" card for pages
+    without `domain:` / `domains:` frontmatter. Cards show the domain
+    blurb, the 3 most-recently-compiled pages (by `last_compiled` DESC,
+    falling back to file mtime), and a total count. Runs after
+    `_regenerate_domain_hubs` so `domains/<slug>.md` already exists for
+    the header links.
     """
     from src.compile.compiler import _DOMAINS
     from src.compile.compiler import _GENERATED_MARKER
     from src.compile.compiler import _atomic_write_text
+
+    buckets = _bucket_pages_by_domain(wiki_dir)
 
     lines = [
         "# Email Knowledge Base — IndiaMART",
@@ -149,10 +269,22 @@ def _generate_home(wiki_dir: Path) -> Path:
         "",
     ]
     for slug, title, _keywords in _DOMAINS:
-        lines.append(f"- [{title}](domains/{slug}.md)")
+        blurb = _DOMAIN_BLURBS.get(slug, "")
+        lines.extend(_render_domain_card(slug, title, blurb, buckets.get(slug, [])))
 
-    lines.extend(["", "## Recent changes", ""])
+    uncategorized = buckets.get(_UNCATEGORIZED_SLUG, [])
+    if uncategorized:
+        lines.extend(
+            _render_domain_card(
+                _UNCATEGORIZED_SLUG,
+                _UNCATEGORIZED_TITLE,
+                _UNCATEGORIZED_BLURB,
+                uncategorized,
+            )
+        )
+
     recent = _recent_page_entries(wiki_dir, limit=10)
+    lines.extend(["## Recent changes", ""])
     if recent:
         for md_file, mtime in recent:
             category = md_file.parent.name
@@ -160,23 +292,20 @@ def _generate_home(wiki_dir: Path) -> Path:
             lines.append(f"- {stamp} — [[{category}/{md_file.stem}]]")
     else:
         lines.append("*No pages compiled yet.*")
-    lines.extend(
-        [
-            "",
-            "## Tip",
-            "",
-            "Use the search box above to find pages by keyword, or",
-            "browse by domain using the cards above.",
-            "",
-            _GENERATED_MARKER,
-            "",
-        ]
-    )
+
+    lines.extend(["", _GENERATED_MARKER, ""])
 
     fm = {"title": "Home", "page_type": "home", "status": "active"}
     path = wiki_dir / "home.md"
     _atomic_write_text(path, render_with_frontmatter(fm, "\n".join(lines)))
-    logger.info("generated", kind="home", recent_count=len(recent))
+    populated_domains = sum(1 for slug, _t, _k in _DOMAINS if buckets.get(slug))
+    logger.info(
+        "generated",
+        kind="home",
+        recent_count=len(recent),
+        populated_domains=populated_domains,
+        uncategorized=len(uncategorized),
+    )
     return path
 
 
