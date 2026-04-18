@@ -23,6 +23,7 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
 from src.compile.middleware.read_file_truncation_hint import _build_hint
+from src.compile.middleware.read_file_truncation_hint import _coerce_to_int
 from src.compile.middleware.read_file_truncation_hint import _count_returned_lines
 from src.compile.middleware.read_file_truncation_hint import _count_total_lines
 from src.compile.middleware.read_file_truncation_hint import _extract_path_offset_limit
@@ -65,6 +66,43 @@ def test_extract_args_supports_path_alias() -> None:
     # path_autoheal sometimes hands us `path` instead of `file_path`.
     parsed = _extract_path_offset_limit({"path": "/raw/foo.md"})
     assert parsed == ("/raw/foo.md", 0, 100)
+
+
+class TestCoerceToInt:
+    """P2 (#201 followup): explicit rejection of `float` + `bool`.
+
+    Silently truncating `int(1.9)` → 1 masks a real agent bug — we'd
+    rather return `None` and let the caller bail.
+    """
+
+    def test_int_passes_through(self) -> None:
+        assert _coerce_to_int(42, default=0) == 42
+        assert _coerce_to_int(0, default=100) == 0
+
+    def test_none_uses_default(self) -> None:
+        assert _coerce_to_int(None, default=7) == 7
+
+    def test_string_numeric_accepted(self) -> None:
+        assert _coerce_to_int("99", default=0) == 99
+
+    def test_string_garbage_rejected(self) -> None:
+        assert _coerce_to_int("abc", default=0) is None
+
+    def test_float_rejected_not_truncated(self) -> None:
+        # Agent passed a float — we could truncate to 1 but that hides a
+        # bug. Reject so the caller falls back to defaults / bails.
+        assert _coerce_to_int(1.9, default=0) is None
+        assert _coerce_to_int(0.0, default=0) is None
+
+    def test_bool_rejected(self) -> None:
+        # `bool` is an `int` subclass but True/False meaning 1/0 would
+        # mask a type confusion in the agent's args.
+        assert _coerce_to_int(True, default=0) is None
+        assert _coerce_to_int(False, default=0) is None
+
+    def test_other_types_rejected(self) -> None:
+        assert _coerce_to_int([1], default=0) is None
+        assert _coerce_to_int({"a": 1}, default=0) is None
 
 
 def test_count_returned_lines_basic() -> None:
@@ -312,6 +350,32 @@ def test_skips_error_response(tmp_path: Path) -> None:
     assert "read_file_total_lines" not in result.additional_kwargs
 
 
+def test_skips_error_prefix_even_when_status_success(tmp_path: Path) -> None:
+    """P1-ish (#201 followup): `"Error: ..."` body MUST be skipped.
+
+    deepagents returns a plain `str` starting with `Error:` on read
+    failure — the ToolMessage wrapper doesn't always carry
+    `status="error"`. A misleading `[total_lines=42]` footer on an
+    error body would make the agent think a valid file got read.
+    Happens to match the ACTUAL disk path here (file DOES exist) so
+    the middleware's disk stat would otherwise succeed and stamp a
+    real footer — the only thing stopping that is the prefix check.
+    """
+    body = [f"line {i}" for i in range(1, 11)]
+    view = _make_view(tmp_path, {"a.md": "\n".join(body) + "\n"})
+    mw = ReadFileTruncationHintMiddleware(view_root=view)
+    request = _read_request(path="/raw/a.md")
+    # status="success" but body is an error string — the handler layer
+    # lost the error signal; our middleware must still skip.
+    error_body = "Error: Line offset 999 exceeds file length"
+    result = mw.wrap_tool_call(request, _read_handler(error_body, status="success"))  # type: ignore[arg-type]
+
+    assert isinstance(result, ToolMessage)
+    assert str(result.content) == error_body  # unchanged — no footer
+    assert "[total_lines=" not in str(result.content)
+    assert "read_file_total_lines" not in result.additional_kwargs
+
+
 def test_skips_when_disk_path_missing(tmp_path: Path) -> None:
     """Disk file gone (race) — pass through silently."""
     view = _make_view(tmp_path, {})
@@ -400,8 +464,16 @@ def test_works_for_wiki_paths(tmp_path: Path) -> None:
     assert result.content.endswith("\n\n[total_lines=60]")
 
 
-def test_falls_back_to_limit_when_format_unparseable(tmp_path: Path) -> None:
-    """If the response doesn't carry deepagents line prefixes, fall back to limit."""
+def test_falls_back_to_limit_when_format_unparseable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """If the response doesn't carry deepagents line prefixes, fall back to limit.
+
+    Also verifies the fallback path emits a `read_file_format_fallback`
+    warning so we notice deepagents format drift in Langfuse/structlog
+    (P2 #201 followup). structlog routes through its own pipeline (not
+    stdlib `caplog`) so we assert against captured stdout.
+    """
     body = [f"line {i}" for i in range(1, 200)]
     view = _make_view(tmp_path, {"big.md": "\n".join(body) + "\n"})
     # No line-number prefixes at all — defensive fallback should engage.
@@ -417,6 +489,9 @@ def test_falls_back_to_limit_when_format_unparseable(tmp_path: Path) -> None:
     assert "[file truncated" in result.content
     assert "total_lines=199" in result.content
     assert "next offset=50" in result.content
+    # Warning surfaced so we notice format drift.
+    out = capsys.readouterr().out
+    assert "read_file_format_fallback" in out
 
 
 @pytest.mark.asyncio

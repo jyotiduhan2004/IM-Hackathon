@@ -47,6 +47,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import anyio.to_thread
 import structlog
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
@@ -76,6 +77,12 @@ _DEFAULT_LIMIT = 100
 # stamp the same ToolMessage twice.
 _HINT_KEY = "read_file_extent_hinted"
 
+# deepagents' read_file returns a bare string prefixed with "Error: "
+# when the underlying backend fails (missing file, validation failure,
+# permissions). The ToolMessage that wraps it doesn't always carry
+# `status="error"` — the string itself is the only reliable signal.
+_ERROR_PREFIX = "Error: "
+
 
 def _extract_path_offset_limit(args: dict[str, object]) -> tuple[str, int, int] | None:
     """Pull the args we need out of a `read_file` tool call.
@@ -102,17 +109,28 @@ def _extract_path_offset_limit(args: dict[str, object]) -> tuple[str, int, int] 
 def _coerce_to_int(value: object, *, default: int) -> int | None:
     """Coerce `value` to int. Returns `default` on None, None on bad input.
 
-    Defensive against the agent passing string-encoded numerics. Anything
-    that isn't `int | str | float | None` fails the isinstance gate and
-    we return None so the caller can bail.
+    Defensive against the agent passing string-encoded numerics. Accepts
+    `int` and numeric-looking `str` values; `bool` and `float` are
+    explicitly rejected because:
+
+    - `bool` is an `int` subclass but silently meaning 1/0 would mask
+      an agent bug where it passed `True`/`False` instead of an int.
+    - `float` would be truncated by `int(1.9)` → 1, hiding an agent
+      mistake. We'd rather bail and let the caller decide.
+
+    Anything outside these types (dict, list, None, etc.) returns None
+    so the caller can short-circuit.
     """
     if value is None:
         return default
     if isinstance(value, bool):
-        # `bool` is an `int` subclass but we never want True/False here
-        # to silently mean 1/0 — that would mask an agent bug.
         return None
-    if not isinstance(value, int | str | float):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # Reject outright rather than silently truncate via int().
+        return None
+    if not isinstance(value, str):
         return None
     try:
         return int(value)
@@ -236,35 +254,64 @@ class ReadFileTruncationHintMiddleware(AgentMiddleware):
     def name(self) -> str:
         return "read_file_truncation_hint"
 
-    def _maybe_append_hint(
+    def _prepare_context(
         self,
         request: ToolCallRequest,
         result: ToolMessage | Command[object],
-    ) -> None:
-        """Mutate `result.content` in-place when eligible."""
+    ) -> tuple[ToolMessage, Path, str, int, int] | None:
+        """Resolve everything we need BEFORE disk IO — pure + cheap.
+
+        Returns `(tool_message, disk_path, virtual_path, offset, limit)`
+        when the response is eligible for annotation; None when we should
+        skip (wrong tool, error response, multimodal, idempotency hit,
+        traversal attempt, etc.). Separating this from the IO step lets
+        the async path schedule `_count_total_lines` off the event loop.
+        """
         if request.tool_call.get("name") != "read_file":
-            return
+            return None
         if not isinstance(result, ToolMessage) or result.status == "error":
-            return
+            return None
         # Idempotent — if a re-entrant wrap somehow fires twice, we
         # shouldn't append two footers.
         if result.additional_kwargs.get(_HINT_KEY):
-            return
+            return None
         # Multimodal/binary reads carry `content_blocks`, not `content`.
         # `content` will be empty/non-str for those — skip cleanly.
         if not isinstance(result.content, str) or not result.content:
-            return
+            return None
+        # deepagents returns `"Error: <message>"` strings on IO failure —
+        # wrapped in a ToolMessage but not always with `status="error"`.
+        # Don't stamp a misleading `[total_lines=N]` footer on an error
+        # body (the agent would think a valid file got read).
+        if result.content.startswith(_ERROR_PREFIX):
+            return None
 
         args = request.tool_call.get("args") or {}
         parsed = _extract_path_offset_limit(args)
         if parsed is None:
-            return
+            return None
         virtual_path, offset, limit = parsed
 
         disk_path = _resolve_to_disk(self._view_root, virtual_path)
         if disk_path is None:
-            return
-        total_lines = _count_total_lines(disk_path)
+            return None
+        return result, disk_path, virtual_path, offset, limit
+
+    def _apply_hint(
+        self,
+        *,
+        result: ToolMessage,
+        total_lines: int | None,
+        virtual_path: str,
+        offset: int,
+        limit: int,
+    ) -> None:
+        """Finalise the annotation given a pre-computed `total_lines`.
+
+        The IO step (`_count_total_lines`) ran separately so the async
+        path could offload it. This step is pure: inspect returned-line
+        count, compose footer, mutate the ToolMessage.
+        """
         # `_count_total_lines` already swallows OSError for missing /
         # permission-denied / not-a-file paths, so a None here covers
         # the same TOCTOU window we'd otherwise check via `is_file()`.
@@ -278,13 +325,25 @@ class ReadFileTruncationHintMiddleware(AgentMiddleware):
         if total_lines == 0:
             return
 
+        assert isinstance(result.content, str)  # narrowed in _prepare_context
         returned = _count_returned_lines(result.content)
         # Defensive: if we couldn't parse any line numbers (e.g. format
         # changed in a future deepagents release), fall back to `limit`
         # capped at remaining-file-lines so the agent still sees a
-        # plausible footer rather than nothing.
+        # plausible footer rather than nothing. Log a warning so we
+        # notice the format drift in Langfuse/structlog.
         if returned == 0:
-            returned = min(limit, max(total_lines - offset, 0))
+            fallback_returned = min(limit, max(total_lines - offset, 0))
+            logger.warning(
+                "read_file_format_fallback",
+                path=virtual_path,
+                total_lines=total_lines,
+                offset=offset,
+                limit=limit,
+                fallback_returned=fallback_returned,
+                content_preview=result.content[:120],
+            )
+            returned = fallback_returned
 
         hint, truncated = _build_hint(total_lines=total_lines, offset=offset, returned=returned)
         result.content = result.content + hint
@@ -311,7 +370,18 @@ class ReadFileTruncationHintMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], ToolMessage | Command[object]],
     ) -> ToolMessage | Command[object]:
         result = handler(request)
-        self._maybe_append_hint(request, result)
+        ctx = self._prepare_context(request, result)
+        if ctx is None:
+            return result
+        tool_msg, disk_path, virtual_path, offset, limit = ctx
+        total_lines = _count_total_lines(disk_path)
+        self._apply_hint(
+            result=tool_msg,
+            total_lines=total_lines,
+            virtual_path=virtual_path,
+            offset=offset,
+            limit=limit,
+        )
         return result
 
     async def awrap_tool_call(
@@ -320,5 +390,19 @@ class ReadFileTruncationHintMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[object]]],
     ) -> ToolMessage | Command[object]:
         result = await handler(request)
-        self._maybe_append_hint(request, result)
+        ctx = self._prepare_context(request, result)
+        if ctx is None:
+            return result
+        tool_msg, disk_path, virtual_path, offset, limit = ctx
+        # Offload the blocking `read_text()` — single-agent today but
+        # future-proofs against concurrent agents + keeps the event
+        # loop responsive when files are on slow storage.
+        total_lines = await anyio.to_thread.run_sync(_count_total_lines, disk_path)
+        self._apply_hint(
+            result=tool_msg,
+            total_lines=total_lines,
+            virtual_path=virtual_path,
+            offset=offset,
+            limit=limit,
+        )
         return result
