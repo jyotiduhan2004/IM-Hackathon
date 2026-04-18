@@ -437,6 +437,117 @@ def test_overlap_ratio_threshold_triggers() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_failed_write_does_not_pollute_sibling_set() -> None:
+    """P1 (#200 followup): error results must not record the slug.
+
+    A downstream middleware (e.g. `EditPayloadSanityMiddleware`,
+    `SameThreadTopicGuardMiddleware`) can reject a write AFTER the
+    sibling guard. If we recorded the slug regardless, a legitimate
+    retry (same slug or a similar-but-distinct one) would be blocked
+    with a bogus `sibling_draft_overlap`.
+    """
+    mw = SiblingDraftCheckMiddleware()
+    token = _current_batch_sibling_slugs_written.set(set())
+    try:
+
+        def failing_handler(request: ToolCallRequest) -> ToolMessage:
+            # Simulates a later middleware returning `status="error"`.
+            return ToolMessage(
+                content='{"ok": false, "reason": "edit_payload_rejected"}',
+                status="error",
+                tool_call_id=request.tool_call["id"],
+                name="write_file",
+            )
+
+        first = _make_request(
+            "write_file",
+            {"file_path": "/wiki/topics/seller-bl-api-optimization.md"},
+        )
+        first_result = mw.wrap_tool_call(first, failing_handler)
+        assert isinstance(first_result, ToolMessage)
+        assert first_result.status == "error"
+        # The key assertion: error result MUST NOT populate the set.
+        assert _current_batch_sibling_slugs_written.get() == set()
+
+        # Now the retry (same slug) passes normally — no bogus rejection.
+        retry_result = mw.wrap_tool_call(
+            _make_request(
+                "write_file",
+                {"file_path": "/wiki/topics/seller-bl-api-optimization.md"},
+            ),
+            _success_handler(),
+        )
+        assert isinstance(retry_result, ToolMessage)
+        assert retry_result.status != "error"
+        assert _current_batch_sibling_slugs_written.get() == {"seller-bl-api-optimization"}
+    finally:
+        _current_batch_sibling_slugs_written.reset(token)
+
+
+def test_followup_similar_slug_allowed_after_failed_write() -> None:
+    """A failed write leaves the set clean so a sibling write can proceed."""
+    mw = SiblingDraftCheckMiddleware()
+    token = _current_batch_sibling_slugs_written.set(set())
+    try:
+
+        def failing_handler(request: ToolCallRequest) -> ToolMessage:
+            return ToolMessage(
+                content='{"ok": false}',
+                status="error",
+                tool_call_id=request.tool_call["id"],
+                name="write_file",
+            )
+
+        mw.wrap_tool_call(
+            _make_request(
+                "write_file",
+                {"file_path": "/wiki/topics/seller-bl-api-optimization.md"},
+            ),
+            failing_handler,
+        )
+        # A near-duplicate write that would normally get rejected should
+        # now go through, because the prior slug was never recorded.
+        result = mw.wrap_tool_call(
+            _make_request(
+                "write_file",
+                {"file_path": "/wiki/topics/seller-bl-api-hit-optimisation.md"},
+            ),
+            _success_handler(),
+        )
+    finally:
+        _current_batch_sibling_slugs_written.reset(token)
+
+    assert isinstance(result, ToolMessage)
+    assert result.status != "error"
+
+
+@pytest.mark.asyncio
+async def test_awrap_failed_write_does_not_pollute() -> None:
+    """Async parity for the failed-write-no-record rule."""
+    mw = SiblingDraftCheckMiddleware()
+    token = _current_batch_sibling_slugs_written.set(set())
+    try:
+
+        async def failing_handler(request: ToolCallRequest) -> ToolMessage:
+            return ToolMessage(
+                content='{"ok": false}',
+                status="error",
+                tool_call_id=request.tool_call["id"],
+                name="write_file",
+            )
+
+        await mw.awrap_tool_call(
+            _make_request(
+                "write_file",
+                {"file_path": "/wiki/topics/seller-bl-api-optimization.md"},
+            ),
+            failing_handler,
+        )
+        assert _current_batch_sibling_slugs_written.get() == set()
+    finally:
+        _current_batch_sibling_slugs_written.reset(token)
+
+
 @pytest.mark.asyncio
 async def test_awrap_rejects_near_duplicate() -> None:
     mw = SiblingDraftCheckMiddleware()

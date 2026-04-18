@@ -187,13 +187,33 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
             "guidance": guidance,
         }
 
-    def _record_write(self, slug: str | None) -> None:
+    @staticmethod
+    def _should_record(result: ToolMessage | Command[Any]) -> bool:
+        """True when the handler's result is a successful persisted write.
+
+        Error results must NOT pollute the sibling-slug set: a downstream
+        middleware (e.g. `EditPayloadSanityMiddleware`, `SameThreadTopicGuardMiddleware`)
+        can reject a write after us, so nothing actually lands on disk.
+        Recording anyway would block a legitimate retry with a spurious
+        `sibling_draft_overlap`. Non-`ToolMessage` results (e.g. `Command`
+        returned by a handler that rerouted) are treated conservatively:
+        don't record, since we can't confirm the write succeeded.
+        """
+        if not isinstance(result, ToolMessage):
+            return False
+        return result.status != "error"
+
+    def _record_write(self, slug: str | None, result: ToolMessage | Command[Any]) -> None:
         """After a successful write, register the slug for future comparisons.
 
-        No-ops when the slug isn't sibling-tracked or the ContextVar is unset
-        (tests / outside a compile run).
+        No-ops when:
+          - the slug isn't sibling-tracked;
+          - the ContextVar is unset (tests / outside a compile run);
+          - the tool result indicates an error (see `_should_record`).
         """
         if slug is None:
+            return
+        if not self._should_record(result):
             return
         from src.compile.compiler import _current_batch_sibling_slugs_written
 
@@ -249,7 +269,7 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
         if rejection is not None:
             return rejection
         result = handler(request)
-        self._record_write(slug)
+        self._record_write(slug, result)
         return result
 
     async def awrap_tool_call(
@@ -261,5 +281,5 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
         if rejection is not None:
             return rejection
         result = await handler(request)
-        self._record_write(slug)
+        self._record_write(slug, result)
         return result
