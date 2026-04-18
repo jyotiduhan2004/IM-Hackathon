@@ -2045,6 +2045,7 @@ def create_compiler(
     from deepagents.backends import FilesystemBackend
 
     from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
+    from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
@@ -2136,6 +2137,7 @@ def create_compiler(
         middleware=[
             PathAutohealMiddleware(),
             ChronologicalScopeMiddleware(),
+            EditPayloadSanityMiddleware(),
             EntityWriteAutohealMiddleware(),
             LegacyPageHintMiddleware(),
             SameThreadTopicGuardMiddleware(),
