@@ -1,4 +1,4 @@
-.PHONY: setup sync ingest compile audit-nightly langfuse-smoke lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish publish-gate publish-force help
+.PHONY: setup sync ingest compile audit-nightly langfuse-smoke lint check test format type-check serve wiki wiki-build snapshot snapshot-list snapshot-clean bootstrap publish publish-gate publish-force hygiene help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -46,7 +46,7 @@ pipeline: ingest compile lint-wiki ## Run full pipeline: ingest → compile → 
 
 # === Code Quality ===
 
-check: format-check lint type-check test ## Run all quality checks
+check: format-check lint type-check test hygiene ## Run all quality checks
 
 test: ## Run tests
 	uv run pytest tests/ -x --tb=short
@@ -62,6 +62,11 @@ format-check: ## Check formatting without fixing
 
 type-check: ## Type check
 	uv run mypy src/
+
+hygiene: ## Run repo-hygiene checks (file sizes, dup fixtures, one-shot expiry)
+	uv run python scripts/check_file_sizes.py
+	uv run python scripts/check_duplicate_fixtures.py
+	uv run python scripts/check_one_shot_expiry.py
 
 # === Snapshot / Restore (safe experimentation) ===
 

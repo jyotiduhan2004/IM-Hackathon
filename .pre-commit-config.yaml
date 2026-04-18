@@ -13,3 +13,25 @@ repos:
     hooks:
       - id: check-merge-conflict
       - id: check-ast
+
+  # Local hygiene hooks — stdlib-only scripts, see scripts/check_*.py.
+  - repo: local
+    hooks:
+      - id: check-file-sizes
+        name: check file sizes
+        entry: python scripts/check_file_sizes.py
+        language: system
+        pass_filenames: false
+        files: ^(src|scripts)/.*\.py$
+      - id: check-duplicate-fixtures
+        name: check duplicate test fixtures
+        entry: python scripts/check_duplicate_fixtures.py
+        language: system
+        pass_filenames: false
+        files: ^tests/.*\.py$
+      - id: check-one-shot-expiry
+        name: check one-shot script expiry
+        entry: python scripts/check_one_shot_expiry.py
+        language: system
+        pass_filenames: false
+        files: ^scripts/.*\.py$
