@@ -1200,18 +1200,24 @@ def _assign_domains(fm: dict[str, Any], body: str) -> list[str]:
     1. Explicit `domains:` list frontmatter — v10-U2 multi-value form;
        every canonical slug in the list attaches the page (a topic that
        spans e.g. trust-safety + growth-monetization shows up on both
-       hubs). Non-canonical entries are dropped silently — the validator
-       emits `unknown-domain-value` warnings so operators see them.
+       hubs). When any non-empty `domains:` list is present, it is
+       authoritative: even a list of entirely non-canonical entries
+       still blocks the fallthrough so the validator's `unknown-domain-
+       value` warnings match the viewer's & rollup's rendering. Matches
+       `_render_domain_badges` / `_extract_domain_values` precedence.
     2. Explicit `domain:` frontmatter — trusted verbatim (1 hub).
     3. `tags:` list — every tag matching a domain slug attaches the page.
     4. Keyword match against the page title + first paragraph — transitional
-       fallback, logged so operators see which pages still need explicit tags.
+       fallback. Callers aggregate the inferred count and emit a single
+       summary log per pass (see `_regenerate_domain_hubs`,
+       `_bucket_pages_by_domain`) instead of per-page noise.
     """
     plural = fm.get("domains")
-    if isinstance(plural, list):
-        plural_hits = [v for v in plural if isinstance(v, str) and v in _DOMAIN_BY_SLUG]
-        if plural_hits:
-            return plural_hits
+    if isinstance(plural, list) and plural:
+        # Any non-empty list is authoritative: if every entry is bogus we
+        # still return `[]` rather than fall through to `domain:` /
+        # keyword inference, matching the validator + renderer.
+        return [v for v in plural if isinstance(v, str) and v in _DOMAIN_BY_SLUG]
 
     explicit = fm.get("domain")
     if isinstance(explicit, str) and explicit in _DOMAIN_BY_SLUG:
@@ -1226,14 +1232,29 @@ def _assign_domains(fm: dict[str, Any], body: str) -> list[str]:
     title = str(fm.get("title", ""))
     inferred = _infer_domain_from_keywords(title, body)
     if inferred:
-        slug = fm.get("slug") or fm.get("title") or ""
-        logger.warning(
-            "domain-hub-inferred-from-keyword",
-            slug=str(slug),
-            domain=inferred,
-        )
         return [inferred]
     return []
+
+
+def _was_domain_inferred(fm: dict[str, Any]) -> bool:
+    """Return True iff `_assign_domains` would fall through to keyword inference.
+
+    A page "needs the inference fallback" when none of `domains:` (non-empty
+    list), `domain:`, or `tags:` surfaces a canonical domain slug. Pure
+    helper used by callers that want to emit a single aggregate log per
+    pass rather than per page (the per-page log generated duplicate lines
+    when the same page drove multiple rollups).
+    """
+    plural = fm.get("domains")
+    if isinstance(plural, list) and plural:
+        return False
+    explicit = fm.get("domain")
+    if isinstance(explicit, str) and explicit in _DOMAIN_BY_SLUG:
+        return False
+    tags = fm.get("tags") or []
+    return not (
+        isinstance(tags, list) and any(isinstance(t, str) and t in _DOMAIN_BY_SLUG for t in tags)
+    )
 
 
 def _regenerate_domain_hubs(wiki_dir: Path) -> list[Path]:
@@ -1246,6 +1267,7 @@ def _regenerate_domain_hubs(wiki_dir: Path) -> list[Path]:
     buckets: dict[str, dict[str, list[tuple[str, str]]]] = {
         slug: {"topics": [], "systems": []} for slug, _t, _k in _DOMAINS
     }
+    inferred_count = 0
 
     for md_file in _iter_content_pages(wiki_dir):
         read = _read_page(md_file)
@@ -1256,9 +1278,19 @@ def _regenerate_domain_hubs(wiki_dir: Path) -> list[Path]:
         slugs = _assign_domains(fm, body)
         if not slugs:
             continue
+        if _was_domain_inferred(fm):
+            inferred_count += 1
         entry = (md_file.stem, _first_paragraph(body))
         for slug in slugs:
             buckets[slug][category].append(entry)
+
+    if inferred_count:
+        # Single summary log per regen pass — replaces the per-page warning
+        # that fired once per bucket lookup (v10-U3 followup P2, #191).
+        logger.info(
+            "domain-hub-inferred-from-keyword-summary",
+            pages=inferred_count,
+        )
 
     domains_dir = wiki_dir / "domains"
     written: list[Path] = []

@@ -634,11 +634,16 @@ form rather than picking one.
 resolve_page("payment-fraud-sweep-q2") → {exists: false}
 write_file("/wiki/topics/payment-fraud-sweep-q2.md", content='''---
 title: Payment fraud sweep (Q2 2026)
+slug: payment-fraud-sweep-q2
 page_type: topic
 status: active
 domains: [trust-safety, growth-monetization]
+tags: [fraud, payments, chargebacks]
 source_threads:
   - 19c01aa2de45f678
+related:
+  - "[[system/paid-leads]]"
+  - "[[topic/chargeback-rings]]"
 ---
 
 The Q2 2026 payment-fraud sweep targets chargeback rings that span

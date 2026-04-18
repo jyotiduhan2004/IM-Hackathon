@@ -14,6 +14,7 @@ automatically when the DB is unavailable or the slug has no rows yet.
 
 from __future__ import annotations
 
+import html
 import os
 import re
 from datetime import date
@@ -241,7 +242,11 @@ def _render_domain_badges(fm: dict) -> str:
             values = [singular.strip()]
     if not values:
         return ""
-    return " ".join(f'<span class="ns-domain">{v}</span>' for v in values)
+    # `html.escape` because `values` is user-authored frontmatter — a
+    # stray `<`/`&` would otherwise render literally inside the span
+    # (or worse, inject markup). Quote=True also protects the `class=`
+    # attribute if a future caller interpolates into an attribute value.
+    return " ".join(f'<span class="ns-domain">{html.escape(v, quote=True)}</span>' for v in values)
 
 
 # Three ref shapes we rewrite — each captures the filename in group 1. The

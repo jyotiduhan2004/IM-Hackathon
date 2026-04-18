@@ -824,7 +824,13 @@ def _extract_domain_values(fm: dict[str, Any]) -> tuple[list[str], str | None]:
     """
     plural = fm.get("domains")
     if isinstance(plural, list) and plural:
-        return ([v for v in plural if v is not None], "domains")
+        # Filter to non-blank strings — matches `mkdocs_hooks._render_domain_badges`
+        # so a `domains: [null, "", "seller-experience"]` frontmatter produces
+        # identical domain-set warnings and identical rendered badges.
+        return (
+            [v for v in plural if isinstance(v, str) and v.strip()],
+            "domains",
+        )
     singular = fm.get("domain")
     if singular is None or (isinstance(singular, str) and not singular.strip()):
         return ([], None)

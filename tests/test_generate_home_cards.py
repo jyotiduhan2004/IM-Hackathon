@@ -225,6 +225,35 @@ def test_generate_home_uncategorized_has_no_dead_link(mini_wiki: Path) -> None:
     assert "domains/uncategorized.md" not in content
 
 
+def test_plural_domains_all_bogus_does_not_fall_through(mini_wiki: Path) -> None:
+    """P1-3 (#193): any non-empty `domains:` list blocks singular fallthrough.
+
+    Before the fix, a page with `domains: [bogus]` AND `domain:
+    seller-experience` would land in the seller-experience bucket — a
+    silent semantic drift from the viewer (`_render_domain_badges`) and
+    validator (`_extract_domain_values`), both of which treat any
+    non-empty `domains:` as authoritative.
+    """
+    _write_page(
+        mini_wiki / "topics" / "bogus-only.md",
+        {
+            "title": "Bogus Only",
+            "page_type": "topic",
+            "domains": ["bogus"],  # all non-canonical
+            "domain": "seller-experience",  # would have won pre-fix
+            "last_compiled": _iso(datetime(2026, 4, 10, tzinfo=UTC)),
+        },
+        "Irrelevant body.\n",
+    )
+    content = _generate_home(mini_wiki).read_text()
+    # Must NOT appear on the seller card — the bogus plural list blocks fallback.
+    seller_card = _extract_card(content, "Seller Experience")
+    assert "[[topics/bogus-only]]" not in seller_card
+    # Lands in Uncategorized because no canonical assignment survived.
+    uncategorized = _extract_card(content, "Uncategorized")
+    assert "[[topics/bogus-only]]" in uncategorized
+
+
 def test_generate_home_falls_back_to_mtime_when_last_compiled_missing(
     mini_wiki: Path,
 ) -> None:
