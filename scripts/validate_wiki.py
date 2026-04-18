@@ -31,6 +31,10 @@ Checks (WARN severity — stderr only, no exit-code effect):
   the eight north-star domains (domain-missing / domain-unknown). Tier A
   will teach the agent to emit this; until then every legacy page fires
   the warning so we can see progress.
+- Topic/system page slug prefix matches its declared domain
+  (domain-prefix-mismatch). Catches "seller-* page tagged as
+  buyer-experience" mistakes from Cycle 10 audit. Always warning-only —
+  the agent's judgement may be correct; we never override.
 - Page has legacy `sources:` with no `source_threads:` (legacy-sources-only).
   Phase A U6 backfills the new field; until then existing pages fire this
   warning. Promoted to ERROR with `--strict-no-sources` once U6 completes.
@@ -175,6 +179,8 @@ except ImportError:
 # changes yet).
 try:
     from src.compile.compiler import _DOMAIN_BY_SLUG as _COMPILER_DOMAIN_BY_SLUG
+    from src.compile.compiler import _SLUG_PREFIX_DOMAIN as _SLUG_PREFIX_DOMAIN
+    from src.compile.compiler import _domain_from_slug_prefix as _domain_from_slug_prefix
 
     CANONICAL_DOMAINS: frozenset[str] = frozenset(_COMPILER_DOMAIN_BY_SLUG.keys())
 except ImportError:  # pragma: no cover - fallback only
@@ -190,6 +196,19 @@ except ImportError:  # pragma: no cover - fallback only
             "engineering-productivity",
         }
     )
+    # Fallback when src.compile.compiler isn't importable. Mirrors the
+    # canonical-domain hardcoded fallback above; rebinding the same
+    # name keeps the check helpers below importable either way.
+    _SLUG_PREFIX_DOMAIN = {}
+
+    def _domain_from_slug_prefix(slug: str) -> str | None:
+        """Fallback no-op when src.compile.compiler isn't importable.
+
+        Skipping the prefix sanity check entirely is preferable to a
+        stale hardcoded prefix map drifting away from the compiler.
+        """
+        return None
+
 
 _EXPECTED_DOMAINS_HINT = ", ".join(sorted(CANONICAL_DOMAINS))
 
@@ -899,6 +918,71 @@ def check_missing_domain(wiki_dir: Path) -> list[ValidationWarning]:
     return warnings
 
 
+def check_domain_prefix_mismatch(wiki_dir: Path) -> list[ValidationWarning]:
+    """Warn when a page's slug prefix disagrees with its declared domain.
+
+    Cycle 10 audit found `seller-bl-api-optimization` shipped with
+    `domain: buyer-experience`. The slug prefix is a strong signal we
+    can sanity-check against the agent's choice. Mirrors `_assign_domains`
+    precedence — multi-value `domains:` with ANY expected match counts
+    as valid (the topic legitimately spans multiple domains).
+
+    Warning-only by design. The agent's judgement may be correct (a
+    seller-prefixed page that primarily affects buyers, etc.) — we
+    surface the mismatch but never override.
+
+    No warning when:
+    - Slug doesn't match any known prefix (fall through to existing
+      keyword/domain checks).
+    - Page has neither `domain:` nor `domains:` (the existing
+      `domain-missing` check covers it).
+    - Any value in `domains:` matches the expected prefix domain.
+    """
+    warnings: list[ValidationWarning] = []
+    for category in ("topics", "systems"):
+        cat_dir = wiki_dir / category
+        if not cat_dir.exists():
+            continue
+        for path in sorted(cat_dir.glob("*.md")):
+            if path.name == "index.md":
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            fm, _ = _extract_frontmatter(content)
+            if not fm:
+                continue
+            slug = path.stem
+            expected = _domain_from_slug_prefix(slug)
+            if not expected:
+                continue
+            values, source_field = _extract_domain_values(fm)
+            if not values:
+                # `domain-missing` check handles this case.
+                continue
+            declared = [v.strip() for v in values if isinstance(v, str) and v.strip()]
+            if expected in declared:
+                continue
+            matched_prefix = next(
+                (
+                    p
+                    for p in sorted(_SLUG_PREFIX_DOMAIN, key=len, reverse=True)
+                    if slug.startswith(p)
+                ),
+                "",
+            )
+            warnings.append(
+                ValidationWarning(
+                    path,
+                    f"slug starts with {matched_prefix!r} but "
+                    f"`{source_field or 'domain'}:` is {declared!r}; expected {expected!r}",
+                    "domain-prefix-mismatch",
+                )
+            )
+    return warnings
+
+
 # Bug F: H2 titles should be canonical structure, not dated/attributed
 # per-email entries. The regexes below match the observed bad shapes:
 # - ISO date: "## Bug Status (as of 2026-01-13)"
@@ -1159,6 +1243,7 @@ def run(
     warnings.extend(section_warnings)
     warnings.extend(check_lead_paragraph(wiki_dir))
     warnings.extend(check_missing_domain(wiki_dir))
+    warnings.extend(check_domain_prefix_mismatch(wiki_dir))
     warnings.extend(check_dated_h2_sections(wiki_dir))
     warnings.extend(check_markdownlint(wiki_dir))
     legacy_errors, legacy_warnings = check_legacy_shape(wiki_dir, strict=strict_new_ontology)

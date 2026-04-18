@@ -183,3 +183,82 @@ def test_warnings_do_not_bleed_into_errors(mini_wiki: Path) -> None:
     errors, warnings = validator.run(mini_wiki)
     assert errors == []
     assert any(w.check == "domain-unknown" for w in warnings)
+
+
+# v11-U8: slug-prefix → domain sanity check. Cycle 10 audit found
+# `seller-bl-api-optimization` shipped with `domain: buyer-experience`
+# (wrong — it's a seller-side BL topic). Warning-only; agent judgement
+# may be correct so we never override.
+
+
+def test_prefix_matches_domain_no_warning(mini_wiki: Path) -> None:
+    """`seller-` prefix + `domain: seller-experience` → no warning."""
+    _write_page(
+        mini_wiki / "topics",
+        "seller-foo",
+        "topic",
+        domain="seller-experience",
+    )
+    assert validator.check_domain_prefix_mismatch(mini_wiki) == []
+
+
+def test_prefix_disagrees_with_domain_emits_warning(mini_wiki: Path) -> None:
+    """`seller-` prefix + `domain: buyer-experience` → mismatch warning."""
+    _write_page(
+        mini_wiki / "topics",
+        "seller-foo",
+        "topic",
+        domain="buyer-experience",
+    )
+    warnings = validator.check_domain_prefix_mismatch(mini_wiki)
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w.check == "domain-prefix-mismatch"
+    assert "'seller-'" in w.reason
+    assert "seller-experience" in w.reason  # the expected value
+    assert "buyer-experience" in w.reason  # the wrong value
+
+
+def test_prefix_with_missing_domain_falls_to_existing_check(mini_wiki: Path) -> None:
+    """No `domain:` field — handled by `domain-missing`, prefix check stays quiet."""
+    _write_page(mini_wiki / "topics", "seller-foo", "topic")
+    prefix_warnings = validator.check_domain_prefix_mismatch(mini_wiki)
+    assert prefix_warnings == []
+    # Sanity: the existing `domain-missing` check still fires.
+    domain_warnings = validator.check_missing_domain(mini_wiki)
+    assert any(w.check == "domain-missing" for w in domain_warnings)
+
+
+def test_prefix_satisfied_by_any_value_in_multi_domains(mini_wiki: Path) -> None:
+    """`domains:` list with the expected value among others → no warning."""
+    _write_page(
+        mini_wiki / "topics",
+        "seller-foo",
+        "topic",
+        domains=["buyer-experience", "seller-experience"],
+    )
+    assert validator.check_domain_prefix_mismatch(mini_wiki) == []
+
+
+def test_unknown_prefix_no_warning(mini_wiki: Path) -> None:
+    """Slug with no known prefix → no warning, regardless of domain."""
+    _write_page(
+        mini_wiki / "topics",
+        "foo-bar",
+        "topic",
+        domain="buyer-experience",
+    )
+    assert validator.check_domain_prefix_mismatch(mini_wiki) == []
+
+
+def test_prefix_mismatch_does_not_bleed_into_errors(mini_wiki: Path) -> None:
+    """Mismatch warnings stay in the warning channel; never exit-1."""
+    _write_page(
+        mini_wiki / "topics",
+        "seller-bl-api-optimization",
+        "topic",
+        domain="buyer-experience",
+    )
+    errors, warnings = validator.run(mini_wiki)
+    assert errors == []
+    assert any(w.check == "domain-prefix-mismatch" for w in warnings)

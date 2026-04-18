@@ -201,7 +201,7 @@ def _bucket_pages_by_domain(
             continue
         fm, body = read
         recency = _page_recency_key(fm, md_file)
-        slugs = _assign_domains(fm, body)
+        slugs = _assign_domains(fm, body, md_file.stem)
         if not slugs:
             buckets[_UNCATEGORIZED_SLUG].append((md_file, recency))
             continue
