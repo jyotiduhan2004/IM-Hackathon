@@ -170,7 +170,10 @@ page needs ≥ 2 complete sentences summarising what this page is
 about, in the present tense. The first sentence is a Wikipedia-style
 definition ("Lens is an AI-powered image search feature for..."),
 not a heading. Pages that open with `## Summary` with no prose
-above fail the scannability test.
+above fail the scannability test. Optional: a `## TL;DR` H2 (≤3
+quantified sentences) surfaces verbatim in future
+`get_page_summary` calls — skip if the lead paragraph already does
+that job.
 </page_types>
 
 <domain_frontmatter>
@@ -265,9 +268,9 @@ Discovery (start here, in this order):
    auto_corrected_from, auto_corrected_to}`. Call this BEFORE creating any
   page. Normalises URL hosts (`mesh-pg.intermesh.net` → `mesh-pg`).
 - `get_page_summary(slug, response_format="concise"|"detailed")` —
-  concise returns `{found, slug, title, first_paragraph}`; detailed
-  adds page_type, status, headings, source_count, is_cited,
-  last_compiled. Cheap way to decide merge vs. new.
+  concise returns `{found, slug, title, first_paragraph, tldr}`
+  (`tldr` = `## TL;DR` body or None); detailed adds page_type,
+  status, headings, source_count, is_cited, last_compiled.
 - `list_wiki_pages(response_format="concise"|"detailed")` — fallback
   catalog browse when `resolve_page` doesn't find a match. Concise
   returns a flat `{pages: [{slug, title}, ...]}` inventory; detailed

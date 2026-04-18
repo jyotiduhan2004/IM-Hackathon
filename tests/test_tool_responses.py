@@ -194,7 +194,9 @@ class TestGetPageSummaryDualFormat:
     def test_default_is_concise(self, tmp_path: Path) -> None:
         _seed_wiki(tmp_path)
         result = get_page_summary.invoke({"slug": "buylead", "wiki_dir": str(tmp_path)})
-        assert set(result.keys()) == {"found", "slug", "title", "first_paragraph"}
+        # `tldr` (V11-U5) is part of the concise shape — None when no
+        # `## TL;DR` section exists. Future agents skip a re-read when present.
+        assert set(result.keys()) == {"found", "slug", "title", "first_paragraph", "tldr"}
 
     def test_concise_shape_drops_frontmatter_stats(self, tmp_path: Path) -> None:
         _seed_wiki(tmp_path)

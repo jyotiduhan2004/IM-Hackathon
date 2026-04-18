@@ -1804,6 +1804,33 @@ def _extract_h2_headings(body: str) -> list[str]:
     return headings
 
 
+def _extract_tldr(body: str) -> str | None:
+    """Return the content of the page's `## TL;DR` (or `## TLDR`) H2.
+
+    Case-insensitive match on `TL;DR` / `TLDR`. Content is everything
+    between that heading and the next `##` heading (or end of file),
+    stripped. Returns None if no such section exists. Used by
+    `get_page_summary` so agents can surface durable lead prose without
+    re-reading the page.
+    """
+    in_tldr = False
+    collected: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            heading = line[3:].strip().lower()
+            if not in_tldr and heading in ("tl;dr", "tldr"):
+                in_tldr = True
+                continue
+            if in_tldr:
+                break  # next H2 — TL;DR is done
+        if in_tldr:
+            collected.append(line)
+    if not in_tldr:
+        return None
+    text = "\n".join(collected).strip()
+    return text or None
+
+
 @tool
 def get_page_summary(
     slug: str,
@@ -1827,7 +1854,10 @@ def get_page_summary(
         wiki_dir: Root wiki directory. Default "wiki".
         response_format:
           - "concise" (default, ~72 tokens) — `{found, slug, title,
-            first_paragraph}`. Cheapest "what is this about?" probe.
+            first_paragraph, tldr}`. Cheapest "what is this about?"
+            probe. `tldr` is the content of any `## TL;DR` (or `## TLDR`)
+            section, or None if absent — pages that author one let
+            future calls skip the re-read.
           - "detailed" (~206 tokens) — adds `page_type, status,
             headings, source_count, source_thread_count, is_cited,
             last_compiled`. Use when you also need the citation /
@@ -1851,6 +1881,7 @@ def get_page_summary(
     body = _extract_body(content)
     title = str(fm.get("title") or slug)
     first_paragraph = _first_paragraph_capped(body, cap=200)
+    tldr = _extract_tldr(body)
 
     if response_format == "concise":
         return {
@@ -1858,6 +1889,7 @@ def get_page_summary(
             "slug": slug,
             "title": title,
             "first_paragraph": first_paragraph,
+            "tldr": tldr,
         }
 
     sources = fm.get("sources") or []
@@ -1872,6 +1904,7 @@ def get_page_summary(
         "page_type": str(fm.get("page_type") or ""),
         "status": str(fm.get("status") or "active"),
         "first_paragraph": first_paragraph,
+        "tldr": tldr,
         "headings": _extract_h2_headings(body),
         "source_count": source_count,
         "source_thread_count": source_thread_count,
