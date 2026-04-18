@@ -160,6 +160,12 @@ class TestGetThreadContextCutoff:
             def fetchall(self) -> list:
                 return []
 
+            def fetchone(self) -> dict[str, object] | None:
+                # v10 followup P1-4 (#196): concise path queries MAX(date)
+                # separately; this test only cares about the primary query's
+                # cutoff clause, so a bare `None`-max response is fine.
+                return {"max_date": None}
+
         cur = _FakeCursor()
 
         class _FakeConn:
@@ -194,6 +200,9 @@ class TestGetThreadContextCutoff:
 
             def fetchall(self) -> list:
                 return []
+
+            def fetchone(self) -> dict[str, object] | None:
+                return {"max_date": None}
 
         cur = _FakeCursor()
 
