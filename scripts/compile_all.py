@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import sys
 from collections import defaultdict
 from collections.abc import Callable
@@ -109,6 +110,13 @@ def _regenerate_landing_surfaces(wiki_dir: str) -> None:
             logger.warning("landing-failed", generator=name, error=str(exc))
 
 
+def _stamp_frontmatter_compiled(fm: dict[str, Any], now_iso: str, model_name: str) -> None:
+    """Stamp a page's frontmatter with compile metadata. Mutates in place."""
+    fm["last_compiled"] = now_iso
+    fm["updated_by"] = model_name
+    fm["update_count"] = int(fm.get("update_count") or 0) + 1
+
+
 def _stamp_recently_modified_pages(
     wiki_dir: str, since_timestamp: float, model_name: str
 ) -> tuple[int, int]:
@@ -151,9 +159,7 @@ def _stamp_recently_modified_pages(
                 if not ("title" in fm or "page_type" in fm):
                     skipped += 1
                     continue
-                fm["last_compiled"] = now_iso
-                fm["updated_by"] = model_name
-                fm["update_count"] = int(fm.get("update_count") or 0) + 1
+                _stamp_frontmatter_compiled(fm, now_iso, model_name)
                 body = extract_body(content)
                 md_file.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
                 stamped += 1
@@ -529,9 +535,7 @@ def _sync_and_stamp_landing_surfaces(wiki_dir: str, model_name: str) -> tuple[in
             # still runs on mangled files (using stem fallback for title)
             # so resolve_page can still find them.
             if "title" in fm or "page_type" in fm:
-                fm["last_compiled"] = now_iso
-                fm["updated_by"] = model_name
-                fm["update_count"] = int(fm.get("update_count") or 0) + 1
+                _stamp_frontmatter_compiled(fm, now_iso, model_name)
                 body = extract_body(content)
                 try:
                     path.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
@@ -1358,6 +1362,103 @@ def _emit_langfuse_scores_for_run(run_id: UUID) -> None:
         )
 
 
+def _setup_model_pool(model_pool: str | None, resolved_model: str) -> list[str]:
+    """Parse --model-pool, tracking source for diagnosis.
+
+    CLI flag overrides settings.model_pool. Empty final list = no pool (use
+    `resolved_model` for every batch); a list = sample one at random per batch.
+
+    `pool_source` is load-bearing for diagnosis: the last-4h trace showed a
+    known-broken model appearing via env/CLI override even though src/config.py
+    had dropped it from the default. The run-start log line lets us see
+    immediately whether the pool came from the default list, LLM_MODEL_POOL
+    env var, or a CLI flag.
+    """
+    pool: list[str]
+    pool_source: str
+    if model_pool is not None:
+        pool = [m.strip() for m in model_pool.split(",") if m.strip()]
+        pool_source = "cli:--model-pool"
+    else:
+        pool = settings.model_pool if len(settings.model_pool) > 1 else []
+        # pydantic-settings fills `llm_model_pool` from env when set, otherwise
+        # from the class default. Presence of LLM_MODEL_POOL in os.environ is
+        # the cheapest, most reliable distinguisher.
+        pool_source = "env:LLM_MODEL_POOL" if "LLM_MODEL_POOL" in os.environ else "default"
+    logger.info(
+        "effective_model_pool", pool=pool, source=pool_source, resolved_model=resolved_model
+    )
+    return pool
+
+
+def _prepare_model_pool(
+    pool: list[str], available: set[str] | None, base_url: str | None, resolved_model: str
+) -> list[str]:
+    """Filter pool by provider-catalog availability, then drop quarantined models.
+
+    Echoes diagnostics via click.echo so operators see what got dropped and why.
+    Returns the (possibly shorter) pool ready for per-batch sampling.
+    """
+    if pool and available is not None:
+        pool, unavailable = _filter_pool_to_available_models(pool, available)
+        if unavailable:
+            click.echo("Provider catalog dropped " + ", ".join(unavailable) + " (not in /models)")
+    if not pool and available is not None and base_url and resolved_model not in available:
+        click.echo(
+            f"WARNING: selected model {resolved_model} is not advertised by "
+            f"{base_url.rstrip('/')}/models"
+        )
+
+    # Drop chronically-failing models from the pool at run-start so we don't
+    # spend a run rediscovering the same 401/400/recursion-loop failure. Fails
+    # open on DB errors so a Postgres blip can't block compile. See
+    # `_healthy_pool` for the rule.
+    #
+    # Note: this is short-window *quarantine*, not permanent removal. Permanent
+    # removal from the default pool lives in `src/config.py`. A quarantined
+    # model re-appears next run if the window has cleared — a config-removed
+    # model does not.
+    if pool:
+        pool, excluded = _healthy_pool(pool)
+        if excluded:
+            click.echo(
+                "Auto-exclusion dropped "
+                + ", ".join(
+                    f"{s['compile_model']} [{s.get('reason', 'quarantined')}] "
+                    f"({s['failed']}/{s['total']} failed)"
+                    for s in excluded
+                )
+            )
+    if pool:
+        click.echo(f"Model pool: {pool} (random pick per batch)")
+    return pool
+
+
+def _preview_dry_run(uncompiled: list[dict[str, str]], batch_size: int) -> None:
+    """Log what the batch loop WOULD do, without invoking the agent."""
+    total = len(uncompiled)
+    preview_groups = _group_by_thread(uncompiled, max_per_group=batch_size)
+    click.echo(
+        f"Thread-grouped into {len(preview_groups)} batches "
+        f"(avg {total / max(len(preview_groups), 1):.1f} emails/batch)"
+    )
+    sizes = [len(g) for g in preview_groups]
+    if sizes:
+        click.echo(
+            f"Group size distribution: min={min(sizes)} median={sorted(sizes)[len(sizes) // 2]} "
+            f"max={max(sizes)} singletons={sizes.count(1)}"
+        )
+    click.echo("\nFirst 10 batches:")
+    for i, g in enumerate(preview_groups[:10], 1):
+        tid = g[0].get("thread_id", "")[:12]
+        earliest = g[0].get("date", "")[:10]
+        subj = g[0].get("subject", "")[:50]
+        click.echo(f"  batch {i}: thread={tid} earliest={earliest} n={len(g)} subj={subj!r}")
+    if len(preview_groups) > 10:
+        click.echo(f"  ... and {len(preview_groups) - 10} more batches")
+    click.echo("\nDry run complete.")
+
+
 @click.command()
 @click.option(
     "--batch-size",
@@ -1482,31 +1583,7 @@ def main(
         wiki_dir_topics_count=topics_count,
     )
 
-    # Parse --model-pool. CLI flag overrides settings.model_pool. Empty
-    # final list = no pool (use `resolved_model` for every batch); a list
-    # = sample one at random per batch (sticky for the batch).
-    #
-    # `pool_source` is load-bearing for diagnosis: the last-4h trace showed
-    # a known-broken model appearing via env/CLI override even though
-    # src/config.py had dropped it from the default. The run-start log line
-    # below lets us see immediately whether the pool came from the default
-    # list, LLM_MODEL_POOL env var, or a CLI flag.
-    import os
-
-    pool: list[str]
-    pool_source: str
-    if model_pool is not None:
-        pool = [m.strip() for m in model_pool.split(",") if m.strip()]
-        pool_source = "cli:--model-pool"
-    else:
-        pool = settings.model_pool if len(settings.model_pool) > 1 else []
-        # pydantic-settings fills `llm_model_pool` from env when set,
-        # otherwise from the class default. Presence of LLM_MODEL_POOL in
-        # os.environ is the cheapest, most reliable distinguisher.
-        pool_source = "env:LLM_MODEL_POOL" if "LLM_MODEL_POOL" in os.environ else "default"
-    logger.info(
-        "effective_model_pool", pool=pool, source=pool_source, resolved_model=resolved_model
-    )
+    pool = _setup_model_pool(model_pool, resolved_model)
 
     if not dry_run:
         try:
@@ -1514,45 +1591,9 @@ def main(
         except psycopg.Error as exc:
             logger.warning("compile_attempts_schema_ensure_failed", error=str(exc))
 
-    available_models = _fetch_available_models()
-    base_url = settings.litellm_base_url
-    if pool and available_models is not None:
-        pool, unavailable = _filter_pool_to_available_models(pool, available_models)
-        if unavailable:
-            click.echo("Provider catalog dropped " + ", ".join(unavailable) + " (not in /models)")
-    if (
-        not pool
-        and available_models is not None
-        and base_url
-        and resolved_model not in available_models
-    ):
-        click.echo(
-            f"WARNING: selected model {resolved_model} is not advertised by "
-            f"{base_url.rstrip('/')}/models"
-        )
-
-    # Drop chronically-failing models from the pool at run-start so we
-    # don't spend a run rediscovering the same 401/400/recursion-loop
-    # failure. Fails open on DB errors so a Postgres blip can't block
-    # compile. See `_healthy_pool` for the rule.
-    #
-    # Note: this is short-window *quarantine*, not permanent removal.
-    # Permanent removal from the default pool lives in `src/config.py`.
-    # A quarantined model re-appears next run if the window has cleared
-    # — a config-removed model does not.
-    if pool:
-        pool, excluded = _healthy_pool(pool)
-        if excluded:
-            click.echo(
-                "Auto-exclusion dropped "
-                + ", ".join(
-                    f"{s['compile_model']} [{s.get('reason', 'quarantined')}] "
-                    f"({s['failed']}/{s['total']} failed)"
-                    for s in excluded
-                )
-            )
-    if pool:
-        click.echo(f"Model pool: {pool} (random pick per batch)")
+    pool = _prepare_model_pool(
+        pool, _fetch_available_models(), settings.litellm_base_url, resolved_model
+    )
 
     # Use the tool directly for listing, not through the agent
     all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
@@ -1590,26 +1631,7 @@ def main(
             click.echo(f"Pre-compile snapshot: .snapshots/{label}/wiki")
 
     if dry_run:
-        preview_groups = _group_by_thread(uncompiled, max_per_group=batch_size)
-        click.echo(
-            f"Thread-grouped into {len(preview_groups)} batches "
-            f"(avg {total / max(len(preview_groups), 1):.1f} emails/batch)"
-        )
-        sizes = [len(g) for g in preview_groups]
-        if sizes:
-            click.echo(
-                f"Group size distribution: min={min(sizes)} median={sorted(sizes)[len(sizes) // 2]} "
-                f"max={max(sizes)} singletons={sizes.count(1)}"
-            )
-        click.echo("\nFirst 10 batches:")
-        for i, g in enumerate(preview_groups[:10], 1):
-            tid = g[0].get("thread_id", "")[:12]
-            earliest = g[0].get("date", "")[:10]
-            subj = g[0].get("subject", "")[:50]
-            click.echo(f"  batch {i}: thread={tid} earliest={earliest} n={len(g)} subj={subj!r}")
-        if len(preview_groups) > 10:
-            click.echo(f"  ... and {len(preview_groups) - 10} more batches")
-        click.echo("\nDry run complete.")
+        _preview_dry_run(uncompiled, batch_size)
         return
 
     click.echo(f"Compiling in batches of {batch_size}...")
