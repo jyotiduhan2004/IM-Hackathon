@@ -17,6 +17,28 @@ from langchain_core.tools import tool
 
 from src.utils import extract_body
 
+# Cap on per-message summaries in concise mode. Threads longer than
+# this still have their `message_count` / `latest_date` / `truncated`
+# flag computed correctly — we just stop emitting per-row stubs past
+# `_CONCISE_MESSAGE_CAP` so the payload can't grow unbounded on a
+# 200-message escalation thread. Detailed mode still honours `limit`.
+_CONCISE_MESSAGE_CAP = 20
+
+
+def _cutoff_to_date(cutoff: str | None) -> str | None:
+    """Extract YYYY-MM-DD from a cutoff string for precise note prose.
+
+    The SQL `date::date <= %s::date` compares date-only — if the cutoff
+    is `2026-01-14T08:30:12`, messages dated `2026-01-14` at any time
+    are still visible. Returning the date-only form avoids implying a
+    sub-day cutoff that isn't actually enforced.
+    """
+    if not cutoff:
+        return None
+    # Split on `T` (ISO 8601) or space — take the date prefix regardless.
+    return cutoff.split("T", 1)[0].split(" ", 1)[0]
+
+
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
 
 
@@ -200,39 +222,49 @@ def get_thread_context(
     tool automatically clips results to messages dated at or before the
     batch's latest raw — the agent processes email N of the thread "as a
     writer at that point in time" and should not see future replies.
-    Concise mode reports the applied cutoff via `applied_cutoff_date`
-    and a human-readable `note_on_cutoff`; detailed mode preserves the
-    legacy `cutoff_date` field for backward compatibility. Outside of a
-    compile run (unit tests, ad-hoc queries) no cutoff is applied.
+    The SQL cutoff is date-only (`date::date <= cutoff::date`) so any
+    message dated on the cutoff day at any time is visible. Concise
+    mode reports this via `applied_cutoff_date` (full ISO timestamp,
+    machine-readable) plus `note_on_cutoff` (human prose using the
+    date-only form so the semantics are unambiguous). Detailed mode
+    preserves the legacy `cutoff_date` field for backward compatibility.
+    Outside of a compile run (unit tests, ad-hoc queries) no cutoff
+    is applied.
 
     Args:
         thread_id: Gmail thread identifier.
         limit: Maximum rows to return. Default 50.
         response_format:
-          - "concise" (default, ~120 tokens) — navigable shape
+          - "concise" (default, ~120 tokens for a 2-message thread;
+            scales linearly with thread size). Navigable shape
             `{thread_id, message_count, first_subject, latest_date,
             applied_cutoff_date, note_on_cutoff, truncated,
             messages_summary: [{message_id, raw_path, date, from_addr}, ...]}`.
             `raw_path` is the single most useful field — pass it to
             `read_file` without re-querying. Per-message bodies and
-            compile_state are dropped to stay cheap.
-          - "detailed" (~206+ tokens) — full shape with `messages`
-            array: subject, raw_path, 200-char body preview, and
-            compile_state per message. Use when you need the body
-            preview to pick which message to read next.
+            compile_state are dropped to stay cheap. `messages_summary`
+            is capped at 20 entries regardless of `limit` (which
+            still governs DB fetch size for `message_count` /
+            `latest_date` accuracy).
+          - "detailed" (~206+ tokens for a 2-message thread; also
+            scales linearly) — full shape with `messages` array:
+            subject, raw_path, 200-char body preview, and compile_state
+            per message. Use when you need the body preview to pick
+            which message to read next.
 
     Returns:
         Concise: ``{"thread_id": str, "message_count": int,
         "first_subject": str, "latest_date": str | None,
         "applied_cutoff_date": str | None, "note_on_cutoff": str | None,
         "truncated": bool, "messages_summary": [{"message_id",
-        "raw_path", "date", "from_addr"}, ...]}``. ``note_on_cutoff``
-        is None when no cutoff is applied.
+        "raw_path", "date": str | None, "from_addr"}, ...]}``.
+        ``note_on_cutoff`` is None when no cutoff is applied; `date`
+        is None for rows with no date in the DB.
         Detailed: ``{"thread_id": str, "messages": [{"message_id",
-        "subject", "from_addr", "date", "raw_path", "first_200_chars",
-        "compile_state"}, ...], "truncated": bool, "cutoff_date":
-        str | None}``. Empty list / ``message_count: 0`` when the
-        thread is unknown.
+        "subject", "from_addr", "date": str | None, "raw_path",
+        "first_200_chars", "compile_state"}, ...], "truncated": bool,
+        "cutoff_date": str | None}``. Empty list / ``message_count: 0``
+        when the thread is unknown.
     """
     from src.compile.compiler import _current_batch_cutoff_date
     from src.db import connect
@@ -266,7 +298,7 @@ def get_thread_context(
             # the DB again because the tail slipped past the LIMIT (see
             # v10 followup P1-4 #196). When not truncated the window
             # already contains every row, so we can compute MAX locally
-            # and skip the extra round-trip.
+            # and skip the extra DB query.
             latest_date: str | None = None
             if truncated:
                 max_row = cast(
@@ -290,19 +322,32 @@ def get_thread_context(
                         break
             first_subject = str(rows[0]["subject"] or "") if rows else ""
             # `raw_path` is the field the agent needs next — passing it
-            # to `read_file` avoids a second Postgres round-trip. Body
-            # preview + compile_state stay in detailed only.
+            # to `read_file` avoids a DB lookup to find the raw file.
+            # Body preview + compile_state stay in detailed only. We
+            # cap per-row stubs at `_CONCISE_MESSAGE_CAP` so very long
+            # threads can't balloon the concise payload.
+            capped_rows = rows[:_CONCISE_MESSAGE_CAP]
             messages_summary = [
                 {
                     "message_id": str(row["message_id"] or ""),
                     "raw_path": str(row["raw_path"] or ""),
-                    "date": row["date"].isoformat() if row["date"] else "",
+                    # `None` signals "no date in DB" — callers shouldn't
+                    # need to distinguish `""` from `None`.
+                    "date": row["date"].isoformat() if row["date"] else None,
                     "from_addr": str(row["from_address"] or ""),
                 }
-                for row in rows
+                for row in capped_rows
             ]
+            # `note_on_cutoff` uses the date-only form of the cutoff
+            # because the SQL compares `date::date <= cutoff::date` —
+            # messages dated `2026-01-14` at any time are visible even
+            # when `cutoff` has a sub-day timestamp.
+            cutoff_date = _cutoff_to_date(cutoff)
             note_on_cutoff = (
-                f"Messages after {cutoff} are hidden per chronological scope." if cutoff else None
+                f"Messages dated after {cutoff_date} are hidden per "
+                f"chronological scope; messages on {cutoff_date} at any time remain visible."
+                if cutoff_date
+                else None
             )
             return {
                 "thread_id": thread_id,
@@ -333,7 +378,8 @@ def get_thread_context(
                 "message_id": str(row["message_id"] or ""),
                 "subject": str(row["subject"] or ""),
                 "from_addr": str(row["from_address"] or ""),
-                "date": date_val.isoformat() if date_val else "",
+                # Unified with concise mode: `None` signals missing.
+                "date": date_val.isoformat() if date_val else None,
                 "raw_path": raw_path,
                 "first_200_chars": preview,
                 "compile_state": str(row["compile_state"] or ""),

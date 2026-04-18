@@ -24,6 +24,7 @@ from unittest.mock import patch
 import pytest
 from src.compile.compiler import _current_batch_cutoff_date
 from src.compile.compiler import get_thread_context
+from src.compile.tools.raw_access import _cutoff_to_date
 
 
 class _FakeCursor:
@@ -79,6 +80,25 @@ def _seed_raw(tmp_path: Path, name: str, body: str) -> str:
         encoding="utf-8",
     )
     return str(path)
+
+
+class TestCutoffToDate:
+    """Pure helper behind the corrected `note_on_cutoff` prose."""
+
+    def test_iso_with_time(self) -> None:
+        assert _cutoff_to_date("2026-01-14T08:30:12+00:00") == "2026-01-14"
+
+    def test_iso_with_space(self) -> None:
+        assert _cutoff_to_date("2026-01-14 08:30:12") == "2026-01-14"
+
+    def test_date_only(self) -> None:
+        assert _cutoff_to_date("2026-01-14") == "2026-01-14"
+
+    def test_none_returns_none(self) -> None:
+        assert _cutoff_to_date(None) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _cutoff_to_date("") is None
 
 
 @pytest.fixture(autouse=True)
@@ -237,8 +257,12 @@ def test_get_thread_context_concise_respects_cutoff() -> None:
         _current_batch_cutoff_date.reset(token)
 
     assert result["applied_cutoff_date"] == "2026-01-09T00:00:00+00:00"
+    # `note_on_cutoff` uses the date-only form of the cutoff because the
+    # SQL is `date::date <= cutoff::date` — messages dated on `cutoff`
+    # at any time ARE visible. The prior prose implied otherwise.
     assert result["note_on_cutoff"] == (
-        "Messages after 2026-01-09T00:00:00+00:00 are hidden per chronological scope."
+        "Messages dated after 2026-01-09 are hidden per chronological scope; "
+        "messages on 2026-01-09 at any time remain visible."
     )
     assert "date::date <= %s::date" in (cur.last_sql or "")
 
@@ -322,3 +346,94 @@ def test_concise_latest_date_reflects_thread_max_not_window_tail(tmp_path: Path)
     # `latest_date` reflects the thread's true MAX(date), not the window tail.
     assert result["latest_date"] == "2026-04-20T15:30:00+00:00"
     assert result["message_count"] == 2
+
+
+def test_concise_caps_messages_summary_at_20(tmp_path: Path) -> None:
+    """P2 (#202 followup): `messages_summary` is capped at 20 entries.
+
+    A 50-message thread used to emit 50 per-row stubs in concise mode,
+    defeating the token-budget story. `message_count` + `truncated`
+    still reflect the full DB window so the agent knows there's more.
+    """
+    rows = [
+        {
+            "message_id": f"msg-{i:03d}",
+            "raw_path": _seed_raw(tmp_path, f"m{i}.md", "body"),
+            "subject": "Topic",
+            "from_address": f"user{i}@indiamart.com",
+            "date": datetime(2026, 4, i % 28 + 1, 12, 0, 0, tzinfo=UTC),
+            "compile_state": "pending",
+        }
+        for i in range(1, 51)
+    ]
+    cur = _FakeCursor(rows)
+
+    with patch("src.db.connect", return_value=_FakeConn(cur)):
+        result = get_thread_context.invoke(
+            {"thread_id": "long", "response_format": "concise", "limit": 50}
+        )
+
+    # `message_count` is accurate (DB returned 50 rows, limit matched).
+    assert result["message_count"] == 50
+    # But `messages_summary` tops out at 20 stubs.
+    assert len(result["messages_summary"]) == 20
+
+
+def test_concise_date_is_none_when_missing(tmp_path: Path) -> None:
+    """P2 (#202 followup): unify missing-date to `None` (not `""`)."""
+    rows = [
+        {
+            "message_id": "msg-dateless",
+            "raw_path": _seed_raw(tmp_path, "dateless.md", "body"),
+            "subject": "No date row",
+            "from_address": "nobody@indiamart.com",
+            "date": None,
+            "compile_state": "pending",
+        }
+    ]
+    cur = _FakeCursor(rows)
+
+    with patch("src.db.connect", return_value=_FakeConn(cur)):
+        concise = get_thread_context.invoke({"thread_id": "no-date", "response_format": "concise"})
+        detailed = get_thread_context.invoke(
+            {"thread_id": "no-date", "response_format": "detailed"}
+        )
+
+    assert concise["messages_summary"][0]["date"] is None
+    assert concise["latest_date"] is None
+    assert detailed["messages"][0]["date"] is None
+
+
+def test_detailed_payload_larger_than_concise(tmp_path: Path) -> None:
+    """P2 (#202 followup): restore size-ratio canary.
+
+    Detailed mode adds subject, first_200_chars body preview, and
+    compile_state per message — for any non-trivial thread it should
+    weigh >1.3x concise. Missing this ratio means one of the two
+    modes grew feature-parity with the other, collapsing the point
+    of having two response formats.
+    """
+    import json
+
+    rows = [
+        {
+            "message_id": f"msg-{i:03d}",
+            "raw_path": _seed_raw(tmp_path, f"m{i}.md", "A reasonably full body." * 5),
+            "subject": f"Subject {i} — has meaningful length",
+            "from_address": f"user{i}@indiamart.com",
+            "date": datetime(2026, 4, i + 1, 12, 0, 0, tzinfo=UTC),
+            "compile_state": "pending",
+        }
+        for i in range(5)
+    ]
+    cur = _FakeCursor(rows)
+    with patch("src.db.connect", return_value=_FakeConn(cur)):
+        concise = get_thread_context.invoke({"thread_id": "sized", "response_format": "concise"})
+        detailed = get_thread_context.invoke({"thread_id": "sized", "response_format": "detailed"})
+
+    concise_size = len(json.dumps(concise))
+    detailed_size = len(json.dumps(detailed))
+    assert detailed_size >= 1.3 * concise_size, (
+        f"detailed={detailed_size} should be >= 1.3x concise={concise_size} "
+        "— if the two modes have collapsed in size, concise's savings are gone."
+    )

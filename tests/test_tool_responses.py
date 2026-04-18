@@ -388,7 +388,8 @@ class TestGetThreadContextDualFormat:
             _current_batch_cutoff_date.reset(token)
         assert result["applied_cutoff_date"] == "2026-01-14"
         assert result["note_on_cutoff"] == (
-            "Messages after 2026-01-14 are hidden per chronological scope."
+            "Messages dated after 2026-01-14 are hidden per chronological scope; "
+            "messages on 2026-01-14 at any time remain visible."
         )
 
     def test_detailed_keeps_per_message_bodies(self, tmp_path: Path) -> None:
