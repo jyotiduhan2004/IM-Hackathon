@@ -95,13 +95,14 @@ def test_workflow_prompt_under_budget() -> None:
     sections into one; v11-U7 reframed Required→Suggested H2s and added
     thread-subject anti-pattern call-outs (~200 chars); v12-U1 added
     `<concept_vs_thread>` (~2.5k chars) teaching the concept-vs-thread
-    reframe with a worked good/bad Summary pair. The ceiling is 34000
-    chars — crossing it means a later edit re-introduced duplication or
-    bloat. Raise only on a deliberate feature that genuinely needs more
-    space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 34000, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U1 baseline "
-        "was ~33k. If the growth is deliberate, raise this ceiling; otherwise "
+    reframe with a worked good/bad Summary pair; v12-U2 added
+    `<expert_questions>` (~2.8k chars) teaching the 5W + IndiaMart-
+    flavored expert questions. The ceiling is 36500 chars — crossing
+    it means a later edit re-introduced duplication or bloat. Raise
+    only on a deliberate feature that genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 36500, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U2 baseline "
+        "was ~35.6k. If the growth is deliberate, raise this ceiling; otherwise "
         "it's probably re-introduced duplication."
     )
 
@@ -745,4 +746,44 @@ def test_per_batch_instruction_drops_old_framing() -> None:
     assert "Compile the following" not in _COMPILE_ALL_SRC, (
         "per-batch instruction still uses the pre-v12 `Compile the "
         "following …` opener; the v12-U1 reframe should have replaced it"
+    )
+
+
+def test_expert_questions_section_present() -> None:
+    """v12-U2: the prompt must carry an `<expert_questions>` section
+    teaching the 5W coverage checklist (WHAT / WHY / HOW / WHO / WHEN
+    / WHERE) plus IndiaMart-flavored per-domain add-ons. Without this
+    section the agent summarises evidence but doesn't check whether
+    the page would answer the questions an expert PM or new-joiner
+    asks on first read."""
+    assert "<expert_questions>" in COMPILER_SYSTEM_PROMPT
+    assert "</expert_questions>" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
+    end = COMPILER_SYSTEM_PROMPT.find("</expert_questions>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # 5W framing + each W called out.
+    assert "5W" in block
+    for w in ("WHAT", "WHY", "HOW", "WHO", "WHEN", "WHERE"):
+        assert w in block, f"expert_questions block must name {w}"
+    # Domain-flavor add-ons named so the agent knows the floor is 5W
+    # and the ceiling varies by domain.
+    for domain_flavor in ("Platform-reliability", "Growth / Monetization", "Trust / Safety"):
+        assert domain_flavor in block, (
+            f"expert_questions block must name domain flavor {domain_flavor!r}"
+        )
+
+
+def test_expert_questions_between_concept_and_workflow() -> None:
+    """v12-U2: `<expert_questions>` must load AFTER `<concept_vs_thread>`
+    (so the concept reframe primes the question checklist) and BEFORE
+    `<workflow>` (so the agent has the questions in hand before it
+    walks the per-step ladder). Section order matters for how the
+    model weights guidance."""
+    concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    expert_idx = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
+    workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    assert concept_idx != -1 and expert_idx != -1 and workflow_idx != -1
+    assert concept_idx < expert_idx < workflow_idx, (
+        "<expert_questions> must appear after <concept_vs_thread> and "
+        "before <workflow> so the 5W checklist primes the workflow"
     )
