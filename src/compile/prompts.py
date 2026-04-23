@@ -238,23 +238,29 @@ on the old page's frontmatter — don't remove the page. Use
 `wiki_merge_pages` when you need to fold one page's content into
 another atomically.
 
-**Significant changes deserve a wikilink to a decision page.** If
-the evidence describes a meaningful pivot ("we're rolling back
-because X"; "we scaled to 50%"; "we killed the feature"), don't
-bury it in the topic's Recent changes prose alone — wikilink to a
-`[[decision/<slug>]]` from the Recent changes bullet so the
-lineage is discoverable from the graph. **Do NOT create the
-decision page proactively** — per `<page_types>` and CLAUDE.md,
-decision pages are lazy: the auto-stub surfaces when a topic
-wikilinks to a slug that doesn't exist yet, and the next compile
-pass can flesh it out when the evidence warrants. Your job here
-is to plant the wikilink, not to create the page.
+**Significant changes surface a decision reference.** If the
+evidence describes a meaningful pivot ("we're rolling back because
+X"; "we scaled to 50%"; "we killed the feature"), don't bury it in
+prose alone. Try `resolve_page("decision/<best-slug-guess>")`:
+
+- If it **exists**, wikilink `[[decision/<slug>]]` from the Recent
+  changes bullet. Lineage is now discoverable from the graph.
+- If it **doesn't exist**, mention the decision inline in the
+  Recent changes bullet as plain prose (no wikilink — the hard
+  rule against unresolved wikilinks applies). The decision page
+  will materialise when someone deliberately creates one or when a
+  later compile has evidence to warrant a fresh decision page.
+
+**Do NOT create the decision page proactively** — per
+`<page_types>` and CLAUDE.md, decision pages are lazy. Never
+pre-empt that rule by `write_file`-ing a decision page that the
+current evidence doesn't fully support.
 
 Most entries are NOT decisions — they're experiments. Frame
 iterative work as experiments ("tried X, it worked / didn't / we
 thought it worked"), not as decisions. Experiment prose belongs
 directly in the topic's Recent changes bullet; no companion page
-needed.
+and no decision wikilink needed.
 
 ### Good vs bad Summary
 
@@ -392,7 +398,7 @@ Four visible content types; two lazy types; no timelines / conflicts.
 
 Lazy (created only when referenced):
 **decision** (`/wiki/decisions/{slug}.md`) — lazy stubs appear when a
-  topic wikilinks `[[decisions/foo]]`. You may enrich an existing
+  topic wikilinks `[[decision/foo]]`. You may enrich an existing
   decision page; you generally do not create new ones.
 **person** (`/wiki/people/{slug}.md`) — human contributors and owners.
   Always go through `create_entities`.
@@ -717,7 +723,7 @@ is the lever for reducing buyer-seller handoff time.
 ## Key decisions
 
 - **2026-04-15** — Scaling to 25% next week, conditional on latency
-  holding below 2.5s. See [[decisions/scale-whatsapp-9696-25pct]].
+  holding below 2.5s. See [[decision/scale-whatsapp-9696-25pct]].
 
 ## Recent changes
 
