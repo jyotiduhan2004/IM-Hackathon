@@ -25,10 +25,10 @@ Cost guardrails:
 from __future__ import annotations
 
 import csv
-import json
 import os
 import random
 import sys
+import uuid
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +43,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.compile.judge import JudgeParseError  # noqa: E402
+from src.compile.judge import Severity  # noqa: E402
 from src.compile.judge import build_system_prompt  # noqa: E402
 from src.compile.judge import build_user_prompt  # noqa: E402
 from src.compile.judge import call_judge  # noqa: E402
@@ -50,6 +51,7 @@ from src.compile.judge import estimate_cost  # noqa: E402
 from src.compile.judge import severity_from_score  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
+from src.db.page_feedback import insert_feedback  # noqa: E402
 from src.utils import split_frontmatter  # noqa: E402
 
 logger = structlog.get_logger(__name__)
@@ -127,40 +129,65 @@ def _load_page(wiki_dir: Path, slug: str) -> tuple[str, str] | None:
 
 def _insert_feedback_row(
     *,
+    run_id: uuid.UUID,
     slug: str,
+    page_version: str,
     persona: str,
     parsed: dict[str, Any],
-    severity: str,
+    severity: Severity,
 ) -> bool:
-    """Insert one row into page_feedback. Returns True on success.
+    """Insert one row into page_feedback via the canonical helper.
 
-    Fails open ONLY on ``UndefinedTable`` — V12-U0a ships the schema in a
-    separate PR and we still want the CSV/markdown outputs to be usable
-    pre-schema. Any other ``psycopg.Error`` (auth, connection refused,
-    constraint violation) is a real failure that should surface, not be
-    logged-and-swallowed into silent data loss.
+    Fails open ONLY on ``UndefinedTable`` — schema may not be applied yet
+    in a fresh environment and we still want the CSV/markdown outputs.
+    Any other ``psycopg.Error`` (auth, connection refused, constraint
+    violation) is a real failure that should surface, not be silently
+    logged-and-swallowed into data loss.
     """
     try:
-        with connect() as conn, conn.transaction():
-            conn.execute(
-                """
-                INSERT INTO page_feedback (
-                  slug, source, severity, score, captured_by, raw_json
-                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-                """,
-                (
-                    slug,
-                    f"judge-{persona}",
-                    severity,
-                    parsed["score"],
-                    persona,
-                    json.dumps(parsed),
-                ),
+        with connect() as conn:
+            insert_feedback(
+                conn,
+                run_id=run_id,
+                page_slug=slug,
+                page_version=page_version,
+                source=f"judge-{persona}",
+                score=float(parsed["score"]),
+                finding=_finding_line(persona, parsed),
+                severity=severity,
+                captured_by=persona,
+                raw_json=parsed,
             )
+            conn.commit()
     except psycopg.errors.UndefinedTable:
         logger.warning("page_feedback_table_missing", slug=slug, persona=persona)
         return False
     return True
+
+
+def _finding_line(persona: str, parsed: dict[str, Any]) -> str:
+    """One-line human summary for rollup queries."""
+    score = parsed.get("score", "?")
+    missing = len(parsed.get("missing") or [])
+    doesnt = len(parsed.get("what_doesnt") or [])
+    return f"judge-{persona}={score}/10; what_doesnt={doesnt}, missing={missing}"
+
+
+def _page_version(frontmatter_yaml: str) -> str:
+    """Extract ``last_compiled`` from a frontmatter YAML string.
+
+    The judge's page loader currently returns raw frontmatter YAML text
+    (``split_frontmatter``) rather than a parsed dict, so we line-scan
+    for ``last_compiled:`` instead of pulling in a full YAML parse. Empty
+    string falls back cleanly through ``insert_feedback`` (TEXT NOT NULL,
+    no length constraint).
+    """
+    for line in frontmatter_yaml.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("last_compiled:"):
+            _, _, value = stripped.partition(":")
+            return value.strip().strip("'\"")
+    return ""
 
 
 def _write_csv(out_path: Path, rows: list[dict[str, Any]]) -> None:
@@ -382,6 +409,7 @@ def main(
         sys.exit(3)
 
     # --- Live pass ---
+    run_id = uuid.uuid4()
     rows: list[dict[str, Any]] = []
     rows_written = 0
     skipped_pairs = 0
@@ -390,6 +418,7 @@ def main(
         if loaded is None:
             continue
         fm_yaml, body = loaded
+        page_version = _page_version(fm_yaml)
         user_prompt = build_user_prompt(slug, fm_yaml, body)
         for persona_name in personas:
             system_prompt = build_system_prompt(persona_name)
@@ -404,7 +433,9 @@ def main(
             click.echo(f"{slug} / {persona_name}: score={parsed['score']} severity={severity}")
             if not no_db:
                 ok = _insert_feedback_row(
+                    run_id=run_id,
                     slug=slug,
+                    page_version=page_version,
                     persona=persona_name,
                     parsed=parsed,
                     severity=severity,

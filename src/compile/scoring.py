@@ -97,7 +97,11 @@ _GENERATED_HUB_PARENTS: frozenset[str] = frozenset({"domains"})
 _MSG_REF_RE = re.compile(r"\[\^msg-[a-z0-9\-]+\]")
 _RAW_BULLET_RE = re.compile(r"^\s*-\s+raw/", re.MULTILINE)
 _MIN_BODY_WORDS_FOR_SOURCE_SCORE = 20
-_WORDS_PER_SOURCE_TARGET = 150
+# One source per ~200 body words. v12-U3 will add inline ``[^msg-abc]``
+# footnotes and ``- raw/…`` trailing bullets; both are counted in addition
+# to the frontmatter ``sources:`` list. Today only the frontmatter list is
+# populated across the corpus, and that's the load-bearing signal.
+_WORDS_PER_SOURCE_TARGET = 200
 
 
 def score_concept_shape(body: str) -> tuple[int, dict[str, Any]]:
@@ -138,20 +142,34 @@ def score_summary_currency(body: str) -> tuple[int, dict[str, Any]]:
     }
 
 
-def score_source_density(body: str) -> tuple[int, dict[str, Any]]:
-    """Target 1 citation per 150 words; skip pages too short to evaluate.
+def score_source_density(
+    body: str,
+    frontmatter: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Target 1 citation per 200 body words; skip pages too short to evaluate.
 
-    Counts inline footnote refs (``[^msg-abc123]``) plus trailing bullets
-    that begin ``- raw/``. Bodies under 20 words return score 0 (a stub
-    page shouldn't be rewarded just for being empty).
+    Three source signals combine:
+    - frontmatter ``sources:`` YAML list (load-bearing today — every
+      compiled topic page populates this)
+    - inline footnote refs ``[^msg-abc123]`` in the body (v12-U3 future)
+    - trailing ``- raw/…`` bullets in the body (v12-U3 future)
+
+    Bodies under 20 words return score 0 (a stub page shouldn't be
+    rewarded just for being empty). Missing frontmatter treated as zero
+    sources — callers that have the dict should pass it.
     """
     inline_refs = _MSG_REF_RE.findall(body)
     raw_bullets = _RAW_BULLET_RE.findall(body)
-    sources = len(inline_refs) + len(raw_bullets)
+    frontmatter_sources = frontmatter.get("sources") if frontmatter else None
+    fm_count = len(frontmatter_sources) if isinstance(frontmatter_sources, list) else 0
+    sources = len(inline_refs) + len(raw_bullets) + fm_count
     body_words = len(body.split())
     if body_words < _MIN_BODY_WORDS_FOR_SOURCE_SCORE:
         return 0, {
             "sources": sources,
+            "frontmatter_sources": fm_count,
+            "inline_refs": len(inline_refs),
+            "raw_bullets": len(raw_bullets),
             "body_words": body_words,
             "ratio": 0.0,
         }
@@ -160,6 +178,9 @@ def score_source_density(body: str) -> tuple[int, dict[str, Any]]:
     score = min(10, round(10 * ratio))
     return score, {
         "sources": sources,
+        "frontmatter_sources": fm_count,
+        "inline_refs": len(inline_refs),
+        "raw_bullets": len(raw_bullets),
         "body_words": body_words,
         "ratio": round(ratio, 3),
     }

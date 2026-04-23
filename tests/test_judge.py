@@ -6,6 +6,7 @@ files on disk are read for real (they're part of the repo and small).
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -314,11 +315,11 @@ def test_insert_feedback_row_handles_missing_table(
         def __exit__(self, *a: Any) -> None:
             return None
 
-        def transaction(self) -> _FakeConn:
-            return self
-
         def execute(self, *args: Any, **kwargs: Any) -> None:
             raise psycopg.errors.UndefinedTable("relation page_feedback does not exist")
+
+        def commit(self) -> None:
+            return None
 
     def _fake_connect() -> _FakeConn:
         return _FakeConn()
@@ -326,7 +327,9 @@ def test_insert_feedback_row_handles_missing_table(
     monkeypatch.setattr(mod, "connect", _fake_connect)
 
     ok = mod._insert_feedback_row(
+        run_id=uuid.uuid4(),
         slug="x",
+        page_version="2026-04-23T00:00:00Z",
         persona="newbie",
         parsed={"score": 5, "what_works": [], "what_doesnt": [], "missing": []},
         severity="warning",
@@ -349,11 +352,11 @@ def test_insert_feedback_row_propagates_connection_failure(
         def __exit__(self, *a: Any) -> None:
             return None
 
-        def transaction(self) -> _FakeConn:
-            return self
-
         def execute(self, *args: Any, **kwargs: Any) -> None:
             raise psycopg.OperationalError("connection refused")
+
+        def commit(self) -> None:
+            return None
 
     def _fake_connect() -> _FakeConn:
         return _FakeConn()
@@ -362,7 +365,9 @@ def test_insert_feedback_row_propagates_connection_failure(
 
     with pytest.raises(psycopg.OperationalError):
         mod._insert_feedback_row(
+            run_id=uuid.uuid4(),
             slug="x",
+            page_version="2026-04-23T00:00:00Z",
             persona="newbie",
             parsed={"score": 5, "what_works": [], "what_doesnt": [], "missing": []},
             severity="warning",

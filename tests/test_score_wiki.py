@@ -108,7 +108,7 @@ def test_summary_currency_neutral_paragraph_scores_five() -> None:
 def test_source_density_one_ref_in_short_body_scores_high() -> None:
     body = "word " * 100 + " [^msg-abc123]"
     score, dbg = score_source_density(body)
-    # 101 words, target = 101/150 ≈ 0.67 → sources/target ≈ 1.49 → score 10 (capped).
+    # 101 words, target = 101/200 ≈ 0.5 → sources/target ≈ 2 → score 10 (capped).
     assert score >= 10
     assert dbg["sources"] == 1
 
@@ -132,6 +132,45 @@ def test_source_density_counts_raw_bullets() -> None:
     score, dbg = score_source_density(body)
     assert dbg["sources"] == 2
     assert score > 0
+
+
+def test_source_density_counts_frontmatter_sources() -> None:
+    """``sources:`` list from frontmatter is the load-bearing signal today.
+
+    Compiled topic pages populate ``frontmatter['sources']`` as a list of
+    ``raw/<file>.md`` paths. Those count alongside inline footnotes + raw
+    bullets — for the current corpus they're the only signal that fires.
+    """
+    body = "word " * 300
+    frontmatter = {
+        "sources": [
+            "raw/2026-01-01_foo.md",
+            "raw/2026-01-02_bar.md",
+            "raw/2026-01-03_baz.md",
+        ]
+    }
+    score, dbg = score_source_density(body, frontmatter)
+    assert dbg["frontmatter_sources"] == 3
+    assert dbg["sources"] == 3
+    assert score > 0
+
+
+def test_source_density_frontmatter_none_is_safe() -> None:
+    """Missing frontmatter dict shouldn't explode — caller may still be wiring up."""
+    body = "word " * 300 + " [^msg-abc123]"
+    score, dbg = score_source_density(body, None)
+    assert dbg["frontmatter_sources"] == 0
+    assert dbg["sources"] == 1
+    assert score > 0
+
+
+def test_source_density_non_list_sources_treated_as_zero() -> None:
+    """Frontmatter with malformed ``sources`` (string not list) mustn't crash."""
+    body = "word " * 300
+    frontmatter: dict[str, object] = {"sources": "raw/foo.md"}
+    score, dbg = score_source_density(body, frontmatter)
+    assert dbg["frontmatter_sources"] == 0
+    assert score == 0
 
 
 # --- graph_health ----------------------------------------------------------

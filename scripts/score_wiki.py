@@ -19,7 +19,6 @@ Usage::
 from __future__ import annotations
 
 import csv
-import json
 import sys
 import uuid
 from datetime import UTC
@@ -42,7 +41,9 @@ from src.compile.scoring import score_source_density  # noqa: E402
 from src.compile.scoring import score_summary_currency  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
+from src.db.page_feedback import insert_feedback  # noqa: E402
 from src.utils import extract_body  # noqa: E402
+from src.utils import extract_frontmatter  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
@@ -134,16 +135,19 @@ def main(limit: int | None, pages: str | None, output_dir: Path, no_db: bool) ->
             logger.warning("scorer_page_read_failed", slug=slug, error=str(exc))
             continue
         body = extract_body(content)
+        frontmatter = extract_frontmatter(content)
         cs, cs_dbg = score_concept_shape(body)
         sc, sc_dbg = score_summary_currency(body)
-        sd, sd_dbg = score_source_density(body)
+        sd, sd_dbg = score_source_density(body, frontmatter)
         gh, gh_dbg = score_graph_health(slug, body, wikilink_index, known_slugs)
         scores = [cs, sc, sd, gh]
         total = sum(scores)
         mean = total / len(scores)
+        page_version = _page_version(frontmatter)
         rows.append(
             {
                 "slug": slug,
+                "page_version": page_version,
                 "concept_shape": cs,
                 "summary_currency": sc,
                 "source_density": sd,
@@ -275,40 +279,33 @@ def _format_row_line(r: dict[str, Any]) -> str:
 def _maybe_write_db(rows: list[dict[str, Any]]) -> int:
     """Insert one page_feedback row per (slug, heuristic); 4 rows per page.
 
-    If the table doesn't exist yet (V12-U0a hasn't merged), log a
-    structured warning and return 0 — the CSV + MD outputs are still
-    written, so the scorer is independently shippable.
+    Uses the canonical ``src.db.page_feedback.insert_feedback`` helper so
+    schema drift caught in the 2026-04-23 smoke (scorer had hand-rolled
+    SQL with wrong column names ``slug`` / ``heuristic`` / ``created_at``)
+    can't happen again. If the table doesn't exist yet, log a warning
+    and fall back to CSV/MD only.
     """
-    run_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
+    run_id = uuid.uuid4()
     heuristics = ("concept_shape", "summary_currency", "source_density", "graph_health")
     inserted = 0
     try:
         with connect() as conn:
-            with conn.cursor() as cur:
-                for row in rows:
-                    for h in heuristics:
-                        raw_json = {"heuristic": h, **row["_debug"][h]}
-                        cur.execute(
-                            """
-                            INSERT INTO page_feedback
-                                (run_id, slug, heuristic, score, source,
-                                 severity, captured_by, raw_json, created_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                run_id,
-                                row["slug"],
-                                h,
-                                row[h],
-                                "scorer",
-                                "info",
-                                "heuristic",
-                                json.dumps(raw_json),
-                                now,
-                            ),
-                        )
-                        inserted += 1
+            for row in rows:
+                for h in heuristics:
+                    debug = row["_debug"][h]
+                    insert_feedback(
+                        conn,
+                        run_id=run_id,
+                        page_slug=row["slug"],
+                        page_version=row["page_version"],
+                        source="scorer",
+                        score=float(row[h]),
+                        finding=_finding_line(h, row[h], debug),
+                        severity="info",
+                        captured_by="heuristic",
+                        raw_json={"heuristic": h, **debug},
+                    )
+                    inserted += 1
             conn.commit()
     except psycopg.errors.UndefinedTable:
         logger.warning(
@@ -316,10 +313,46 @@ def _maybe_write_db(rows: list[dict[str, Any]]) -> int:
             reason="page_feedback table does not exist yet",
         )
         return 0
-    except psycopg.Error as exc:
-        logger.warning("scorer_db_insert_failed", error=str(exc))
-        return 0
     return inserted
+
+
+def _page_version(frontmatter: dict[str, Any]) -> str:
+    """Snapshot the page's ``last_compiled`` as the feedback page_version.
+
+    Stored (not derived) so feedback rows stay meaningful even after the
+    page gets recompiled. Falls back to an empty string if frontmatter
+    hasn't been stamped yet — ``insert_feedback`` accepts any non-null
+    text for this column.
+    """
+    raw = frontmatter.get("last_compiled") if frontmatter else None
+    if isinstance(raw, datetime):
+        return raw.isoformat()
+    if isinstance(raw, str):
+        return raw
+    return ""
+
+
+def _finding_line(heuristic: str, score: int, debug: dict[str, Any]) -> str:
+    """One-line human summary per heuristic — shown in rollup queries."""
+    if heuristic == "concept_shape":
+        bad = debug.get("bad_matches") or []
+        return f"concept_shape={score}/10; bad H2s: {bad}" if bad else f"concept_shape={score}/10"
+    if heuristic == "summary_currency":
+        return (
+            f"summary_currency={score}/10; good={debug.get('good_count', 0)} "
+            f"bad={debug.get('bad_count', 0)}"
+        )
+    if heuristic == "source_density":
+        return (
+            f"source_density={score}/10; sources={debug.get('sources', 0)} "
+            f"body_words={debug.get('body_words', 0)}"
+        )
+    if heuristic == "graph_health":
+        return (
+            f"graph_health={score}/10; incoming={debug.get('incoming', 0)} "
+            f"broken={debug.get('broken_outgoing', 0)}"
+        )
+    return f"{heuristic}={score}/10"
 
 
 if __name__ == "__main__":
