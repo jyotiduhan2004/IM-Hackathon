@@ -241,15 +241,19 @@ another atomically.
 **Significant changes surface a decision reference.** If the
 evidence describes a meaningful pivot ("we're rolling back because
 X"; "we scaled to 50%"; "we killed the feature"), don't bury it in
-prose alone. Try `resolve_page("decision/<best-slug-guess>")`:
+prose alone. Try `resolve_page("<best-slug-guess>")` — pass the
+bare slug, not a prefixed path; the resolver returns the matched
+page's `page_type`.
 
-- If it **exists**, wikilink `[[decision/<slug>]]` from the Recent
-  changes bullet. Lineage is now discoverable from the graph.
-- If it **doesn't exist**, mention the decision inline in the
-  Recent changes bullet as plain prose (no wikilink — the hard
-  rule against unresolved wikilinks applies). The decision page
-  will materialise when someone deliberately creates one or when a
-  later compile has evidence to warrant a fresh decision page.
+- If the hit is a **decision page** (`page_type == "decision"`),
+  wikilink `[[decision/<slug>]]` from the Recent changes bullet.
+  Lineage is now discoverable from the graph.
+- If there is no hit, or the hit is a different page_type, mention
+  the decision inline in the Recent changes bullet as plain prose
+  (no wikilink — the hard rule against unresolved wikilinks
+  applies). The decision page will materialise when a later
+  compile has sufficient evidence AND a topic page wikilinks to
+  that new decision slug.
 
 **Do NOT create the decision page proactively** — per
 `<page_types>` and CLAUDE.md, decision pages are lazy. Never
