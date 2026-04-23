@@ -108,14 +108,16 @@ def test_workflow_prompt_under_budget() -> None:
     (~2k chars) teaching inline `[^msg-*]` footnote syntax + the
     `## References` footnote block; v12-U4 added `<revision_style>`
     (~2.8k chars) teaching the current-truth Summary + collapsible
-    archive revision style. The ceiling is 41500 chars — crossing
+    archive revision style; the v12-U4 Codex-#219 follow-up added
+    ~400 chars rewording the decision-page guidance to match the
+    lazy-creation contract. The ceiling is 42000 chars — crossing
     it means a later edit re-introduced duplication or bloat. Raise
     only on a deliberate feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 41500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U4 baseline "
-        "was ~41.1k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). If the growth "
-        "is deliberate, raise this ceiling; otherwise it's probably "
-        "re-introduced duplication."
+    assert len(COMPILER_SYSTEM_PROMPT) < 42000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U4-followup "
+        "baseline was ~41.5k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). "
+        "If the growth is deliberate, raise this ceiling; otherwise it's "
+        "probably re-introduced duplication."
     )
 
 
@@ -928,21 +930,40 @@ def test_revision_style_bans_strikethrough_literally() -> None:
     assert "collapsible" in block.lower()
 
 
-def test_revision_style_teaches_decision_page_minting() -> None:
-    """v12-U4: significant pivots ("we rolled back", "scaled to 50%",
-    "killed the feature") must mint a companion decision page so the
-    lineage is discoverable outside the topic's Recent changes bullet.
-    The prompt must name both the trigger (meaningful pivot) and the
-    mechanic (companion page under wiki/decisions/ wikilinked from the
-    Recent changes bullet)."""
+def test_revision_style_teaches_lazy_decision_wikilink() -> None:
+    """v12-U4 (post-Codex #219 fix): significant pivots ("we rolled
+    back", "scaled to 50%", "killed the feature") must surface via a
+    `[[decision/<slug>]]` wikilink from the topic's Recent changes
+    bullet so the lineage is discoverable from the graph. The prompt
+    must NAME the trigger (meaningful pivot) AND the mechanic (plant a
+    wikilink, don't create the page) AND explicitly warn against
+    proactive decision-page creation — which would contradict
+    CLAUDE.md's lazy-decision-page rule and `<page_types>`'s own
+    "decision pages are lazy" clause.
+
+    Codex caught this contradiction on PR #219 (merged); this test
+    is the regression guard."""
     start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
     end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
     block = COMPILER_SYSTEM_PROMPT[start:end]
-    # Trigger vocabulary — "meaningful pivot" / "significant change".
     lowered = block.lower()
+    # Trigger vocabulary — "meaningful pivot" / "significant change".
     assert "significant" in lowered or "meaningful" in lowered
-    # Mechanic — companion page under wiki/decisions/.
-    assert "wiki/decisions/" in block
+    # Mechanic — wikilink to decision/<slug>, NOT create the page.
+    assert "[[decision/" in block, (
+        "revision_style must teach the `[[decision/<slug>]]` wikilink "
+        "as the mechanic — that's how decision pages materialize per "
+        "the lazy-auto-stub rule"
+    )
+    # Explicit contradiction-guard: the block must warn against
+    # proactive creation so the agent never conflicts with
+    # CLAUDE.md's lazy-decision rule.
+    normalised = " ".join(block.split()).lower()
+    assert "do not create the decision page proactively" in normalised, (
+        "revision_style must explicitly warn against proactively "
+        "creating decision pages — otherwise it contradicts "
+        "CLAUDE.md's 'decision pages are lazy' rule"
+    )
     # Wikilink from the topic's Recent changes bullet — the agent
     # must know the link-from location.
     assert "wikilink" in lowered

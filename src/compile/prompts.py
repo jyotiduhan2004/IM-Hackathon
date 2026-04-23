@@ -238,14 +238,23 @@ on the old page's frontmatter — don't remove the page. Use
 `wiki_merge_pages` when you need to fold one page's content into
 another atomically.
 
-**Significant changes mint a decision or experiment page.** If the
-evidence describes a meaningful pivot ("we're rolling back because
-X"; "we scaled to 50%"; "we killed the feature"), don't bury it in
-the topic's Recent changes alone. Create a companion page under
-`wiki/decisions/` and wikilink it from the topic's Recent changes
-bullet. Most entries are NOT decisions — they're experiments.
-Frame iterative work as experiments ("tried X, it worked / didn't
-/ we thought it worked"), not as decisions.
+**Significant changes deserve a wikilink to a decision page.** If
+the evidence describes a meaningful pivot ("we're rolling back
+because X"; "we scaled to 50%"; "we killed the feature"), don't
+bury it in the topic's Recent changes prose alone — wikilink to a
+`[[decision/<slug>]]` from the Recent changes bullet so the
+lineage is discoverable from the graph. **Do NOT create the
+decision page proactively** — per `<page_types>` and CLAUDE.md,
+decision pages are lazy: the auto-stub surfaces when a topic
+wikilinks to a slug that doesn't exist yet, and the next compile
+pass can flesh it out when the evidence warrants. Your job here
+is to plant the wikilink, not to create the page.
+
+Most entries are NOT decisions — they're experiments. Frame
+iterative work as experiments ("tried X, it worked / didn't / we
+thought it worked"), not as decisions. Experiment prose belongs
+directly in the topic's Recent changes bullet; no companion page
+needed.
 
 ### Good vs bad Summary
 
