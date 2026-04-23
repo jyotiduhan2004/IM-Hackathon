@@ -20,12 +20,14 @@ from src.compile.scoring import build_wikilink_incoming_index  # noqa: E402
 from src.compile.scoring import score_concept_shape  # noqa: E402
 from src.compile.scoring import score_graph_health  # noqa: E402
 from src.compile.scoring import score_source_density  # noqa: E402
+from src.compile.scoring import score_structural_smells  # noqa: E402
 from src.compile.scoring import score_summary_currency  # noqa: E402
 
 # --- concept_shape ---------------------------------------------------------
 
 
-def test_concept_shape_three_thread_subject_h2s_scores_4() -> None:
+def test_concept_shape_three_thread_subject_h2s_scores_7() -> None:
+    """3 bad H2s x -1 = 7 under the 2026-04-23 softened weight (was 4 under -2)."""
     body = (
         "Summary paragraph.\n\n"
         "## Bug Report\n\nX.\n\n"
@@ -33,9 +35,17 @@ def test_concept_shape_three_thread_subject_h2s_scores_4() -> None:
         "## Launch Announcement\n\nZ.\n\n"
     )
     score, dbg = score_concept_shape(body)
-    assert score == 4
+    assert score == 7
     assert dbg["count_bad"] == 3
     assert set(dbg["bad_matches"]) == {"Bug Report", "Final Decision", "Launch Announcement"}
+
+
+def test_concept_shape_two_bad_h2s_scores_8() -> None:
+    """Regression for the -1 weight: 2 bad H2s → 8, not 6 (old -2 weight)."""
+    body = "## Bug Report\n\nx.\n\n## Final Decision\n\ny.\n"
+    score, dbg = score_concept_shape(body)
+    assert score == 8
+    assert dbg["count_bad"] == 2
 
 
 def test_concept_shape_only_good_h2s_scores_10() -> None:
@@ -47,6 +57,7 @@ def test_concept_shape_only_good_h2s_scores_10() -> None:
 
 
 def test_concept_shape_clamps_at_zero() -> None:
+    """Under -1 weight, clamping needs ≥ 10 bad H2s. We use all 12 titles."""
     body = "\n\n".join(
         f"## {h}\n\nx."
         for h in [
@@ -56,9 +67,16 @@ def test_concept_shape_clamps_at_zero() -> None:
             "Testing Results",
             "QA Results",
             "Release Notes",
+            "Business Objective",
+            "Announcement",
+            "Issue",
+            "Thread Summary",
+            "Email Summary",
+            "Discussion",
         ]
     )
-    score, _ = score_concept_shape(body)
+    score, dbg = score_concept_shape(body)
+    assert dbg["count_bad"] == 12
     assert score == 0
 
 
@@ -183,33 +201,146 @@ def test_graph_health_five_incoming_no_broken_scores_ten() -> None:
         wikilink_index={"foo": 5},
         known_slugs={"foo", "bar", "baz"},
     )
+    # 5 + 5 - 0 = 10 — saturates the clamp under the 2026-04-23 formula.
     assert score == 10
     assert dbg["incoming"] == 5
     assert dbg["broken_outgoing"] == 0
 
 
-def test_graph_health_two_incoming_two_broken_clamps_to_zero() -> None:
-    score, dbg = score_graph_health(
-        slug="foo",
-        body="## Related\n\n- [[missing-1]]\n- [[topic/missing-2]]\n",
-        wikilink_index={"foo": 2},
-        known_slugs={"foo"},
-    )
-    # 2*2 - 3*2 = -2 → clamped to 0.
-    assert score == 0
-    assert dbg["broken_outgoing"] == 2
-
-
-def test_graph_health_isolated_page_scores_zero() -> None:
+def test_graph_health_zero_incoming_zero_broken_scores_five() -> None:
+    """An isolated but clean page earns the neutral baseline (was 0 under old formula)."""
     score, dbg = score_graph_health(
         slug="lonely",
         body="No outgoing links.\n",
         wikilink_index={},
         known_slugs={"lonely"},
     )
-    assert score == 0
+    assert score == 5
     assert dbg["incoming"] == 0
     assert dbg["outgoing_count"] == 0
+
+
+def test_graph_health_three_incoming_one_broken_scores_five() -> None:
+    """5 + 3 - 3 = 5 — incoming gains are tempered by broken outgoing links."""
+    score, dbg = score_graph_health(
+        slug="foo",
+        body="## Related\n\n- [[missing-1]]\n- [[topic/bar]]\n",
+        wikilink_index={"foo": 3},
+        known_slugs={"foo", "bar"},
+    )
+    assert score == 5
+    assert dbg["incoming"] == 3
+    assert dbg["broken_outgoing"] == 1
+
+
+def test_graph_health_zero_incoming_two_broken_clamps_to_zero() -> None:
+    """5 + 0 - 6 = -1 → clamped to 0 — broken outbound links still punch through the baseline."""
+    score, dbg = score_graph_health(
+        slug="foo",
+        body="## Related\n\n- [[missing-1]]\n- [[topic/missing-2]]\n",
+        wikilink_index={},
+        known_slugs={"foo"},
+    )
+    assert score == 0
+    assert dbg["incoming"] == 0
+    assert dbg["broken_outgoing"] == 2
+
+
+def test_graph_health_two_incoming_two_broken_scores_one() -> None:
+    """5 + 2 - 6 = 1 — no longer the clamp-to-zero case it was under the old formula."""
+    score, dbg = score_graph_health(
+        slug="foo",
+        body="## Related\n\n- [[missing-1]]\n- [[topic/missing-2]]\n",
+        wikilink_index={"foo": 2},
+        known_slugs={"foo"},
+    )
+    assert score == 1
+    assert dbg["broken_outgoing"] == 2
+
+
+# --- structural_smells -----------------------------------------------------
+
+
+def test_structural_smells_clean_page_scores_ten() -> None:
+    """No duplicates, empties, email-slugs, or FM+body ``Related`` overlap → 10/10."""
+    body = (
+        "Summary paragraph describing the current state.\n\n"
+        "## Current state\n\nWords.\n\n"
+        "## How it works\n\nMore words here too.\n"
+    )
+    score, dbg = score_structural_smells(body, frontmatter=None)
+    assert score == 10
+    assert dbg["duplicate_h2"] == []
+    assert dbg["empty_h2_sections"] == []
+    assert dbg["email_slug_hits"] == 0
+    assert dbg["has_fm_and_body_related"] is False
+
+
+def test_structural_smells_duplicate_related_scores_seven() -> None:
+    """Two ``## Related`` sections → -3 per allowlisted duplicated title."""
+    body = (
+        "Intro.\n\n## Related\n\n- [[alpha]]\n\n## Middle\n\nStuff.\n\n## Related\n\n- [[beta]]\n"
+    )
+    score, dbg = score_structural_smells(body, frontmatter=None)
+    assert score == 7
+    assert dbg["duplicate_h2"] == ["Related"]
+
+
+def test_structural_smells_compound_penalty_scores_three() -> None:
+    """Two ``## Related`` + one empty section + 6 email-slug wikilinks.
+
+    Penalty breakdown: 1 duplicated allowlisted H2 (-3) + 1 empty H2 (-2)
+    + 6 email-slug hits (-2 at ``6//3``). 10 - 7 = 3.
+    """
+    body = (
+        "Intro mentions "
+        "[[aa-indiamart-com]] and [[neeraj-gmail-com]] and [[other-amazon-com]] "
+        "and [[bob-indiamart-com]] and [[ceo-gmail-com]] and [[ops-amazon-com]].\n\n"
+        "## Related\n\n- [[alpha]]\n\n"
+        "## Empty Section\n"
+        "## Non-empty\n\nStuff.\n\n"
+        "## Related\n\n- [[beta]]\n"
+    )
+    score, dbg = score_structural_smells(body, frontmatter=None)
+    assert dbg["duplicate_h2"] == ["Related"]
+    assert dbg["empty_h2_sections"] == ["Empty Section"]
+    assert dbg["email_slug_hits"] == 6
+    assert score == 3
+
+
+def test_structural_smells_fm_body_related_duplication_scores_eight() -> None:
+    """Frontmatter ``related:`` list + body ``## Related`` H2 → -2 flat."""
+    body = "Intro paragraph.\n\n## Current state\n\nx.\n\n## Related\n\n- [[alpha]]\n- [[beta]]\n"
+    frontmatter = {"related": ["[[alpha]]", "[[beta]]"]}
+    score, dbg = score_structural_smells(body, frontmatter)
+    assert score == 8
+    assert dbg["has_fm_and_body_related"] is True
+    # No allowlisted duplicate fires — only one ``## Related`` in the body.
+    assert dbg["duplicate_h2"] == []
+
+
+def test_structural_smells_empty_fm_related_does_not_trigger() -> None:
+    """Empty / missing ``related:`` means rule 4 shouldn't fire even with ``## Related``."""
+    body = "## Current state\n\nx.\n\n## Related\n\n- [[alpha]]\n"
+    score, dbg = score_structural_smells(body, frontmatter={"related": []})
+    assert score == 10
+    assert dbg["has_fm_and_body_related"] is False
+
+
+def test_structural_smells_email_slug_penalty_caps_at_four() -> None:
+    """15 email-slug hits → 15 // 3 = 5 → cap at -4 (score 6, not 5)."""
+    slugs = " ".join(f"[[user{i}-indiamart-com]]" for i in range(15))
+    body = f"Intro paragraph mentions {slugs}.\n\n## Current state\n\nx.\n"
+    score, dbg = score_structural_smells(body, frontmatter=None)
+    assert dbg["email_slug_hits"] == 15
+    assert score == 6  # 10 - 4 (capped)
+
+
+def test_structural_smells_email_slug_case_insensitive() -> None:
+    """Title-case variants still trigger — pattern matches with ``re.IGNORECASE``."""
+    body = "Intro [[AA-Indiamart-Com]] and [[Neeraj-Gmail-Com]] and [[X-Amazon-Com]].\n"
+    _, dbg = score_structural_smells(body, frontmatter=None)
+    assert dbg["email_slug_hits"] == 3
 
 
 # --- build_wikilink_incoming_index -----------------------------------------
@@ -268,8 +399,9 @@ def test_csv_column_order(tmp_path: Path) -> None:
             "summary_currency": 7,
             "source_density": 6,
             "graph_health": 5,
-            "mean": 6.5,
-            "sum": 26,
+            "structural_smells": 9,
+            "mean": 7.0,
+            "sum": 35,
             "_debug": {},
         }
     ]
@@ -279,6 +411,7 @@ def test_csv_column_order(tmp_path: Path) -> None:
         reader = csv.reader(fh)
         header = next(reader)
     assert tuple(header) == CSV_COLUMNS
+    assert "structural_smells" in header
 
 
 # --- GOOD_TOKENS false-positive regression (F1) ----------------------------
@@ -317,7 +450,8 @@ def test_concept_shape_case_insensitive_match() -> None:
     body = "## testing results\n\nX.\n\n## BUG REPORT\n\nY.\n"
     score, dbg = score_concept_shape(body)
     assert dbg["count_bad"] == 2
-    assert score == 6
+    # 2 bad H2s x -1 = 8 under the softened 2026-04-23 weight.
+    assert score == 8
 
 
 # --- _select_topic_paths hub filter (F2) -----------------------------------

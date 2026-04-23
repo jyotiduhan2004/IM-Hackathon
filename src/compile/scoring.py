@@ -1,11 +1,21 @@
 """Heuristic scorers for wiki topic pages — pure functions, no IO.
 
-Four cheap, deterministic signals that rank the 300+ topic corpus without
+Five cheap, deterministic signals that rank the 300+ topic corpus without
 calling an LLM: concept shape (are the H2s thread-subject leakage?),
 summary currency (does the lead paragraph describe the present?), source
-density (enough inline citations per 150 words?), and graph health (how
-well connected is the page?). Each returns a 0-10 integer plus a debug
-dict the caller can dump to CSV / DB.
+density (enough inline citations per 150 words?), graph health (how well
+connected is the page?), and structural smells (duplicate H2s, empty
+sections, email-slug wikilinks, frontmatter+body `Related` duplication).
+Each returns a 0-10 integer plus a debug dict the caller can dump to CSV
+/ DB.
+
+``structural_smells`` was added 2026-04-23 after a paired smoke on 13
+pages showed scorer and LLM judge were near-inversely correlated: the
+top-ranked page (9.0) got 4/3/4 from newbie/pm/ia while the bottom
+(2.75) got 7/7/7. The four smells it catches (duplicate H2 allowlist,
+empty sections, email-slug wikilinks, FM+body `Related` duplication) are
+exactly the structural-corruption patterns the first four heuristics
+miss behind otherwise good surface signals.
 
 The scorer CLI in ``scripts/score_wiki.py`` is the only intended caller
 in app code; tests exercise these functions with synthetic strings.
@@ -14,6 +24,7 @@ in app code; tests exercise these functions with synthetic strings.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +39,10 @@ _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 # H2 section titles that look like they were copy-pasted from the thread
 # subject instead of synthesized into a concept page. Every hit here loses
-# 2 points from ``concept_shape``; the list is intentionally narrow so
-# well-written pages sail through at 10/10.
+# 1 point from ``concept_shape``; the list is intentionally narrow so
+# well-written pages sail through at 10/10. Penalty softened from -2 to -1
+# on 2026-04-23 — see ``score_concept_shape`` docstring for the smoke
+# finding that motivated it.
 #
 # Matching is case-insensitive at lookup time — ``_THREAD_SUBJECT_H2_LOWER``
 # is built once from this canonical title-case list so ``## testing
@@ -103,19 +116,60 @@ _MIN_BODY_WORDS_FOR_SOURCE_SCORE = 20
 # populated across the corpus, and that's the load-bearing signal.
 _WORDS_PER_SOURCE_TARGET = 200
 
+# H2 titles that are legitimately one-per-page — a page with two of these
+# almost always means the compiler stapled two batch updates end-to-end
+# instead of merging them. Kept tight on purpose: a generic title like
+# "Design" might appear twice for good reason ("Design — phase 1", "Design
+# — phase 2"), so it's NOT in the list. Every title here is something the
+# compiler prompt tells the agent to produce exactly once.
+PENALIZED_DUPLICATE_H2: frozenset[str] = frozenset(
+    {
+        "Related",
+        "Testing Bugs",
+        "Impact Tracking",
+        "Bug Details",
+        "Follow-up",
+        "Recent Changes",
+        "Current State",
+        "Overview",
+    }
+)
+
+# Email-address-shaped wikilinks that leaked from the entity layer into a
+# topic page body — ``[[aa-indiamart-com]]``, ``[[neeraj-gmail-com]]``.
+# These are reference-only people slugs that shouldn't show up in the
+# prose of a concept page; when they do, the page is describing a thread
+# conversation instead of the concept. Case-insensitive so Title-Case
+# display variants still trigger.
+_EMAIL_SLUG_WIKILINK_RE = re.compile(
+    r"\[\[[a-z0-9]+(?:-[a-z0-9]+)*-(?:indiamart-com|gmail-com|amazon-com)\]\]",
+    re.IGNORECASE,
+)
+# Soft cap on the email-slug penalty: a page stuffed with 50 such links
+# shouldn't zero out the whole heuristic in one shot. -4 is the worst a
+# single smell can do; other smells stack on top inside
+# ``score_structural_smells``.
+_EMAIL_SLUG_PENALTY_CAP = 4
+
 
 def score_concept_shape(body: str) -> tuple[int, dict[str, Any]]:
     """Penalize narrative / thread-subject H2s.
 
     Example: a page with ``## Bug Report`` + ``## Final Decision`` scores
-    ``10 - 2*2 = 6``. A page with only concept-shaped H2s (``## Current
+    ``10 - 1*2 = 8``. A page with only concept-shaped H2s (``## Current
     state``, ``## How it works``) scores 10. Case-insensitive match — ``##
     testing results`` triggers the penalty too.
+
+    Penalty softened from ``-2`` to ``-1`` per hit on 2026-04-23: the
+    13-page paired smoke showed the LLM judge didn't consistently dock
+    pages for bad H2 names when the underlying content was fine; the old
+    weight over-penalized cosmetic issues that ``structural_smells`` now
+    catches more precisely (duplicate H2s, empty sections).
     """
     h2_titles = [m.group(1).strip() for m in _H2_RE.finditer(body)]
     bad_matches = [h for h in h2_titles if h.lower() in _THREAD_SUBJECT_H2_LOWER]
     count_bad = len(bad_matches)
-    score = max(0, 10 - 2 * count_bad)
+    score = max(0, 10 - count_bad)
     return score, {
         "h2_titles": h2_titles,
         "bad_matches": bad_matches,
@@ -194,6 +248,14 @@ def score_graph_health(
 ) -> tuple[int, dict[str, Any]]:
     """Reward incoming wikilinks; heavily penalize broken outgoing ones.
 
+    Formula: ``max(0, min(10, 5 + incoming - 3 * broken_outgoing))``.
+    A clean, isolated page starts at 5 (neutral) — the old ``2*incoming
+    - 3*broken`` formula auto-zeroed every page with zero incoming links,
+    which on the 2026-04-23 paired smoke dragged otherwise-clean pages
+    down to a 2.75 mean while a structurally corrupt page with 10 incoming
+    links sat at 9.0. Broken outgoing links still hurt hard (-3 each) —
+    they're an unambiguous quality signal.
+
     ``wikilink_index`` is a corpus-scan result (slug → incoming count)
     produced once by ``build_wikilink_incoming_index``. ``known_slugs``
     is the universe of existing page slugs. Self-links are excluded by
@@ -205,12 +267,90 @@ def score_graph_health(
     ]
     outgoing_slugs = [s for s in outgoing_slugs if s]
     broken_outgoing = sum(1 for s in outgoing_slugs if s not in known_slugs)
-    score = max(0, min(10, 2 * incoming - 3 * broken_outgoing))
+    score = max(0, min(10, 5 + incoming - 3 * broken_outgoing))
     return score, {
         "incoming": incoming,
         "outgoing_count": len(outgoing_slugs),
         "broken_outgoing": broken_outgoing,
     }
+
+
+def score_structural_smells(
+    body: str,
+    frontmatter: dict[str, Any] | None,
+) -> tuple[int, dict[str, Any]]:
+    """Penalize structural corruption the other four heuristics miss.
+
+    Four smells, subtractive from a starting score of 10:
+
+    1. **Duplicate allowlisted H2s** (-3 per duplicated title). Titles in
+       ``PENALIZED_DUPLICATE_H2`` that appear ≥ 2 times are almost always
+       two batch updates stapled together instead of merged. The allowlist
+       is tight to avoid false positives on legitimately-repeated generic
+       titles like ``## Design``.
+    2. **Empty H2 sections** (-2 each). An ``##`` heading followed
+       immediately by another ``##`` (or EOF) with no non-whitespace body
+       is a placeholder the compiler never filled in.
+    3. **Email-slug wikilinks** (-1 per 3 matches, cap -4). Targets like
+       ``[[aa-indiamart-com]]`` are reference-only entity slugs leaking
+       into topic prose — a signal the page is describing a thread
+       conversation instead of the concept.
+    4. **Frontmatter + body ``Related`` duplication** (-2, flat). If
+       frontmatter has a non-empty ``related:`` YAML list AND the body
+       also carries a ``## Related`` H2, the page is maintaining two
+       inconsistent related-sets for the same slot.
+
+    Added 2026-04-23 after a 13-page paired smoke showed the top-scored
+    page (9.0) got 4/3/4 from the LLM judge personas. The judge was
+    flagging duplicate H2s, empty sections, and email-slug wikilinks —
+    exactly the patterns the other four heuristics hide behind good
+    surface signals. See ``docs/feedback/scorer-2026-04-23.csv`` +
+    ``docs/feedback/judge-2026-04-23.csv``.
+
+    Final score clamped to ``[0, 10]``.
+    """
+    h2_matches = list(_H2_RE.finditer(body))
+    title_counts = Counter(m.group(1).strip() for m in h2_matches)
+    duplicate_h2 = [t for t, n in title_counts.items() if n >= 2 and t in PENALIZED_DUPLICATE_H2]
+    duplicate_penalty = 3 * len(duplicate_h2)
+
+    empty_sections = _empty_h2_sections(body, h2_matches)
+    empty_penalty = 2 * len(empty_sections)
+
+    email_slug_hits = len(_EMAIL_SLUG_WIKILINK_RE.findall(body))
+    # ``email_slug_hits // 3`` matches the task spec: 3-5 hits → 1, 6-8 →
+    # 2, 9-11 → 3, 12+ → 4 (cap). Cleaner than a branch ladder.
+    email_slug_penalty = min(_EMAIL_SLUG_PENALTY_CAP, email_slug_hits // 3)
+
+    fm_related = frontmatter.get("related") if frontmatter else None
+    has_fm_related = isinstance(fm_related, list) and len(fm_related) > 0
+    has_fm_and_body_related = has_fm_related and "Related" in title_counts
+    related_dup_penalty = 2 if has_fm_and_body_related else 0
+
+    raw_score = 10 - duplicate_penalty - empty_penalty - email_slug_penalty - related_dup_penalty
+    score = max(0, min(10, raw_score))
+    return score, {
+        "duplicate_h2": duplicate_h2,
+        "empty_h2_sections": empty_sections,
+        "email_slug_hits": email_slug_hits,
+        "has_fm_and_body_related": has_fm_and_body_related,
+    }
+
+
+def _empty_h2_sections(body: str, h2_matches: list[re.Match[str]]) -> list[str]:
+    """Titles of H2 sections with no non-whitespace content before the next H2 / EOF.
+
+    Reuses the caller's pre-computed ``_H2_RE.finditer`` results — every
+    call site in this module already walks the H2 matches, so taking them
+    as a parameter avoids a second full scan of the body string.
+    """
+    empty: list[str] = []
+    for i, match in enumerate(h2_matches):
+        section_start = match.end()
+        section_end = h2_matches[i + 1].start() if i + 1 < len(h2_matches) else len(body)
+        if not body[section_start:section_end].strip():
+            empty.append(match.group(1).strip())
+    return empty
 
 
 def build_wikilink_incoming_index(wiki_dir: Path) -> tuple[dict[str, int], set[str]]:

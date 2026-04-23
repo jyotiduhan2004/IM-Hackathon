@@ -1,10 +1,10 @@
-"""Rank wiki topic pages by 4 cheap heuristics — the human shortlist.
+"""Rank wiki topic pages by 5 cheap heuristics — the human shortlist.
 
 Ships as V12-U0b. With 300+ topic pages, random spot-checks miss the
 pages that most need rewriting. This scorer runs concept-shape,
-summary-currency, source-density, and graph-health over every topic
-page and writes a CSV + a top-10 / bottom-10 markdown digest under
-``docs/feedback/scorer-<YYYY-MM-DD>.{csv,md}``.
+summary-currency, source-density, graph-health, and structural-smells
+over every topic page and writes a CSV + a top-10 / bottom-10 markdown
+digest under ``docs/feedback/scorer-<YYYY-MM-DD>.{csv,md}``.
 
 Deterministic, free, repeatable. No LLM calls. Full design in
 ``docs/audits/v12-north-star-2026-04-19.md``.
@@ -38,6 +38,7 @@ from src.compile.scoring import build_wikilink_incoming_index  # noqa: E402
 from src.compile.scoring import score_concept_shape  # noqa: E402
 from src.compile.scoring import score_graph_health  # noqa: E402
 from src.compile.scoring import score_source_density  # noqa: E402
+from src.compile.scoring import score_structural_smells  # noqa: E402
 from src.compile.scoring import score_summary_currency  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
@@ -74,8 +75,21 @@ CSV_COLUMNS: tuple[str, ...] = (
     "summary_currency",
     "source_density",
     "graph_health",
+    "structural_smells",
     "mean",
     "sum",
+)
+
+# Canonical order of per-heuristic columns — reused by the markdown
+# digest, the per-row formatter, and the DB write path so adding a sixth
+# heuristic only means touching this tuple + the four scoring calls
+# below.
+_HEURISTIC_COLUMNS: tuple[str, ...] = (
+    "concept_shape",
+    "summary_currency",
+    "source_density",
+    "graph_health",
+    "structural_smells",
 )
 
 
@@ -140,7 +154,8 @@ def main(limit: int | None, pages: str | None, output_dir: Path, no_db: bool) ->
         sc, sc_dbg = score_summary_currency(body)
         sd, sd_dbg = score_source_density(body, frontmatter)
         gh, gh_dbg = score_graph_health(slug, body, wikilink_index, known_slugs)
-        scores = [cs, sc, sd, gh]
+        ss, ss_dbg = score_structural_smells(body, frontmatter)
+        scores = [cs, sc, sd, gh, ss]
         total = sum(scores)
         mean = total / len(scores)
         page_version = _page_version(frontmatter)
@@ -152,6 +167,7 @@ def main(limit: int | None, pages: str | None, output_dir: Path, no_db: bool) ->
                 "summary_currency": sc,
                 "source_density": sd,
                 "graph_health": gh,
+                "structural_smells": ss,
                 "mean": mean,
                 "sum": total,
                 "_debug": {
@@ -159,6 +175,7 @@ def main(limit: int | None, pages: str | None, output_dir: Path, no_db: bool) ->
                     "summary_currency": sc_dbg,
                     "source_density": sd_dbg,
                     "graph_health": gh_dbg,
+                    "structural_smells": ss_dbg,
                 },
             }
         )
@@ -235,8 +252,7 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]], *, today: str) -> No
     n = len(rows)
     mean_of_means = sum(r["mean"] for r in rows) / n
     per_heuristic_mean = {
-        col: round(sum(r[col] for r in rows) / n, 2)
-        for col in ("concept_shape", "summary_currency", "source_density", "graph_health")
+        col: round(sum(r[col] for r in rows) / n, 2) for col in _HEURISTIC_COLUMNS
     }
     sorted_rows = sorted(rows, key=lambda r: (-r["mean"], r["slug"]))
     top = sorted_rows[:10]
@@ -272,12 +288,13 @@ def _format_row_line(r: dict[str, Any]) -> str:
     return (
         f"- {r['slug']} mean={r['mean']:.1f}  "
         f"concept={r['concept_shape']} currency={r['summary_currency']} "
-        f"source={r['source_density']} graph={r['graph_health']}{bad_str}"
+        f"source={r['source_density']} graph={r['graph_health']} "
+        f"structural={r['structural_smells']}{bad_str}"
     )
 
 
 def _maybe_write_db(rows: list[dict[str, Any]]) -> int:
-    """Insert one page_feedback row per (slug, heuristic); 4 rows per page.
+    """Insert one page_feedback row per (slug, heuristic); 5 rows per page.
 
     Uses the canonical ``src.db.page_feedback.insert_feedback`` helper so
     schema drift caught in the 2026-04-23 smoke (scorer had hand-rolled
@@ -286,12 +303,11 @@ def _maybe_write_db(rows: list[dict[str, Any]]) -> int:
     and fall back to CSV/MD only.
     """
     run_id = uuid.uuid4()
-    heuristics = ("concept_shape", "summary_currency", "source_density", "graph_health")
     inserted = 0
     try:
         with connect() as conn:
             for row in rows:
-                for h in heuristics:
+                for h in _HEURISTIC_COLUMNS:
                     debug = row["_debug"][h]
                     insert_feedback(
                         conn,
@@ -351,6 +367,13 @@ def _finding_line(heuristic: str, score: int, debug: dict[str, Any]) -> str:
         return (
             f"graph_health={score}/10; incoming={debug.get('incoming', 0)} "
             f"broken={debug.get('broken_outgoing', 0)}"
+        )
+    if heuristic == "structural_smells":
+        return (
+            f"structural_smells={score}/10; dup_h2={debug.get('duplicate_h2', [])} "
+            f"empty={debug.get('empty_h2_sections', [])} "
+            f"email_slugs={debug.get('email_slug_hits', 0)} "
+            f"fm_body_related_dup={debug.get('has_fm_and_body_related', False)}"
         )
     return f"{heuristic}={score}/10"
 
