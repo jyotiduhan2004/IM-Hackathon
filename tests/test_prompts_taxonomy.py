@@ -796,12 +796,15 @@ def test_inline_citations_section_present() -> None:
     teaching inline `[^msg-*]` footnote syntax. Without claim-level
     citations the reader can't verify where each fact came from —
     the judge persona study flagged "unverifiable claims" repeatedly.
-    The section must name the footnote syntax, the `## Sources`
-    footnote block, and point at the actual helper that returns the
-    raw_path the agent needs to build the hash (`get_thread_context`,
-    which surfaces `raw_path` in its `messages_summary`). Abstract
-    rules without the syntax snippet + source block shape don't
-    survive first contact with real batches."""
+    The section must name the footnote syntax, the `## References`
+    footnote block (NOT `## Sources` — that heading trips the
+    MkDocs hook and disables the viewer's raw-email evidence block;
+    Codex caught this on PR #218), and point at the actual helper
+    that returns the raw_path the agent needs to build the hash
+    (`get_thread_context`, which surfaces `raw_path` in its
+    `messages_summary`). Abstract rules without the syntax snippet
+    + References block shape don't survive first contact with real
+    batches."""
     assert "<inline_citations>" in COMPILER_SYSTEM_PROMPT
     assert "</inline_citations>" in COMPILER_SYSTEM_PROMPT
     start = COMPILER_SYSTEM_PROMPT.find("<inline_citations>")
@@ -811,7 +814,18 @@ def test_inline_citations_section_present() -> None:
     # literal bracket+caret sequence must survive pre-commit / YAML
     # escaping unchanged.
     assert "[^msg-" in block, "inline footnote syntax `[^msg-` missing"
-    assert "## Sources" in block
+    assert "## References" in block
+    # Regression guard for Codex's P1 on PR #218: prompt must NOT
+    # instruct the agent to use `## Sources` — that exact heading
+    # triggers the MkDocs `on_page_markdown` short-circuit in
+    # mkdocs_hooks.py and drops the viewer's raw-email evidence
+    # rendering. Normalise whitespace so a line wrap between
+    # "never use" and "`## Sources`" still matches.
+    normalised = " ".join(block.split()).lower()
+    assert "never use `## sources`" in normalised, (
+        "inline_citations must explicitly warn against `## Sources` "
+        "heading — it collides with mkdocs_hooks.py:on_page_markdown"
+    )
     # Helper reference matches the real tool that exposes raw_path
     # (see src/compile/tools/raw_access.py:get_thread_context).
     assert "get_thread_context" in block, (

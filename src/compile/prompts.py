@@ -164,18 +164,22 @@ footnote target is `raw_path.stem.rsplit("_", 1)[-1]`.
 
 ### Footnote block at the bottom
 
-At the end of the body, before `## Related`, render a `## Sources`
-section with one bullet per cited hash:
+At the end of the body, before `## Related`, render a `## References`
+section with one bullet per cited hash. `## References` is the
+canonical citation section (see `<section_titles>`); never use
+`## Sources` — the MkDocs hook (`mkdocs_hooks.py:on_page_markdown`)
+short-circuits when it sees that heading, which would disable the
+viewer-generated raw-email evidence block.
 
-    ## Sources
+    ## References
 
     [^msg-cda09a3d]: `raw/2026-01-08_launchim-bl-latency-regression_cda09a3d.md`
     [^msg-19b9dc5e]: `raw/2026-01-08_launchim-nitin-missed-call-bug_19b9dc5e.md`
 
 Every `[^msg-*]` in the body must have a matching definition in
-`## Sources`; orphaned footnotes fail the post-compile validator.
+`## References`; orphaned footnotes fail the post-compile validator.
 
-`## Sources` footnotes are claim-level and complement — never
+`## References` footnotes are claim-level and complement — never
 replace — the `source_threads:` frontmatter list. Keep updating
 `source_threads:` on every batch; the batch-reconciliation loop
 uses it to detect citation coverage before marking emails
