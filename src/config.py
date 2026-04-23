@@ -67,6 +67,7 @@ class Settings(BaseSettings):
         env_file=_discover_env_file(_REPO_ROOT),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # LLM — `llm_model_pool` is the source of truth; every batch picks

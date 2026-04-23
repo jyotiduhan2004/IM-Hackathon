@@ -1603,7 +1603,12 @@ def _preview_dry_run(uncompiled: list[dict[str, str]], batch_size: int) -> None:
     "--limit",
     type=int,
     default=None,
-    help="Max TOTAL emails to process this run (oldest-first). Default: all.",
+    help=(
+        "Max number of THREADS to process this run (oldest-first by earliest "
+        "message date). All pending emails in those threads are pulled. "
+        "Default: all pending. Standalone (no-thread) emails each count as "
+        "one thread."
+    ),
 )
 @click.option(
     "--dry-run",
@@ -1729,16 +1734,31 @@ def main(
         pool, _fetch_available_models(), settings.litellm_base_url, resolved_model
     )
 
-    # Use the tool directly for listing, not through the agent
-    all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
-    # list_uncompiled_emails already sorts by filename (= YYYY-MM-DD prefix),
-    # so slicing gives us the oldest N emails — strict chronological order.
-    uncompiled = all_uncompiled[:limit] if limit else all_uncompiled
-    total = len(uncompiled)
+    # Use the tool directly for listing, not through the agent.
+    # When --limit is set, `list_uncompiled_by_thread` pulls all pending
+    # emails from the oldest N THREADS (not N emails) so batch_size can
+    # actually matter; without --limit we fall back to the full pool.
+    if limit:
+        from src.db.messages import list_uncompiled_by_thread
 
-    click.echo(f"Found {len(all_uncompiled)} uncompiled emails total.")
-    if limit and limit < len(all_uncompiled):
-        click.echo(f"Processing oldest {limit} this run (chronological).")
+        rows = list_uncompiled_by_thread(limit_threads=limit)
+        uncompiled = [
+            {
+                "path": str(row["raw_path"]),
+                "date": row["date"].isoformat() if row["date"] else "",
+                "subject": str(row["subject"] or ""),
+                "from": str(row["from_address"] or ""),
+                "thread_id": str(row["thread_id"] or ""),
+            }
+            for row in rows
+        ]
+        total = len(uncompiled)
+        click.echo(f"Processing oldest {limit} thread(s): {total} emails total.")
+    else:
+        all_uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
+        uncompiled = all_uncompiled
+        total = len(uncompiled)
+        click.echo(f"Found {total} uncompiled emails total (no --limit; processing all).")
     if total == 0:
         click.echo("Nothing to compile.")
         # Still regenerate index in case wiki changed

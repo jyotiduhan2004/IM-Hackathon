@@ -88,6 +88,45 @@ def test_list_uncompiled_orders_by_date_asc_nulls_last(
     assert ids == ["m_old", "m_new", "m_null"]
 
 
+def test_list_uncompiled_by_thread_returns_all_emails_from_oldest_n_threads(
+    db_conn: psycopg.Connection,
+) -> None:
+    """`limit_threads=2` pulls all pending emails from the 2 oldest threads."""
+    d1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    d2 = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    d3 = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+    # Thread A: 3 emails (oldest)
+    _insert(db_conn, message_id="a1", thread_id="tA", date=d1)
+    _insert(db_conn, message_id="a2", thread_id="tA", date=d1)
+    _insert(db_conn, message_id="a3", thread_id="tA", date=d1)
+    # Thread B: 2 emails (middle)
+    _insert(db_conn, message_id="b1", thread_id="tB", date=d2)
+    _insert(db_conn, message_id="b2", thread_id="tB", date=d2)
+    # Thread C: 1 email (newest — excluded at limit=2)
+    _insert(db_conn, message_id="c1", thread_id="tC", date=d3)
+    db_conn.commit()
+
+    rows = repo.list_uncompiled_by_thread(limit_threads=2)
+    ids = {r["message_id"] for r in rows}
+    # All 3 from A + all 2 from B; C excluded.
+    assert ids == {"a1", "a2", "a3", "b1", "b2"}
+
+
+def test_list_uncompiled_by_thread_treats_null_thread_as_singleton(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Emails with NULL thread_id each count as their own thread."""
+    d1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    _insert(db_conn, message_id="s1", thread_id=None, date=d1)
+    _insert(db_conn, message_id="s2", thread_id=None, date=d1)
+    db_conn.commit()
+
+    rows = repo.list_uncompiled_by_thread(limit_threads=1)
+    # Only 1 of the 2 singleton "threads" pulled.
+    assert len(rows) == 1
+
+
 # ---------------------------------------------------------------------------
 # claim_next_message + finish_message_compile (happy path)
 # ---------------------------------------------------------------------------

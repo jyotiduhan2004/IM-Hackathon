@@ -89,6 +89,42 @@ def list_uncompiled(limit: int = 1000) -> list[dict[str, Any]]:
         ).fetchall()
 
 
+def list_uncompiled_by_thread(limit_threads: int) -> list[dict[str, Any]]:
+    """Return all pending/failed messages from the oldest N threads.
+
+    Unlike `list_uncompiled` which caps by email count (and can slice a
+    thread mid-way), this picks the oldest N *threads* by earliest-message
+    date and returns ALL their pending/failed emails. Standalone messages
+    (NULL thread_id) each count as their own thread via COALESCE to
+    message_id.
+
+    The compile coordinator uses this so `--limit N` maps to ~N batches
+    after `_group_by_thread`, giving batch_size room to actually matter.
+    """
+    with connect() as conn:
+        return conn.execute(
+            """
+            WITH oldest_threads AS (
+                SELECT COALESCE(thread_id, message_id) AS group_key,
+                       MIN(date) AS first_date
+                  FROM messages
+                 WHERE compile_state IN ('pending', 'failed')
+                 GROUP BY COALESCE(thread_id, message_id)
+                 ORDER BY first_date ASC NULLS LAST, group_key ASC
+                 LIMIT %s
+            )
+            SELECT m.message_id, m.raw_path, m.thread_id, m.subject,
+                   m.from_address, m.date
+              FROM messages m
+              JOIN oldest_threads ot
+                ON COALESCE(m.thread_id, m.message_id) = ot.group_key
+             WHERE m.compile_state IN ('pending', 'failed')
+             ORDER BY m.date ASC NULLS LAST, m.message_id ASC
+            """,
+            (limit_threads,),
+        ).fetchall()
+
+
 def list_uncompiled_with_filters(
     *,
     date_from: str | None = None,
