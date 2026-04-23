@@ -39,14 +39,14 @@ No pre-declared latency kill threshold. Manual judgement by watching Langfuse.
    - `bun install -g @tobilu/qmd` (or `brew install qmd` if that ships)
    - First `qmd query` pre-downloads GGUF models (~2GB) to `~/.cache/qmd/models/`. Time one-shot, expect 5-15 min depending on connection.
 
-2. **Index wiki/ excluding people/**
-   - `qmd collection add wiki /Users/amtagrwl/git/email-knowledge-base/wiki --mask '**/*.md' --exclude 'people/**'`
+2. **Index wiki/ excluding people/** (per-directory collections — qmd 2.1 `collection add` has **no `--exclude` flag**, per the spike audit)
+   - `for d in topics systems decisions policies domains; do qmd collection add "$(git rev-parse --show-toplevel)/wiki/$d" --name "wiki-$d"; done`
    - `qmd embed --all`
-   - Expect ~2 min for ~400 non-person pages (306 topics + 96 systems + 10 domains + misc).
+   - Expect ~2 min for ~400 non-person pages (306 topics + 96 systems + 10 domains + misc). People pages (`wiki/people/`) stay uncollected — canonical path is `create_entities`.
 
 3. **Start daemon for the test run**
    - `qmd mcp --http --daemon --port 8181`
-   - Verify via `curl http://localhost:8181/status`.
+   - Verify via `curl http://localhost:8181/health` (qmd's HTTP liveness endpoint).
 
 4. **Pull real query sample from Langfuse**
    - Query Langfuse for the last ~500 observations with `tool_name = "resolve_page"`.
@@ -77,8 +77,8 @@ No pre-declared latency kill threshold. Manual judgement by watching Langfuse.
 
 ### Files to add
 
-- `src/compile/tools/qmd_client.py` — async HTTP client to `http://localhost:8181/mcp/...` endpoints. Thin. Returns candidates in existing `resolve_page` envelope shape for day-1 compat.
-- `src/compile/qmd_daemon.py` — daemon lifecycle helpers: `is_alive() → bool`, `start()`, `stop()`. Uses `pgrep` / `curl /status` for liveness.
+- `src/compile/tools/qmd_client.py` — async HTTP client to `http://localhost:8181/mcp/...` endpoints. Thin. Returns candidates in existing `resolve_page` envelope shape for day-1 compat. **Exact-slug short-circuit first**: if `query` matches a known slug exactly (case-insensitive, after `_normalize_query`), skip qmd and return the direct hit. Confirmed necessary from the 2026-04-23 spike — qmd was weak on bare numbers, short code identifiers, and person-email slugs (failure modes #11 and #23); exact-slug lookup covers all three without an HTTP round-trip.
+- `src/compile/qmd_daemon.py` — daemon lifecycle helpers: `is_alive() → bool`, `start()`, `stop()`. Uses `pgrep` / `curl /health` for liveness (qmd's canonical liveness endpoint; `/status` does not exist).
 - `tests/test_qmd_client.py` — unit tests with mocked HTTP responses.
 - `tests/test_qmd_integration.py` — integration tests gated by `QMD_INTEGRATION=1` env var; skipped in default CI, run in nightly.
 - `Makefile` additions: `qmd-install`, `qmd-index`, `qmd-sync`, `qmd-start`, `qmd-stop`.
@@ -93,7 +93,7 @@ No pre-declared latency kill threshold. Manual judgement by watching Langfuse.
 
 ### Response envelope decision
 
-Keep existing `{exists, slug, title, page_type, status, confidence, candidates, auto_corrected_from, auto_corrected_to}` envelope day-1 for drop-in compat. Add one new field: `retriever: qmd | sql-fallback`. Agent code unchanged.
+Keep existing `{exists, slug, title, page_type, status, confidence, candidates, auto_corrected_from, auto_corrected_to}` envelope day-1 for drop-in compat. Add two new fields: `retriever: qmd | sql-fallback` AND `snippet: str | None` per candidate (qmd already computes these in the MCP response; 3-line addition, zero new infra). Snippet aids agent decision-making on miss-then-candidate-list branches. Agent code unchanged apart from reading the new field where useful.
 
 No new confidence threshold — use qmd's rerank score normalised to 0-1 as `confidence`. Agent decides what to do with it via its existing heuristics. We'll tune the hit/miss cutoff post-trace observation, not now.
 
@@ -216,7 +216,7 @@ No new confidence threshold — use qmd's rerank score normalised to 0-1 as `con
 
 ## One-line status tracker
 
-- [ ] Phase 0: spike
+- [x] Phase 0: spike — **GO** (2026-04-23, 85% hit rate on 20 live queries, audit at `docs/audits/qmd-spike-2026-04-23.md`)
 - [ ] Phase 1: build + merge
 - [ ] Phase 2: smoke + measure + docstring-from-traces
 - [ ] Phase 3a: raw/ collection — deferred
