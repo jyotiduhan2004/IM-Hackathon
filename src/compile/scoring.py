@@ -22,7 +22,7 @@ recalibrated 2026-04-23 against a V12 smoke compile (photosearch +
 mcat-cleaning pages): bad-list picked up verbose siblings like
 ``QA Testing Results`` and a ``Decision:`` prefix rule; good-list grew
 beyond ownership verbs to cover deployment-state prose like ``runs``,
-``currently``, ``rolled out``.
+``currently``, ``rolled out to ``.
 
 The scorer CLI in ``scripts/score_wiki.py`` is the only intended caller
 in app code; tests exercise these functions with synthetic strings.
@@ -114,10 +114,26 @@ BAD_TOKENS: tuple[str, ...] = (
 # "Enhanced feedback popup ... Currently rolled out to 50%" scored a flat
 # 5/10 because none of the original 7 ownership verbs fired. The new
 # entries cover verb-based function descriptions (``runs``, ``delivers``,
-# ``powers``), deployment-state markers (``live``, ``currently``, ``rolled
-# out``), and stronger scope signals (``handles all``). ``rolled out`` is
-# intentionally missing its trailing space — it's already a multi-word
-# anchor so substring collisions aren't a risk.
+# ``powers``), deployment-state markers (``live``, ``currently``), and
+# stronger scope signals (``handles all``).
+#
+# Codex + Claude review on PR #221 caught two substring collisions the
+# first draft missed:
+# - ``"works "`` fires inside ``frameworks ``, ``networks `` — dropped.
+# - ``"rolled out"`` fires inside ``controlled output`` — dropped.
+# The replacement ``"rolled out to "`` keeps the deployment-state signal
+# without colliding: "controlled output to" is not a sensible English
+# phrase. Keep the trailing-space discipline for all other tokens.
+#
+# ``"currently "`` stays with a known limitation: it fires inside
+# negations ("is NOT currently active"). Accepting the noise because the
+# positive signal ("is currently live", "currently rolled out to 50%") is
+# much more common in authored prose than the negation construction.
+#
+# ``"handles all "`` double-counts with ``"handles "`` by design — pages
+# that say "handles all image uploads" get +2 because the scope signal is
+# stronger than bare "handles". Future maintainers who want to remove the
+# overlap: drop ``"handles all "`` first, not ``"handles "``.
 GOOD_TOKENS: tuple[str, ...] = (
     "provides ",
     "handles ",
@@ -127,7 +143,6 @@ GOOD_TOKENS: tuple[str, ...] = (
     "manages ",
     "enables ",
     "runs ",
-    "works ",
     "delivers ",
     "supports ",
     "powers ",
@@ -136,7 +151,7 @@ GOOD_TOKENS: tuple[str, ...] = (
     "generates ",
     "live ",
     "currently ",
-    "rolled out",
+    "rolled out to ",
     "handles all ",
 )
 

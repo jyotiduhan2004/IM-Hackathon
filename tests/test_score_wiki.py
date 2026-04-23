@@ -512,8 +512,8 @@ def test_summary_currency_photosearch_opener_scores_at_least_six() -> None:
     """Photosearch-shaped prose: ``Enhanced ... Currently rolled out to 50%.``
 
     Under scorer v2 this scored a flat 5 (neutral) because none of the
-    ownership verbs fired. Scorer v3 adds ``currently `` + ``rolled out``
-    so definitional deployment-state prose now registers.
+    ownership verbs fired. Scorer v3 adds ``currently `` + ``rolled
+    out to `` so definitional deployment-state prose now registers.
     """
     body = "Enhanced feedback popup for X. Currently rolled out to 50%.\n\n## Current state\n"
     score, dbg = score_summary_currency(body)
@@ -522,12 +522,38 @@ def test_summary_currency_photosearch_opener_scores_at_least_six() -> None:
     assert dbg["good_count"] >= 2
 
 
+def test_summary_currency_no_false_positive_on_frameworks() -> None:
+    """Regression for Codex PR #221 review: ``"works "`` was dropped
+    because it fires inside ``frameworks `` / ``networks ``. Neutral
+    tech-noun prose must now score flat 5 (no currency credit)."""
+    body = "The frameworks used include Django and Flask. Networks are private.\n\n## API\n"
+    score, dbg = score_summary_currency(body)
+    # Clean neutral — no ownership verbs, no deployment markers, no
+    # ``works `` false-positive inflating good_count.
+    assert dbg["good_count"] == 0
+    assert score == 5
+
+
+def test_summary_currency_no_false_positive_on_controlled_output() -> None:
+    """Regression for Codex PR #221 review: ``"rolled out"`` (unbounded)
+    fires inside ``controlled output``. v3 post-fix replaces the token
+    with ``"rolled out to "`` which requires the preposition to follow."""
+    body = "The pipeline produces controlled output at each stage.\n\n## Flow\n"
+    score, dbg = score_summary_currency(body)
+    # The bounded replacement ``rolled out to `` must not match
+    # ``controlled output ``.
+    assert dbg["good_count"] == 0
+    assert score == 5
+
+
 def test_summary_currency_verb_prose_scores_at_least_seven() -> None:
     """Multi-verb prose: ``runs daily, powers the BL feed, handles all image uploads.``
 
     Three GOOD_TOKENS fire: ``runs ``, ``powers ``, ``handles all ``. Note
     that ``handles all `` contains ``handles ``, so ``str.count`` will
-    report both — the test tolerates either count.
+    report both — the test tolerates either count. ``works `` was
+    intentionally dropped (frameworks/networks false positives) so
+    this test no longer relies on it.
     """
     body = (
         "The system runs daily, powers the BL feed, and handles all image uploads.\n\n"
