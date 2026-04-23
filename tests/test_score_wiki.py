@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.score_wiki import CSV_COLUMNS  # noqa: E402
+from scripts.score_wiki import _select_topic_paths  # noqa: E402
 from scripts.score_wiki import _write_csv  # noqa: E402
 from src.compile.scoring import build_wikilink_incoming_index  # noqa: E402
 from src.compile.scoring import score_concept_shape  # noqa: E402
@@ -239,3 +240,99 @@ def test_csv_column_order(tmp_path: Path) -> None:
         reader = csv.reader(fh)
         header = next(reader)
     assert tuple(header) == CSV_COLUMNS
+
+
+# --- GOOD_TOKENS false-positive regression (F1) ----------------------------
+
+
+def test_summary_currency_does_not_count_is_inside_analysis_etc() -> None:
+    """Drop-``is`` regression: prose using ``analysis``/``basis``/``This ``
+    must not inflate good_count via substring matches on ``is ``.
+
+    The only GOOD_TOKEN hit here is ``provides ``; ``is `` bare was dropped
+    from the token list specifically to stop this class of false positive.
+    """
+    body = (
+        "The analysis provides insight. This assumes a stable basis. "
+        "The crisis is real but the analysis is thorough.\n\n"
+        "## Current state\n"
+    )
+    _, dbg = score_summary_currency(body)
+    # Only ``provides `` should register; the stripped ``is `` substrings
+    # hiding inside ``analysis``/``basis``/``crisis``/``This `` don't count.
+    assert dbg["good_count"] == 1
+
+
+def test_summary_currency_is_responsible_counts_once() -> None:
+    """No double-count between dropped ``is `` and retained ``is responsible``."""
+    body = "This system is responsible for onboarding.\n\n## Current state\n"
+    _, dbg = score_summary_currency(body)
+    # ``is responsible`` alone should fire; no sibling ``is `` hit.
+    assert dbg["good_count"] == 1
+
+
+# --- concept_shape case-insensitive (C1) -----------------------------------
+
+
+def test_concept_shape_case_insensitive_match() -> None:
+    body = "## testing results\n\nX.\n\n## BUG REPORT\n\nY.\n"
+    score, dbg = score_concept_shape(body)
+    assert dbg["count_bad"] == 2
+    assert score == 6
+
+
+# --- _select_topic_paths hub filter (F2) -----------------------------------
+
+
+def test_select_topic_paths_excludes_index_md(tmp_path: Path) -> None:
+    topics = tmp_path / "topics"
+    topics.mkdir()
+    (topics / "index.md").write_text("listing", encoding="utf-8")
+    (topics / "home.md").write_text("home", encoding="utf-8")
+    (topics / "alpha.md").write_text("a", encoding="utf-8")
+    (topics / "beta.md").write_text("b", encoding="utf-8")
+
+    selected = _select_topic_paths(topics, pages=None, limit=None)
+    stems = {p.stem for p in selected}
+    assert stems == {"alpha", "beta"}
+
+
+def test_select_topic_paths_explicit_pages_honours_hub_request(tmp_path: Path) -> None:
+    """--pages index still resolves — operators asking by name have reasons."""
+    topics = tmp_path / "topics"
+    topics.mkdir()
+    (topics / "index.md").write_text("listing", encoding="utf-8")
+    (topics / "alpha.md").write_text("a", encoding="utf-8")
+
+    selected = _select_topic_paths(topics, pages="index", limit=None)
+    assert [p.stem for p in selected] == ["index"]
+
+
+# --- build_wikilink_incoming_index hub-page filter (F3) --------------------
+
+
+def test_build_wikilink_incoming_index_skips_generated_hub_outbound(
+    tmp_path: Path,
+) -> None:
+    """Hub pages link to most topics — their outbound links must not inflate incoming."""
+    wiki = tmp_path / "wiki"
+    (wiki / "topics").mkdir(parents=True)
+    (wiki / "domains").mkdir(parents=True)
+    # index.md is a hub listing — its [[topic/foo]] link shouldn't count.
+    (wiki / "topics" / "index.md").write_text(
+        "---\ntitle: Topics index\n---\n\n- [[topic/foo]]\n", encoding="utf-8"
+    )
+    # Same for a domains/ hub page.
+    (wiki / "domains" / "seller.md").write_text(
+        "---\ntitle: Seller domain\n---\n\n- [[topic/foo]]\n", encoding="utf-8"
+    )
+    # Real topic page linking to foo — this SHOULD count.
+    (wiki / "topics" / "bar.md").write_text(
+        "---\ntitle: Bar\n---\n\nBody mentions [[topic/foo]].\n", encoding="utf-8"
+    )
+    (wiki / "topics" / "foo.md").write_text("---\ntitle: Foo\n---\n\nBody.\n", encoding="utf-8")
+    index, known = build_wikilink_incoming_index(wiki)
+    # Only ``bar`` contributes — the two hub links are ignored.
+    assert index == {"foo": 1}
+    # But the hub pages are still in known_slugs so broken-outbound checks work.
+    assert {"index", "seller", "bar", "foo"}.issubset(known)

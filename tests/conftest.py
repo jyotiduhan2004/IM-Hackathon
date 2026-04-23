@@ -292,8 +292,12 @@ def _load_messages_ddl() -> str:
       raw_json        JSONB NOT NULL DEFAULT '{{}}'::jsonb
     );
 
-    CREATE INDEX page_feedback_page_slug_idx
-      ON {TEST_SCHEMA}.page_feedback (page_slug, captured_at DESC);
+    -- Composite index matches the 202604231200 migration: it supports the
+    -- DISTINCT ON (source) / ORDER BY source, captured_at DESC query in
+    -- list_recent_feedback_for_page. The old page_slug-only index was a
+    -- redundant prefix and got dropped in prod.
+    CREATE INDEX page_feedback_slug_source_idx
+      ON {TEST_SCHEMA}.page_feedback (page_slug, source, captured_at DESC);
     CREATE INDEX page_feedback_source_idx
       ON {TEST_SCHEMA}.page_feedback (source, captured_at DESC);
     CREATE INDEX page_feedback_run_id_idx

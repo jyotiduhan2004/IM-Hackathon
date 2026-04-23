@@ -94,7 +94,12 @@ def _resolve_sample(
     """
     if pages:
         return [s.strip() for s in pages.split(",") if s.strip()]
-    assert random_pct is not None
+    if random_pct is None:
+        # Defensive — the CLI guard (``bool(random_pct_str) == bool(pages)``)
+        # ensures exactly one of the two is set before calling us. Using a
+        # ``ValueError`` instead of ``assert`` so ``python -O`` can't strip
+        # the check and let a silent empty-sample run through.
+        raise ValueError("random_pct must be set when pages is not")
     count = round(len(all_slugs) * random_pct / 100)
     if count <= 0 or not all_slugs:
         return []
@@ -122,9 +127,11 @@ def _insert_feedback_row(
 ) -> bool:
     """Insert one row into page_feedback. Returns True on success.
 
-    Fails open (warns + returns False) if the table does not exist yet —
-    V12-U0a ships the schema in a separate PR, and we still want the
-    CSV/markdown outputs to be usable pre-schema.
+    Fails open ONLY on ``UndefinedTable`` — V12-U0a ships the schema in a
+    separate PR and we still want the CSV/markdown outputs to be usable
+    pre-schema. Any other ``psycopg.Error`` (auth, connection refused,
+    constraint violation) is a real failure that should surface, not be
+    logged-and-swallowed into silent data loss.
     """
     try:
         with connect() as conn, conn.transaction():
@@ -145,14 +152,6 @@ def _insert_feedback_row(
             )
     except psycopg.errors.UndefinedTable:
         logger.warning("page_feedback_table_missing", slug=slug, persona=persona)
-        return False
-    except psycopg.Error as exc:
-        logger.warning(
-            "page_feedback_insert_failed",
-            slug=slug,
-            persona=persona,
-            error=str(exc)[:200],
-        )
         return False
     return True
 
@@ -335,19 +334,10 @@ def main(
         )
         sys.exit(2)
 
-    # --- Preflight cost estimate ---
-    estimated = estimate_cost(len(sample_slugs), personas)
-    click.echo(
-        f"Estimated: {len(sample_slugs)} pages x {len(personas)} personas x ~$0.10 = ~${estimated:.2f}. Proceed?"
-    )
-    if estimated > 20.0 and not confirm:
-        click.echo(
-            "Estimated cost > $20. Re-run with --confirm to proceed.",
-            err=True,
-        )
-        sys.exit(3)
-
     # --- Dry-run: print first assembled prompt, exit ---
+    # Runs BEFORE the preflight cost gate — dry runs spend nothing, so a
+    # ``$20+`` sample with ``--dry-run`` shouldn't be blocked asking for
+    # ``--confirm`` on a charge that isn't happening.
     if dry_run:
         first_slug = sample_slugs[0]
         first_persona = personas[0]
@@ -371,9 +361,22 @@ def main(
         )
         return
 
+    # --- Preflight cost estimate (live runs only) ---
+    estimated = estimate_cost(len(sample_slugs), personas)
+    click.echo(
+        f"Estimated: {len(sample_slugs)} pages x {len(personas)} personas x ~$0.10 = ~${estimated:.2f}. Proceed?"
+    )
+    if estimated > 20.0 and not confirm:
+        click.echo(
+            "Estimated cost > $20. Re-run with --confirm to proceed.",
+            err=True,
+        )
+        sys.exit(3)
+
     # --- Live pass ---
     rows: list[dict[str, Any]] = []
     rows_written = 0
+    skipped_pairs = 0
     for slug in sample_slugs:
         loaded = _load_page(wiki_dir, slug)
         if loaded is None:
@@ -386,6 +389,7 @@ def main(
                 parsed = call_judge(system_prompt, user_prompt, resolved_model)
             except JudgeParseError:
                 logger.warning("judge_parse_failed", slug=slug, persona=persona_name)
+                skipped_pairs += 1
                 continue
             severity = severity_from_score(parsed["score"])
             rows.append({"slug": slug, "persona": persona_name, "parsed": parsed})
@@ -416,6 +420,7 @@ def main(
         personas=personas,
         cost_usd=estimated,
         rows_written=rows_written if not no_db else 0,
+        skipped=skipped_pairs,
     )
 
 

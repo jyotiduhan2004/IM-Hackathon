@@ -46,6 +46,10 @@ def test_build_system_prompt_wraps_persona_with_schema() -> None:
     assert '"score"' in prompt
     assert "---" in prompt  # separator between schema and persona
     assert "Newbie Audit" in prompt  # persona body is appended verbatim
+    # Defence-in-depth against prompt injection: system prompt also warns
+    # the model about the fence markers.
+    assert "===WIKI PAGE START===" in prompt
+    assert "DATA" in prompt
 
 
 def test_build_user_prompt_fences_page_as_data() -> None:
@@ -105,6 +109,28 @@ def test_call_judge_handles_markdown_code_fence() -> None:
     with patch("litellm.completion", return_value=_mock_litellm_response(fenced)):
         parsed = call_judge("sys", "usr", "anthropic/claude-sonnet-4-6")
     assert parsed["score"] == 8
+
+
+def test_call_judge_rejects_score_out_of_range() -> None:
+    """A ``{"score": 100, ...}`` response must not slip past as ``info``."""
+    bogus = '{"score": 100, "what_works": [], "what_doesnt": [], "missing": []}'
+    valid_retry = '{"score": 7, "what_works": [], "what_doesnt": [], "missing": []}'
+    responses = [_mock_litellm_response(bogus), _mock_litellm_response(valid_retry)]
+    with patch("litellm.completion", side_effect=responses) as mock:
+        parsed = call_judge("sys", "usr", "anthropic/claude-sonnet-4-6")
+    # Retry kicked in; retry payload is valid; we keep the sane score.
+    assert parsed["score"] == 7
+    assert mock.call_count == 2
+
+
+def test_call_judge_rejects_negative_score() -> None:
+    """Symmetry check — negative scores are also out of range."""
+    bogus = '{"score": -1, "what_works": [], "what_doesnt": [], "missing": []}'
+    retry = '{"score": 5, "what_works": [], "what_doesnt": [], "missing": []}'
+    responses = [_mock_litellm_response(bogus), _mock_litellm_response(retry)]
+    with patch("litellm.completion", side_effect=responses):
+        parsed = call_judge("sys", "usr", "anthropic/claude-sonnet-4-6")
+    assert parsed["score"] == 5
 
 
 # -- Pure helpers ------------------------------------------------------------
@@ -308,3 +334,65 @@ def test_insert_feedback_row_handles_missing_table(
         severity="warning",
     )
     assert ok is False
+
+
+def test_insert_feedback_row_propagates_connection_failure(
+    judge_wiki_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-UndefinedTable psycopg errors (auth, network, FK) must surface."""
+    mod = judge_wiki_module
+    import psycopg
+
+    class _FakeConn:
+        def __enter__(self) -> _FakeConn:
+            return self
+
+        def __exit__(self, *a: Any) -> None:
+            return None
+
+        def transaction(self) -> _FakeConn:
+            return self
+
+        def execute(self, *args: Any, **kwargs: Any) -> None:
+            raise psycopg.OperationalError("connection refused")
+
+    def _fake_connect() -> _FakeConn:
+        return _FakeConn()
+
+    monkeypatch.setattr(mod, "connect", _fake_connect)
+
+    with pytest.raises(psycopg.OperationalError):
+        mod._insert_feedback_row(
+            slug="x",
+            persona="newbie",
+            parsed={"score": 5, "what_works": [], "what_doesnt": [], "missing": []},
+            severity="warning",
+        )
+
+
+def test_cli_dry_run_bypasses_cost_gate(
+    judge_wiki_module: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F5 regression: ``--random 100pct --dry-run`` on a $30 sample must exit 0.
+
+    Dry runs spend nothing; the preflight cost gate should only kick in for
+    live runs. Pre-fix this exited 3 on ``--confirm`` enforcement.
+    """
+    mod = judge_wiki_module
+    wiki = tmp_path / "wiki"
+    _seed_topics(wiki, 100)  # 100 x 3 personas x $0.10 = $30 > $20 threshold.
+    monkeypatch.setattr(mod.settings, "wiki_dir", wiki)
+    monkeypatch.setenv("JUDGE_MAX_PAGES_PER_RUN", "500")
+
+    with patch("litellm.completion") as mock_llm:
+        result = CliRunner().invoke(
+            mod.main,
+            ["--random", "100pct", "--persona", "all", "--dry-run", "--no-db"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_llm.assert_not_called()
+    assert "SYSTEM PROMPT" in result.output

@@ -211,3 +211,50 @@ def test_invalid_severity_violates_check(db_conn: psycopg.Connection) -> None:
             page_slug="any",
             severity="bogus",  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# list_feedback_by_run limit guard (C7).
+# ---------------------------------------------------------------------------
+
+
+def test_list_by_run_respects_limit(db_conn: psycopg.Connection) -> None:
+    """Bulk runs must not flood the caller — limit is an opt-in floor."""
+    run_id = uuid4()
+    for i in range(5):
+        _insert(db_conn, run_id=run_id, page_slug=f"p-{i}", score=float(i))
+    db_conn.commit()
+
+    assert len(repo.list_feedback_by_run(db_conn, run_id=run_id, limit=3)) == 3
+    assert len(repo.list_feedback_by_run(db_conn, run_id=run_id, limit=100)) == 5
+
+
+# ---------------------------------------------------------------------------
+# list_recent_feedback_for_page default limit surfaces all 5 expected sources
+# (C4 regression).
+# ---------------------------------------------------------------------------
+
+
+def test_list_recent_default_limit_shows_all_expected_sources(
+    db_conn: psycopg.Connection,
+) -> None:
+    """The default limit must be big enough for scorer + 3 judges + human."""
+    run_id = uuid4()
+    for source in ("scorer", "judge-newbie", "judge-pm", "judge-ia", "human"):
+        _insert(
+            db_conn,
+            run_id=run_id,
+            page_slug="central-api",
+            source=source,
+            score=5.0 if source == "scorer" else None,
+        )
+    db_conn.commit()
+
+    rows = repo.list_recent_feedback_for_page(db_conn, page_slug="central-api")
+    assert {r["source"] for r in rows} == {
+        "scorer",
+        "judge-newbie",
+        "judge-pm",
+        "judge-ia",
+        "human",
+    }

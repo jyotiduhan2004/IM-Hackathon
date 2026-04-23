@@ -17,20 +17,27 @@ import re
 from pathlib import Path
 from typing import Any
 
-from src.compile.critique import _H2_RE
 from src.utils import extract_body
 from src.utils.wikilinks import WIKILINK_RE
 from src.utils.wikilinks import parse_wikilink_target
+
+# Own this regex locally instead of importing ``_H2_RE`` from critique.py —
+# cross-module private imports silently break when the owner refactors.
+# Both modules having their own copy keeps the dependency graph honest.
+_H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 # H2 section titles that look like they were copy-pasted from the thread
 # subject instead of synthesized into a concept page. Every hit here loses
 # 2 points from ``concept_shape``; the list is intentionally narrow so
 # well-written pages sail through at 10/10.
+#
+# Matching is case-insensitive at lookup time — ``_THREAD_SUBJECT_H2_LOWER``
+# is built once from this canonical title-case list so ``## testing
+# results`` or ``## BUG REPORT`` both trigger the penalty.
 THREAD_SUBJECT_H2: frozenset[str] = frozenset(
     [
         "Launch Announcement",
         "Bug Report",
-        "Bug report",
         "Testing Results",
         "Business Objective",
         "Final Decision",
@@ -43,6 +50,7 @@ THREAD_SUBJECT_H2: frozenset[str] = frozenset(
         "Discussion",
     ]
 )
+_THREAD_SUBJECT_H2_LOWER: frozenset[str] = frozenset(h.lower() for h in THREAD_SUBJECT_H2)
 
 # Past-tense / narrative tokens that imply the summary is recounting history
 # instead of stating current truth. Trailing spaces are load-bearing: they
@@ -63,8 +71,12 @@ BAD_TOKENS: tuple[str, ...] = (
 # Present-tense / ownership tokens that imply the summary is describing the
 # current state. Each hit adds 1 point. Trailing spaces again guard against
 # substring false matches.
+#
+# Note: a bare ``"is "`` was explicitly dropped — ``str.count("is ")`` fires
+# inside ``analysis ``, ``basis ``, ``crisis ``, ``This `` (Th-I-S-space),
+# etc., silently inflating ``summary_currency`` on 300+ pages. ``is
+# responsible`` stays because the full phrase is specific enough.
 GOOD_TOKENS: tuple[str, ...] = (
-    "is ",
     "provides ",
     "handles ",
     "owns ",
@@ -73,6 +85,14 @@ GOOD_TOKENS: tuple[str, ...] = (
     "manages ",
     "enables ",
 )
+
+# Generated hub pages that link to most topics — counting their outbound
+# wikilinks as "incoming" for the topic pages inflates ``graph_health``
+# across the whole corpus. Filtered out in
+# ``build_wikilink_incoming_index`` so only authored topic/system/policy
+# pages contribute to the incoming count.
+_GENERATED_HUB_STEMS: frozenset[str] = frozenset({"index", "home", "changes"})
+_GENERATED_HUB_PARENTS: frozenset[str] = frozenset({"domains"})
 
 _MSG_REF_RE = re.compile(r"\[\^msg-[a-z0-9\-]+\]")
 _RAW_BULLET_RE = re.compile(r"^\s*-\s+raw/", re.MULTILINE)
@@ -85,10 +105,11 @@ def score_concept_shape(body: str) -> tuple[int, dict[str, Any]]:
 
     Example: a page with ``## Bug Report`` + ``## Final Decision`` scores
     ``10 - 2*2 = 6``. A page with only concept-shaped H2s (``## Current
-    state``, ``## How it works``) scores 10.
+    state``, ``## How it works``) scores 10. Case-insensitive match — ``##
+    testing results`` triggers the penalty too.
     """
     h2_titles = [m.group(1).strip() for m in _H2_RE.finditer(body)]
-    bad_matches = [h for h in h2_titles if h in THREAD_SUBJECT_H2]
+    bad_matches = [h for h in h2_titles if h.lower() in _THREAD_SUBJECT_H2_LOWER]
     count_bad = len(bad_matches)
     score = max(0, 10 - 2 * count_bad)
     return score, {
@@ -175,9 +196,16 @@ def build_wikilink_incoming_index(wiki_dir: Path) -> tuple[dict[str, int], set[s
     """Scan every ``wiki/**/*.md`` once; return (incoming-count, known-slugs).
 
     Self-links are excluded from the incoming count — a page linking to
-    itself shouldn't inflate its own ``graph_health`` score. ``known_slugs``
-    includes every page on disk so ``graph_health`` can flag broken
-    outgoing links against the full corpus, not just topics.
+    itself shouldn't inflate its own ``graph_health`` score. Outbound links
+    from generated hub pages (``index.md``, ``home.md``, ``changes.md``,
+    anything under ``wiki/domains/``) are ignored: those pages link to
+    most topics by construction, so treating them as first-class sources
+    would inflate ``graph_health`` uniformly across the corpus. Authored
+    topic/system/policy pages are the signal we want.
+
+    ``known_slugs`` includes every page on disk (hub pages included) so
+    ``graph_health`` can still flag broken outgoing links against the full
+    corpus, not just topics.
     """
     incoming: dict[str, int] = {}
     known_slugs: set[str] = set()
@@ -189,6 +217,8 @@ def build_wikilink_incoming_index(wiki_dir: Path) -> tuple[dict[str, int], set[s
         if not path.is_file():
             continue
         known_slugs.add(path.stem)
+        if _is_generated_hub(path, wiki_dir):
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -201,6 +231,22 @@ def build_wikilink_incoming_index(wiki_dir: Path) -> tuple[dict[str, int], set[s
                 continue
             incoming[target_slug] = incoming.get(target_slug, 0) + 1
     return incoming, known_slugs
+
+
+def _is_generated_hub(path: Path, wiki_dir: Path) -> bool:
+    """True for auto-generated hub pages whose links shouldn't count as signal.
+
+    Stems ``index`` / ``home`` / ``changes`` anywhere in the tree qualify,
+    as does any file under ``wiki/domains/``. Matching is by stem + by a
+    single ancestor directory name to keep the rule cheap and obvious.
+    """
+    if path.stem in _GENERATED_HUB_STEMS:
+        return True
+    try:
+        rel_parts = path.relative_to(wiki_dir).parts
+    except ValueError:
+        rel_parts = path.parts
+    return any(part in _GENERATED_HUB_PARENTS for part in rel_parts[:-1])
 
 
 def _first_paragraph(body: str) -> str:

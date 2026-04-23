@@ -44,14 +44,28 @@ from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 
-structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ],
-)
 logger = structlog.get_logger(__name__)
+
+# Hub-page stems we never want in the scored topic set — generated listings
+# (``index.md``) and the legacy ``home``/``changes`` if they drift into
+# ``wiki/topics/`` at some point. Mirrors ``_GENERATED_HUB_STEMS`` in
+# ``src.compile.scoring`` but kept local because ``score_wiki`` owns its
+# selection policy.
+_KNOWN_HUB_STEMS: frozenset[str] = frozenset({"index", "home", "changes"})
+
+
+def _configure_logging() -> None:
+    """Idempotent structlog setup. Called from ``main()`` so test imports
+    don't mutate the global structlog config as a side effect.
+    """
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(),
+        ],
+    )
+
 
 CSV_COLUMNS: tuple[str, ...] = (
     "slug",
@@ -91,6 +105,7 @@ CSV_COLUMNS: tuple[str, ...] = (
 )
 def main(limit: int | None, pages: str | None, output_dir: Path, no_db: bool) -> None:
     """Score topic pages and emit ranked CSV + markdown digest."""
+    _configure_logging()
     wiki_dir = settings.wiki_dir
     topics_dir = wiki_dir / "topics"
     if not topics_dir.is_dir():
@@ -174,18 +189,25 @@ def _select_topic_paths(topics_dir: Path, *, pages: str | None, limit: int | Non
 
     --pages wins over --limit. A missing slug in --pages is a hard error
     so operators catch typos instead of silently scoring zero pages.
+
+    Generated hub pages (``index.md``, ``home.md``, ``changes.md``) inside
+    ``wiki/topics/`` are filtered out of the default ``--all`` sweep —
+    they're listings of siblings, not concept pages, and would dilute the
+    top/bottom-10 rankings. Explicit ``--pages index`` still resolves
+    (operators asking for a hub by name have their reasons).
     """
     all_paths = sorted(topics_dir.glob("*.md"))
     if pages:
-        requested = [s.strip() for s in pages.split(",") if s.strip()]
         by_slug = {p.stem: p for p in all_paths}
+        requested = [s.strip() for s in pages.split(",") if s.strip()]
         missing = [s for s in requested if s not in by_slug]
         if missing:
             raise click.ClickException(f"unknown slugs: {', '.join(missing)}")
         return [by_slug[s] for s in requested]
+    filtered = [p for p in all_paths if p.stem not in _KNOWN_HUB_STEMS]
     if limit is not None:
-        return all_paths[:limit]
-    return all_paths
+        return filtered[:limit]
+    return filtered
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

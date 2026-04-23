@@ -47,13 +47,20 @@ def insert_feedback(
     captured_by: str,
     raw_json: dict[str, Any],
 ) -> int:
-    """Append one feedback row. Returns the new row id."""
+    """Append one feedback row. Returns the new row id.
+
+    Raises ``RuntimeError`` if the INSERT RETURNING surprises us with zero
+    rows — that shouldn't be possible for a row that just landed, so a
+    silent ``return 0`` would only mask a driver bug or concurrent DDL.
+    The ``Jsonb()`` adapter handles type coercion; no explicit ``::jsonb``
+    cast is needed in the SQL.
+    """
     row = conn.execute(
         """
         INSERT INTO page_feedback (
           run_id, page_slug, page_version, source, score,
           finding, severity, captured_by, raw_json
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -68,14 +75,16 @@ def insert_feedback(
             Jsonb(raw_json),
         ),
     ).fetchone()
-    return int(row["id"]) if row else 0
+    if row is None:
+        raise RuntimeError("INSERT INTO page_feedback returned no row")
+    return int(row["id"])
 
 
 def list_recent_feedback_for_page(
     conn: psycopg.Connection,
     *,
     page_slug: str,
-    limit: int = 3,
+    limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Return the latest row per source for this page, newest first.
 
@@ -84,6 +93,11 @@ def list_recent_feedback_for_page(
     judge/human rows. Sort is stable: source ascending for the DISTINCT
     ON bucketing, then captured_at descending to pick the latest within
     each bucket.
+
+    Default ``limit=10`` because we already expect 5 distinct sources
+    (``scorer``, ``judge-newbie``, ``judge-pm``, ``judge-ia``, ``human``)
+    and future personas would push that past the old ``limit=3`` — silent
+    truncation hides signal from callers aggregating across sources.
     """
     return conn.execute(
         f"""
@@ -101,16 +115,24 @@ def list_feedback_by_run(
     conn: psycopg.Connection,
     *,
     run_id: UUID,
+    limit: int = 1000,
 ) -> list[dict[str, Any]]:
-    """Return all rows for a scorer/judge run, ordered by page_slug then source."""
+    """Return all rows for a scorer/judge run, ordered by page_slug then source.
+
+    Default ``limit=1000`` protects callers from pulling 500+ pages x N
+    findings per page into memory without opting in. Bump it explicitly if
+    a full scorer run needs reading (the CSV/markdown outputs are the
+    intended bulk-export path; this repo call is for UI inspection).
+    """
     return conn.execute(
         f"""
         SELECT {_SELECT_COLS}
           FROM page_feedback
          WHERE run_id = %s
          ORDER BY page_slug ASC, source ASC
+         LIMIT %s
         """,
-        (run_id,),
+        (run_id, limit),
     ).fetchall()
 
 
