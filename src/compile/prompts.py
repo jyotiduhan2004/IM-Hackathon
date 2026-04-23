@@ -196,6 +196,77 @@ footnotes to old prose in this pass — that's a separate migration
 (not V12-U3's scope).
 </inline_citations>
 
+<revision_style>
+**Current truth in Summary. History in Recent changes.**
+
+When a fact changes, **rewrite** the relevant sentence in the
+Summary to reflect current truth — do NOT leave the old sentence
+with a "Now this is X" tag, and do NOT strike through it. The
+Summary should read as if someone wrote the page today with full
+knowledge.
+
+Append a bullet to `## Recent changes` naming the change with a
+date and a one-line description:
+
+    ## Recent changes
+
+    - **2026-01-14** — Rolled out to 20% of GLID-ending-2 segment;
+      p95 latency now 3.8s (target 3.0s). [^msg-cda09a3d]
+    - **2026-01-06** — Initial Phase-1 launch at 10% traffic
+      [^msg-a09ed5ff].
+
+**NEVER use strikethrough.** Iteration is the point; the tombstone
+aesthetic is wrong. If old content is worth preserving but no
+longer current, wrap it in a collapsible HTML block:
+
+    <details>
+    <summary>Pre-2026-01-14 Phase-0 design (superseded)</summary>
+
+    The original design used a server-side trigger on the Realm
+    schema discovery path — this was retired when we moved to
+    async initialization in 13.6.6.
+
+    </details>
+
+This keeps the lineage intact without visually dominating the page.
+New joiners skim past it; archaeology-minded readers expand when
+they need context.
+
+**Never delete history.** If the page supersedes another concept
+entirely, set `status: superseded` and `superseded_by: [[new-page]]`
+on the old page's frontmatter — don't remove the page. Use
+`wiki_merge_pages` when you need to fold one page's content into
+another atomically.
+
+**Significant changes mint a decision or experiment page.** If the
+evidence describes a meaningful pivot ("we're rolling back because
+X"; "we scaled to 50%"; "we killed the feature"), don't bury it in
+the topic's Recent changes alone. Create a companion page under
+`wiki/decisions/` and wikilink it from the topic's Recent changes
+bullet. Most entries are NOT decisions — they're experiments.
+Frame iterative work as experiments ("tried X, it worked / didn't
+/ we thought it worked"), not as decisions.
+
+### Good vs bad Summary
+
+GOOD (current-truth, definitional):
+> "WhatsApp Buyer Feedback prompts buyers 1 hour after a
+> BL-purchase message with a 5-item rating form. Live on 20% of
+> GLID-ending-2 segment since 2026-01-14; full rollout gated on
+> p95 latency < 3s (presently 3.8s)."
+
+BAD (lineage in Summary):
+> "WhatsApp Buyer Feedback was originally launched Jan 6 with a
+> 5-item rating form. ~~Initially on 10% traffic~~ we then
+> scaled to 20% on Jan 14. Previously used a server-side trigger
+> but we moved to async."
+
+The BAD version forces every reader to reconstruct the current
+state from a history timeline. The GOOD version puts current
+state up front and hides the history under `## Recent changes`
+and collapsible blocks.
+</revision_style>
+
 <workflow>
 You operate one batch at a time. The user message lists the raw emails
 to compile. **You MUST commit to one terminal outcome per email before

@@ -98,14 +98,17 @@ def test_workflow_prompt_under_budget() -> None:
     reframe with a worked good/bad Summary pair; v12-U2 added
     `<expert_questions>` (~2.8k chars) teaching the 5W + IndiaMart-
     flavored expert questions; v12-U3 added `<inline_citations>`
-    (~2k chars) teaching inline `[^msg-*]` footnote syntax + `## Sources`
-    footnote block. The ceiling is 38500 chars — crossing it means a
-    later edit re-introduced duplication or bloat. Raise only on a
-    deliberate feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 38500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U3 baseline "
-        "was ~37k. If the growth is deliberate, raise this ceiling; otherwise "
-        "it's probably re-introduced duplication."
+    (~2k chars) teaching inline `[^msg-*]` footnote syntax + the
+    `## References` footnote block; v12-U4 added `<revision_style>`
+    (~2.8k chars) teaching the current-truth Summary + collapsible
+    archive revision style. The ceiling is 41000 chars — crossing
+    it means a later edit re-introduced duplication or bloat. Raise
+    only on a deliberate feature that genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 41000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U4 baseline "
+        "was ~40k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). If the growth "
+        "is deliberate, raise this ceiling; otherwise it's probably "
+        "re-introduced duplication."
     )
 
 
@@ -850,3 +853,102 @@ def test_inline_citations_after_concept_vs_thread() -> None:
         "<expert_questions> so the reframe + 5W checklist prime the "
         "citation teaching"
     )
+
+
+def test_revision_style_section_present() -> None:
+    """v12-U4: the prompt must carry a `<revision_style>` section
+    teaching the wiki's revision style — current-truth Summary, Recent
+    changes bullet, collapsible `<details>` archive, never strikethrough.
+    Significant changes mint decision/experiment pages. Without this the
+    agent falls back to its email-summarization priors and writes
+    strikethrough tombstones or lineage-in-Summary prose."""
+    assert "<revision_style>" in COMPILER_SYSTEM_PROMPT
+    assert "</revision_style>" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
+    end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Load-bearing phrases from the user's design instincts:
+    assert "Current truth in Summary" in block
+    assert "NEVER use strikethrough" in block
+    # Collapsible archive — literal HTML tag must appear so the model
+    # reaches for `<details>` instead of strikethrough.
+    assert "<details>" in block
+    assert "</details>" in block
+    # Recent changes bullet is the companion placement.
+    assert "Recent changes" in block
+    # Experiments, not decisions — the framing that de-escalates
+    # iterative work from "decision" to "experiment".
+    assert "experiments" in block.lower()
+    # Decision-page minting path is still available for meaningful
+    # pivots — the doc spec names "decision" pages explicitly.
+    assert "decision" in block.lower()
+    # Worked good/bad example grounds the rule concretely.
+    assert "GOOD" in block and "BAD" in block
+
+
+def test_revision_style_follows_concept_vs_thread() -> None:
+    """v12-U4: `<revision_style>` must load AFTER `<concept_vs_thread>`
+    so the concept/evidence reframe primes the agent first, then the
+    revision-style rules teach HOW to maintain that concept page over
+    time. Section order matters for how the model weights guidance."""
+    concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    revision_idx = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
+    assert concept_idx != -1 and revision_idx != -1
+    assert concept_idx < revision_idx, (
+        "<revision_style> must follow <concept_vs_thread> so the "
+        "CONCEPT/EVIDENCE reframe primes the revision-style rules"
+    )
+
+
+def test_revision_style_bans_strikethrough_literally() -> None:
+    """v12-U4: the user's design instinct is that strikethrough is
+    offensive ("tombstone aesthetic is wrong"). The prompt must ban it
+    literally — `NEVER use strikethrough` — and must name the preferred
+    alternative (collapsible `<details>` block) so the agent has a
+    concrete fix. A ban without an alternative doesn't survive first
+    contact with a rollback email."""
+    start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
+    end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "NEVER use strikethrough" in block
+    # The alternative — both the literal tag and the conceptual word so
+    # the model has two paths to pattern-match on.
+    assert "<details>" in block
+    assert "collapsible" in block.lower()
+
+
+def test_revision_style_teaches_decision_page_minting() -> None:
+    """v12-U4: significant pivots ("we rolled back", "scaled to 50%",
+    "killed the feature") must mint a companion decision page so the
+    lineage is discoverable outside the topic's Recent changes bullet.
+    The prompt must name both the trigger (meaningful pivot) and the
+    mechanic (companion page under wiki/decisions/ wikilinked from the
+    Recent changes bullet)."""
+    start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
+    end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Trigger vocabulary — "meaningful pivot" / "significant change".
+    lowered = block.lower()
+    assert "significant" in lowered or "meaningful" in lowered
+    # Mechanic — companion page under wiki/decisions/.
+    assert "wiki/decisions/" in block
+    # Wikilink from the topic's Recent changes bullet — the agent
+    # must know the link-from location.
+    assert "wikilink" in lowered
+    assert "Recent changes" in block
+
+
+def test_revision_style_teaches_experiments_not_decisions() -> None:
+    """v12-U4: per wiki_design_philosophy, most entries are experiments,
+    not decisions. The prompt must frame iterative work as experiments
+    so the agent doesn't force a "decision" frame onto every Recent
+    changes bullet. This is the non-obvious half of the
+    decision/experiment split."""
+    start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
+    end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    lowered = block.lower()
+    # The de-escalation: NOT decisions — experiments.
+    assert "experiments" in lowered
+    # The tried-X framing is the load-bearing example.
+    assert "tried" in lowered or "worked" in lowered
