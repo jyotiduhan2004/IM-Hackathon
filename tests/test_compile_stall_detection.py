@@ -175,7 +175,10 @@ def _patch_main_dependencies(
     monkeypatch.setattr(mod, "start_run", lambda **_: "run-id-test")
     monkeypatch.setattr(mod, "finish_run", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "fetch_budget", lambda: None)
-    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (["m1"], [], 0, 0))
+    # ``not_cited`` position now returns a list of raw paths (was a
+    # count pre-V12 fix-C) so the coordinator can selectively flip the
+    # terminal-decision-guard-exhausted subset. Stub matches shape.
+    monkeypatch.setattr(mod, "_mark_batch_compiled", lambda *_a, **_kw: (["m1"], [], [], 0))
     monkeypatch.setattr(mod, "_write_touch_catalog", lambda *_a, **_kw: 0)
     monkeypatch.setattr(mod, "_mark_batch_failed", lambda *_a, **_kw: 1)
     monkeypatch.setattr(mod, "_stamp_recently_modified_pages", lambda *a, **kw: (0, 0))

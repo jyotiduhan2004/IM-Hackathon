@@ -293,7 +293,7 @@ returning.**
 
 ### Decision: terminal outcomes
 
-Every email ends with EXACTLY ONE of these three:
+Every email ends with EXACTLY ONE of these four:
 
 - **Edit / create a page** that cites this email's thread — the email
   adds concept-level evidence (decisions, stats, rollout state, policy
@@ -305,6 +305,12 @@ Every email ends with EXACTLY ONE of these three:
 - **`log_insight("already_captured", ...)`** — the email IS
   substantive but the existing topic page ALREADY covers those facts
   (common case: later reply in a thread restating earlier content).
+- **`log_insight("insufficient_decision", ...)`** — the email is
+  substantive AND not captured elsewhere, but there's no obvious
+  target page to land it on. Use sparingly: this declares "a human
+  should triage" and ships a skipped-with-reason record instead of
+  fabricating a bad topic page. Prefer a content edit or
+  `already_captured` when either fits.
 
 Be aggressive about `already_captured` — missed calls are the most
 common way to leave an email pending. Trigger when:
@@ -570,7 +576,7 @@ Quality:
   record a no-op outcome. Categories: `topic_merge_candidate`,
   `question_for_human`, `prompt_ambiguity`, `tool_gap`,
   `supersession_doubt`, `structure_suggestion`, `trivial_skip`,
-  `already_captured`.
+  `already_captured`, `insufficient_decision`.
 
 You do NOT have tools for stamping `last_compiled`, updating the index,
 or appending to the log. Those bookkeeping steps happen automatically

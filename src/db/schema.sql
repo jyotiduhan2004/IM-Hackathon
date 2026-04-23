@@ -291,7 +291,13 @@ CREATE TABLE IF NOT EXISTS compile_insights (
     -- whose content is already merged into the existing topic page from a
     -- prior thread message; agent should log this rather than force an
     -- empty edit. Distinct semantics from 'trivial_skip'.
-    'already_captured'
+    'already_captured',
+    -- 'insufficient_decision' added 2026-04-23 (V12 audit fix-C) —
+    -- substantive email, NOT captured elsewhere, no obvious target
+    -- page. Terminal outcome so the email flips to `skipped` instead
+    -- of being re-queued; reason lives in `last_error` for human
+    -- triage. Pairs with terminal_decision_guard middleware.
+    'insufficient_decision'
   )),
   message text NOT NULL,
   email_path text,

@@ -18,12 +18,15 @@ from src.compile.middleware.path_autoheal import PathAutohealMiddleware
 from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
 from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
 from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
+from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+from src.compile.middleware.terminal_decision_guard import TerminalDecisionGuardMiddleware
 
 __all__ = [
     "GATE_REJECT_MESSAGE",
     "GATE_REJECT_PAT",
     "POST_WRITE_NUDGE_MESSAGE",
     "POST_WRITE_NUDGE_PAT",
+    "TERMINAL_NUDGE_MESSAGE",
     "CheckMyWorkGateMiddleware",
     "ChronologicalScopeMiddleware",
     "EditPayloadSanityMiddleware",
@@ -34,4 +37,5 @@ __all__ = [
     "ReadFileTruncationHintMiddleware",
     "SameThreadTopicGuardMiddleware",
     "SiblingDraftCheckMiddleware",
+    "TerminalDecisionGuardMiddleware",
 ]

@@ -242,7 +242,8 @@ def _load_messages_ddl() -> str:
         'supersession_doubt',
         'structure_suggestion',
         'trivial_skip',
-        'already_captured'
+        'already_captured',
+        'insufficient_decision'
       )),
       message text NOT NULL,
       email_path text,

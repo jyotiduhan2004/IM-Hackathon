@@ -1036,21 +1036,23 @@ def _mark_batch_compiled(
     compile_model: str | None = None,
     *,
     run_id: UUID | None = None,
-) -> tuple[list[str], list[str], int, int]:
+) -> tuple[list[str], list[str], list[str], int]:
     """Flip batch emails to `compiled` / `skipped` / keep-pending using
     the catalog as source of truth.
 
-    Returns ``(compiled_ids, skipped_ids, not_cited, missing)``.
+    Returns ``(compiled_ids, skipped_ids, not_cited_paths, missing)``.
       - ``compiled_ids``: message_ids with >=1 touch in a content-type
         page (``CONTENT_PAGE_TYPES``) → flipped to ``compiled``.
       - ``skipped_ids``: message_ids the agent declared trivial /
         already-captured via ``log_insight`` this run → flipped to
         ``skipped`` (terminal; never re-claimed).
-      - ``not_cited``: emails without a content touch AND without a skip
-        insight — agent likely didn't finish them; kept ``pending`` for
-        the next claim cycle.
-      - ``missing``: emails whose raw_path has no ``messages`` row at
-        all — indicates backfill drift; logged as a warning.
+      - ``not_cited_paths``: raw_paths of emails without a content
+        touch AND without a skip insight — agent likely didn't finish
+        them; kept ``pending`` for the next claim cycle. Returned as
+        paths (not counts) so the caller can selectively flip the
+        terminal-decision-guard-exhausted subset to ``skipped``.
+      - ``missing``: count of emails whose raw_path has no ``messages``
+        row at all — indicates backfill drift; logged as a warning.
 
     `compile_model` records which A/B-pool model produced this batch so
     we can later join model → outcome. `run_id` scopes the skip-insight
@@ -1083,7 +1085,7 @@ def _mark_batch_compiled(
 
     compiled_ids: list[str] = []
     skipped_ids: list[str] = []
-    not_cited = 0
+    not_cited_paths: list[str] = []
     for path, row in row_by_path.items():
         mid = str(row["message_id"])
         if mid in content_cited:
@@ -1102,8 +1104,8 @@ def _mark_batch_compiled(
             path=path,
             message_id=mid,
         )
-        not_cited += 1
-    return compiled_ids, skipped_ids, not_cited, missing
+        not_cited_paths.append(path)
+    return compiled_ids, skipped_ids, not_cited_paths, missing
 
 
 def _mark_batch_failed(batch: list, error: str, compile_model: str | None = None) -> int:
@@ -1121,6 +1123,75 @@ def _mark_batch_failed(batch: list, error: str, compile_model: str | None = None
         fail_message_compile(row["message_id"], trimmed, compile_model=compile_model)
         marked += 1
     return marked
+
+
+# Reason string stamped on ``last_error`` when the terminal-decision
+# guard ran out of nudges. Matched verbatim by operator greps; change
+# only in tandem with ``docs/audits/v12-50-compile-deep-audit-...``.
+TERMINAL_GUARD_EXHAUSTED_REASON = "agent_exited_without_terminal_decision"
+
+
+# Canonical sentinel substring for nudge detection. Must appear
+# verbatim in ``TERMINAL_NUDGE_MESSAGE`` — enforced by
+# ``test_terminal_guard_exhausted_detects_injected_nudge``. Kept as a
+# short phrase (not the full message) so typo fixes or indentation
+# tweaks to the nudge body don't silently break detection.
+_TERMINAL_NUDGE_SENTINEL = "batch is about to exit without a terminal"
+
+
+def _terminal_guard_exhausted(batch_result: dict[str, Any] | None) -> bool:
+    """True when the terminal-decision guard ran but didn't secure a commit.
+
+    The middleware (``TerminalDecisionGuardMiddleware``) injects the
+    ``TERMINAL_NUDGE_MESSAGE`` into agent state each time the agent
+    tries to exit without a content write or terminal ``log_insight``.
+    Presence of that message in the final batch result means the
+    guard fired at least once; combined with a downstream ``not_cited``
+    classification for the same email, it's the load-bearing signal
+    that the agent genuinely refused to decide.
+    """
+    if not isinstance(batch_result, dict):
+        return False
+    messages = batch_result.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and _TERMINAL_NUDGE_SENTINEL in content:
+            return True
+    return False
+
+
+def _mark_terminal_guard_exhausted_paths(
+    not_cited_paths: list[str],
+) -> list[str]:
+    """Flip ``not_cited`` paths to ``skipped`` with the guard-exhausted reason.
+
+    Returns the list of ``message_id`` strings that were actually
+    flipped (``mark_skipped`` rowcount 1). The rest — already
+    compiled/claimed, or without a ``messages`` row — are silently
+    dropped; those cases are handled by the caller's existing
+    branches.
+
+    Marking ``skipped`` (rather than ``failed``) is deliberate: the
+    claim loop filters to ``pending`` + ``failed`` and re-queues
+    anything matching. ``skipped`` is terminal, which matches the
+    spec's "investigate but do NOT auto-requeue" requirement — the
+    agent made a decision-shaped non-decision that won't resolve by
+    retry. ``last_error`` carries the distinct reason so humans can
+    grep for guard-exhausted messages separately from the
+    trivial/already-captured skips.
+    """
+    flipped: list[str] = []
+    for path in not_cited_paths:
+        row = find_by_raw_path(path)
+        if row is None:
+            continue
+        mid = str(row["message_id"])
+        rowcount = mark_skipped(mid, TERMINAL_GUARD_EXHAUSTED_REASON)
+        if rowcount:
+            flipped.append(mid)
+    return flipped
 
 
 def _group_by_thread(
@@ -1914,7 +1985,7 @@ def main(
                 # rows → message stays pending → re-claimed forever.
                 touched_content_pages = _iter_touched_content_pages(batch_start, Path(wiki_dir))
                 touches_inserted = _write_touch_catalog(touched_content_pages, list(attempts))
-                compiled_ids, skipped_ids, not_cited, missing = _mark_batch_compiled(
+                compiled_ids, skipped_ids, not_cited_paths, missing = _mark_batch_compiled(
                     batch,
                     Path(wiki_dir),
                     compile_model=batch_model,
@@ -1929,12 +2000,32 @@ def main(
                         outcome="skipped",
                         error="insight:trivial_or_already_captured",
                     )
+                # Terminal-decision guard fallback: when the guard fired
+                # (nudge present in the batch result) AND the email is
+                # still uncited, the agent refused to decide even after
+                # the bounded retry budget. Flip those to ``skipped``
+                # with a distinguished reason — preserves investigation
+                # (``last_error`` grep-able) and prevents the claim loop
+                # from re-queueing a model that already said "no". See
+                # ``docs/audits/v12-50-compile-deep-audit-2026-04-23.md``
+                # §7 Tier 2 #5 + §3 batch-45 finding.
+                guard_skipped_ids: list[str] = []
+                if not_cited_paths and _terminal_guard_exhausted(batch_result):
+                    guard_skipped_ids = _mark_terminal_guard_exhausted_paths(not_cited_paths)
+                    if guard_skipped_ids:
+                        _record_attempts_outcome(
+                            attempts,
+                            guard_skipped_ids,
+                            outcome="skipped",
+                            error=TERMINAL_GUARD_EXHAUSTED_REASON,
+                        )
+                not_cited = len(not_cited_paths) - len(guard_skipped_ids)
                 # Stamp the un-accounted-for attempts as failures so they
                 # don't sit in-flight forever. ``not_cited`` (agent didn't
                 # cite the email) and ``missing`` (backfill drift) both
                 # count as model-level failures for that batch —
                 # ``model_health_stats`` will see them.
-                accounted_for = set(compiled_ids) | set(skipped_ids)
+                accounted_for = set(compiled_ids) | set(skipped_ids) | set(guard_skipped_ids)
                 unfinished_ids = [mid for mid in attempts if mid not in accounted_for]
                 if unfinished_ids:
                     _record_attempts_outcome(
@@ -1962,6 +2053,10 @@ def main(
                     suffix_parts.append(f"{not_cited} not-yet-cited (kept pending)")
                 if skipped_ids:
                     suffix_parts.append(f"{len(skipped_ids)} skipped (trivial/already-captured)")
+                if guard_skipped_ids:
+                    suffix_parts.append(
+                        f"{len(guard_skipped_ids)} skipped (terminal-guard exhausted)"
+                    )
                 if missing:
                     suffix_parts.append(f"{missing} missing from catalog")
                 suffix_parts.append(

@@ -110,12 +110,15 @@ def test_workflow_prompt_under_budget() -> None:
     (~2.8k chars) teaching the current-truth Summary + collapsible
     archive revision style; the v12-U4 Codex-#219 follow-up added
     ~400 chars rewording the decision-page guidance to match the
-    lazy-creation contract. The ceiling is 42000 chars — crossing
-    it means a later edit re-introduced duplication or bloat. Raise
-    only on a deliberate feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 42000, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U4-followup "
-        "baseline was ~41.5k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). "
+    lazy-creation contract; the V12 audit fix-C (2026-04-23) added
+    ~400 chars teaching the `insufficient_decision` terminal category
+    + surfacing it in the tool reference. The ceiling is 42500 chars
+    — crossing it means a later edit re-introduced duplication or
+    bloat. Raise only on a deliberate feature that genuinely needs
+    more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 42500, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; V12-fix-C "
+        "baseline was ~42.3k (v12-U1 + v12-U2 + v12-U3 + v12-U4 + fix-C stacked). "
         "If the growth is deliberate, raise this ceiling; otherwise it's "
         "probably re-introduced duplication."
     )

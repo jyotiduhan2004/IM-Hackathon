@@ -128,10 +128,13 @@ def test_mark_batch_compiled_only_flips_content_touched(compile_all_module, db_c
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}, {"path": "raw/c.md"}]
-    compiled, skipped, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
+    compiled, skipped, not_cited_paths, missing = mod._mark_batch_compiled(batch, tmp_path)
     assert set(compiled) == {"m1"}
     assert skipped == []
-    assert not_cited == 2  # m2 (no touches) + m3 (person stub only)
+    # m2 (no touches) + m3 (person stub only) → pending; returned as paths
+    # so the coordinator can selectively flip the terminal-guard-exhausted
+    # subset to ``skipped``.
+    assert set(not_cited_paths) == {"raw/b.md", "raw/c.md"}
     assert missing == 0
     assert _state(db_conn, "m1") == "compiled"
     assert _state(db_conn, "m2") == "pending"
@@ -147,10 +150,10 @@ def test_mark_batch_compiled_reports_missing(compile_all_module, db_conn, tmp_pa
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/not-in-db.md"}]
-    compiled, skipped, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path)
+    compiled, skipped, not_cited_paths, missing = mod._mark_batch_compiled(batch, tmp_path)
     assert compiled == ["m1"]
     assert skipped == []
-    assert not_cited == 0
+    assert not_cited_paths == []
     assert missing == 1
     assert _state(db_conn, "m1") == "compiled"
 
@@ -163,10 +166,10 @@ def test_mark_batch_compiled_all_uncited_keeps_all_pending(compile_all_module, d
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}, {"path": "raw/b.md"}]
-    compiled, skipped, not_cited, _missing = mod._mark_batch_compiled(batch, tmp_path)
+    compiled, skipped, not_cited_paths, _missing = mod._mark_batch_compiled(batch, tmp_path)
     assert compiled == []
     assert skipped == []
-    assert not_cited == 2
+    assert set(not_cited_paths) == {"raw/a.md", "raw/b.md"}
     assert _state(db_conn, "m1") == "pending"
     assert _state(db_conn, "m2") == "pending"
 
@@ -183,10 +186,12 @@ def test_mark_batch_compiled_skips_on_trivial_insight(compile_all_module, db_con
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}]
-    compiled, skipped, not_cited, missing = mod._mark_batch_compiled(batch, tmp_path, run_id=run_id)
+    compiled, skipped, not_cited_paths, missing = mod._mark_batch_compiled(
+        batch, tmp_path, run_id=run_id
+    )
     assert compiled == []
     assert skipped == ["m1"]
-    assert not_cited == 0
+    assert not_cited_paths == []
     assert missing == 0
     assert _state(db_conn, "m1") == "skipped"
 
@@ -206,12 +211,12 @@ def test_mark_batch_compiled_skip_insight_from_other_run_ignored(
     db_conn.commit()
 
     batch = [{"path": "raw/a.md"}]
-    compiled, skipped, not_cited, _missing = mod._mark_batch_compiled(
+    compiled, skipped, not_cited_paths, _missing = mod._mark_batch_compiled(
         batch, tmp_path, run_id=current_run
     )
     assert compiled == []
     assert skipped == []  # the prior-run insight does not reach across runs
-    assert not_cited == 1
+    assert not_cited_paths == ["raw/a.md"]
     assert _state(db_conn, "m1") == "pending"
 
 
@@ -308,3 +313,88 @@ def test_collect_content_cited_message_ids_filters_by_page_type(compile_all_modu
 
     cited = mod._collect_content_cited_message_ids(["m1", "m2"])
     assert cited == {"m1"}  # m2's person-stub touch is filtered out
+
+
+# ---------------------------------------------------------------------------
+# Terminal-decision guard fallback helpers (V12 audit fix-C).
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_guard_sentinel_is_present_in_nudge_message(compile_all_module) -> None:
+    """The sentinel substring must appear in the middleware's canonical nudge.
+
+    The coordinator scans batch_result messages for the sentinel to
+    decide whether to flip not-cited paths to ``skipped``. If the
+    middleware's wording drifts such that the sentinel is gone, this
+    test fires — without it a wording tweak silently breaks the
+    coordinator fallback.
+    """
+    from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+
+    assert compile_all_module._TERMINAL_NUDGE_SENTINEL in TERMINAL_NUDGE_MESSAGE
+
+
+def test_terminal_guard_exhausted_detects_injected_nudge(compile_all_module) -> None:
+    """``_terminal_guard_exhausted`` returns True when the nudge is in messages."""
+    from langchain_core.messages import HumanMessage
+    from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+
+    mod = compile_all_module
+    result = {"messages": [HumanMessage(content=TERMINAL_NUDGE_MESSAGE)]}
+    assert mod._terminal_guard_exhausted(result) is True
+
+
+def test_terminal_guard_exhausted_false_on_clean_result(compile_all_module) -> None:
+    """Without the sentinel, the guard-exhausted check returns False."""
+    from langchain_core.messages import AIMessage
+
+    mod = compile_all_module
+    assert mod._terminal_guard_exhausted({"messages": [AIMessage(content="done")]}) is False
+    assert mod._terminal_guard_exhausted({"messages": []}) is False
+    assert mod._terminal_guard_exhausted(None) is False
+    assert mod._terminal_guard_exhausted({}) is False
+
+
+def test_mark_terminal_guard_exhausted_paths_flips_to_skipped(compile_all_module, db_conn) -> None:
+    """Not-cited paths flip to ``skipped`` with the guard-exhausted reason."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    _insert_message(db_conn, message_id="m2", raw_path="raw/b.md")
+    db_conn.commit()
+
+    flipped = mod._mark_terminal_guard_exhausted_paths(["raw/a.md", "raw/b.md"])
+
+    assert set(flipped) == {"m1", "m2"}
+    assert _state(db_conn, "m1") == "skipped"
+    assert _state(db_conn, "m2") == "skipped"
+    row = db_conn.execute("SELECT last_error FROM messages WHERE message_id = 'm1'").fetchone()
+    assert row["last_error"] == mod.TERMINAL_GUARD_EXHAUSTED_REASON
+
+
+def test_mark_terminal_guard_exhausted_paths_skips_missing_rows(
+    compile_all_module, db_conn
+) -> None:
+    """Paths without a ``messages`` row are silently dropped (no crash)."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    db_conn.commit()
+
+    # raw/missing.md has no messages row — helper must not crash.
+    flipped = mod._mark_terminal_guard_exhausted_paths(["raw/missing.md", "raw/a.md"])
+
+    assert flipped == ["m1"]
+    assert _state(db_conn, "m1") == "skipped"
+
+
+def test_mark_terminal_guard_exhausted_paths_preserves_compiled(
+    compile_all_module, db_conn
+) -> None:
+    """``mark_skipped`` is a no-op on already-compiled rows (state guard)."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md", state="compiled")
+    db_conn.commit()
+
+    flipped = mod._mark_terminal_guard_exhausted_paths(["raw/a.md"])
+
+    assert flipped == []  # compiled rows don't flip
+    assert _state(db_conn, "m1") == "compiled"

@@ -1553,6 +1553,13 @@ _VALID_INSIGHT_CATEGORIES = frozenset(
         "structure_suggestion",
         "trivial_skip",
         "already_captured",
+        # V12 audit fix-C (2026-04-23): escape hatch for the
+        # "substantive, not captured, no obvious target page" case the
+        # terminal-decision guard surfaced. Before this category the
+        # agent either fabricated a topic page or exited silently; now
+        # it can declare "this needs human triage" and the coordinator
+        # records the skip with a distinct reason humans can grep.
+        "insufficient_decision",
     }
 )
 
@@ -1560,7 +1567,10 @@ _VALID_INSIGHT_CATEGORIES = frozenset(
 # For these the insight MUST name the specific raw path it applies to —
 # otherwise the coordinator can't correlate the insight back to a message
 # and the decision is silently lost. See Cycle 4 Case #2 audit.
-_SKIP_INSIGHT_CATEGORIES = frozenset({"trivial_skip", "already_captured"})
+# ``insufficient_decision`` joins the skip set so the batch doesn't sit
+# pending waiting for a re-queue that can only produce the same
+# "no obvious target" answer — see terminal_decision_guard middleware.
+_SKIP_INSIGHT_CATEGORIES = frozenset({"trivial_skip", "already_captured", "insufficient_decision"})
 
 
 @tool
@@ -1580,10 +1590,12 @@ def log_insight(
     Args:
         category: One of 'topic_merge_candidate', 'question_for_human',
             'prompt_ambiguity', 'tool_gap', 'supersession_doubt',
-            'structure_suggestion', 'trivial_skip', or 'already_captured'.
+            'structure_suggestion', 'trivial_skip', 'already_captured',
+            or 'insufficient_decision'.
 
-            Note the semantic split between the two "no page delta"
-            categories:
+            Note the semantic split between the three "no page delta"
+            categories (all three mark the email ``skipped`` in the
+            coordinator):
 
             - ``trivial_skip``: the email is **not substantive** — e.g.
               a one-line confirmation ("Yes, please"), out-of-office
@@ -1595,6 +1607,12 @@ def log_insight(
               a prior message in the same thread was already compiled.
               No new page delta needed, but the signal is different
               from ``trivial_skip`` and we want to preserve it.
+            - ``insufficient_decision``: the email is substantive AND
+              not captured elsewhere, but there's no obvious target
+              page to land it on. Use sparingly — this means a human
+              needs to triage. The terminal-decision guard accepts
+              this as a commitment so the batch can exit cleanly
+              instead of looping.
         message: 1-2 sentence observation.
         email_path: Raw email path this insight is about (e.g.
             ``raw/2026-04-11_subject_abc.md``). **Required** for
@@ -2355,6 +2373,7 @@ def create_compiler(
     # the latter is the right tool. Both functions remain importable for
     # coordinator + script use.
     from src.compile.middleware import CheckMyWorkGateMiddleware
+    from src.compile.middleware import TerminalDecisionGuardMiddleware
 
     return create_deep_agent(
         model=model,
@@ -2388,6 +2407,15 @@ def create_compiler(
             # avoid false positives that erode agent trust.
             SiblingDraftCheckMiddleware(),
             CheckMyWorkGateMiddleware(),
+            # V12 audit fix-C (2026-04-23): block batch exit without a
+            # terminal commitment. Batch 45 (kimi-k2.6) completed with
+            # `turns=6 tools=8 writes=0` and no log_insight — email
+            # stayed pending, got re-queued, agent paid same cost twice.
+            # This guard injects a nudge before END and loops the agent
+            # back to the model; after `_MAX_NUDGES` the coordinator's
+            # `mark_skipped("agent_exited_without_terminal_decision")`
+            # fallback kicks in.
+            TerminalDecisionGuardMiddleware(),
             # Glob narrowed 2026-04-18 (v10-U5): 24.5% of glob calls were
             # `**/<slug>.md` slug lookups timing out at 20s. Reject those
             # with a pointer to resolve_page; legitimate enumeration
