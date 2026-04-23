@@ -96,7 +96,15 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
     WHEN NOT TO USE:
     - You already have the exact slug — use `read_file` directly.
     - You want to browse by category — use `list_wiki_pages`.
-    - You need free-text body search — use `grep`.
+    - You need to find every page that literally contains string X — use `grep`.
+      This tool ranks by topical relevance, not substring match.
+    - You want a person by email — `create_entities([{email, ...}])` is
+      the canonical path and will find them deterministically.
+
+    Candidates come back relevance-ordered. Many candidates include a
+    `snippet` showing the line-numbered excerpt that matched — use it
+    to decide whether to read the full page, or pick a different
+    candidate, without a follow-up `read_file`.
 
     Args:
         query: Slug, title, or email. The tool auto-detects by shape and
@@ -105,13 +113,18 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
               - `mesh_pg` → `mesh-pg`
         limit: Max candidates to return on a miss (default 10, capped at 10).
 
-    Returns (hit):
+    Returns (hit — high-confidence exact match):
         {"exists": True, "slug", "title", "page_type", "status",
-         "confidence", "why_matched", "auto_corrected_from",
-         "auto_corrected_to"}.
+         "confidence", "why_matched", "retriever": "exact",
+         "snippet": "..." (optional, when semantic retriever also found
+         the page), "auto_corrected_from", "auto_corrected_to"}.
 
-    Returns (miss):
-        {"exists": False, "candidates": [...up to `limit` close matches...],
+    Returns (miss — relevance-ordered candidates for you to pick from):
+        {"exists": False,
+         "candidates": [{"slug", "title", "page_type", "status",
+                         "score" (optional, 0-1), "snippet" (optional)},
+                        ...up to `limit`],
+         "retriever": "semantic" | "fuzzy",
          "auto_corrected_from", "auto_corrected_to"}.
 
     Returns (empty catalog):
@@ -152,19 +165,13 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
             "catalog_counts": catalog_counts,
         }
 
-    lookups: list[tuple[str, dict[str, str]]] = []
+    # Email queries take the SQL fast path because the semantic
+    # retriever doesn't index person pages (see `create_entities` for
+    # the canonical people path). Everything else runs semantic-first
+    # with an exact-match boost that wins when the query literally
+    # matches a slug/title the catalog knows.
     if "@" in q:
-        lookups.append(("email", {"canonical_user_email": q.lower()}))
-    if " " not in q:
-        lookups.append(("slug", {"slug": q.lower()}))
-    lookups.append(("title", {"title": q}))
-
-    seen_kinds: set[str] = set()
-    for kind, kwargs in lookups:
-        if kind in seen_kinds:
-            continue
-        seen_kinds.add(kind)
-        row = lookup_page(**kwargs)
+        row = lookup_page(canonical_user_email=q.lower())
         if row is not None:
             response: dict[str, Any] = {
                 "exists": True,
@@ -173,12 +180,107 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
                 "page_type": row["page_type"],
                 "status": row["status"],
                 "confidence": float(row["confidence"]),
-                "why_matched": kind,
+                "why_matched": "email",
+                "retriever": "exact",
             }
             if original_if_rewritten is not None:
                 response["auto_corrected_from"] = original_if_rewritten
                 response["auto_corrected_to"] = q
             return response
+
+    import structlog
+
+    from src.compile.tools.qmd_client import is_enabled as semantic_enabled
+    from src.compile.tools.qmd_client import query_qmd
+
+    _logger = structlog.get_logger(__name__)
+
+    semantic_candidates: list[dict[str, Any]] = []
+    snippet_by_slug: dict[str, str] = {}
+    if semantic_enabled():
+        semantic_result = query_qmd(q, limit=limit)
+        # Latency + error land on the structured log so the scorecard
+        # can trend them without leaking operational telemetry into the
+        # LLM-visible tool response. Langfuse already picks up structlog
+        # events in the current scope.
+        _logger.info(
+            "resolve_page.semantic",
+            query=q,
+            latency_s=semantic_result.get("latency_s"),
+            error=semantic_result.get("error"),
+            candidate_count=len(semantic_result.get("candidates") or []),
+        )
+        if not semantic_result.get("error"):
+            for cand in semantic_result.get("candidates") or []:
+                slug = cand.get("slug")
+                if not isinstance(slug, str) or not slug:
+                    continue
+                db_row = lookup_page(slug=slug.lower())
+                if db_row is None:
+                    # Semantic index knows a page the catalog doesn't —
+                    # skip rather than fabricate metadata. Happens if
+                    # the index is ahead of post-batch catalog sync.
+                    continue
+                semantic_candidates.append(
+                    {
+                        "slug": db_row["slug"],
+                        "title": db_row["title"],
+                        "page_type": db_row["page_type"],
+                        "status": db_row["status"],
+                        "score": cand.get("score"),
+                        "snippet": cand.get("snippet") or "",
+                    }
+                )
+                snippet_by_slug[db_row["slug"]] = cand.get("snippet") or ""
+
+    # Exact-match boost: if the normalised query literally matches a
+    # slug or title in the catalog, that page wins with high confidence —
+    # regardless of where semantic ranked it. Carry the semantic
+    # snippet through when the semantic retriever also surfaced the
+    # page, so the agent still sees the matching body excerpt.
+    exact_row = None
+    exact_why: str | None = None
+    if " " not in q:
+        exact_row = lookup_page(slug=q.lower())
+        if exact_row is not None:
+            exact_why = "slug"
+    if exact_row is None:
+        exact_row = lookup_page(title=q)
+        if exact_row is not None:
+            exact_why = "title"
+
+    if exact_row is not None:
+        response = {
+            "exists": True,
+            "slug": exact_row["slug"],
+            "title": exact_row["title"],
+            "page_type": exact_row["page_type"],
+            "status": exact_row["status"],
+            "confidence": float(exact_row["confidence"]),
+            "why_matched": exact_why,
+            "retriever": "exact",
+        }
+        snippet = snippet_by_slug.get(exact_row["slug"])
+        if snippet:
+            response["snippet"] = snippet
+        if original_if_rewritten is not None:
+            response["auto_corrected_from"] = original_if_rewritten
+            response["auto_corrected_to"] = q
+        return response
+
+    # No exact match. If semantic retriever produced candidates, return
+    # them relevance-ordered with snippets. If semantic was off or
+    # unavailable, degrade to the ILIKE fuzzy search (`fuzzy`).
+    if semantic_candidates:
+        response = {
+            "exists": False,
+            "candidates": semantic_candidates[:limit],
+            "retriever": "semantic",
+        }
+        if original_if_rewritten is not None:
+            response["auto_corrected_from"] = original_if_rewritten
+            response["auto_corrected_to"] = q
+        return response
 
     candidates = search_pages(q, limit=limit)
     response = {
@@ -192,6 +294,7 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
             }
             for c in candidates
         ],
+        "retriever": "fuzzy",
     }
     if original_if_rewritten is not None:
         response["auto_corrected_from"] = original_if_rewritten
