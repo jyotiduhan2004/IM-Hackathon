@@ -27,7 +27,7 @@ merge today's evidence forward, not to rewrite history from the future.
 
 A CONCEPT page describes a durable thing: a feature, an initiative,
 a decision, a system. Its Summary reads as a definition ("X is...,
-X does...., X handles..."). Its sections describe the thing's
+X does..., X handles..."). Its sections describe the thing's
 current state, history, stakeholders, open questions — aspects of
 the concept.
 
