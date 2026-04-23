@@ -41,6 +41,13 @@ def test_tagged_sections_present() -> None:
     required = (
         "<background>",
         "<chronological_scope>",
+        # V12 sections (U1-U4) — complete canonical inventory so a later
+        # rename or accidental deletion fails this test, not just the
+        # more-specific per-section tests.
+        "<concept_vs_thread>",
+        "<expert_questions>",
+        "<inline_citations>",
+        "<revision_style>",
         "<workflow>",
         "<page_types>",
         "<section_titles>",
