@@ -101,12 +101,12 @@ def test_workflow_prompt_under_budget() -> None:
     (~2k chars) teaching inline `[^msg-*]` footnote syntax + the
     `## References` footnote block; v12-U4 added `<revision_style>`
     (~2.8k chars) teaching the current-truth Summary + collapsible
-    archive revision style. The ceiling is 41000 chars — crossing
+    archive revision style. The ceiling is 41500 chars — crossing
     it means a later edit re-introduced duplication or bloat. Raise
     only on a deliberate feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 41000, (
+    assert len(COMPILER_SYSTEM_PROMPT) < 41500, (
         f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U4 baseline "
-        "was ~40k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). If the growth "
+        "was ~41.1k (v12-U1 + v12-U2 + v12-U3 + v12-U4 stacked). If the growth "
         "is deliberate, raise this ceiling; otherwise it's probably "
         "re-introduced duplication."
     )
@@ -886,17 +886,21 @@ def test_revision_style_section_present() -> None:
     assert "GOOD" in block and "BAD" in block
 
 
-def test_revision_style_follows_concept_vs_thread() -> None:
+def test_revision_style_between_concept_and_workflow() -> None:
     """v12-U4: `<revision_style>` must load AFTER `<concept_vs_thread>`
-    so the concept/evidence reframe primes the agent first, then the
-    revision-style rules teach HOW to maintain that concept page over
-    time. Section order matters for how the model weights guidance."""
+    (so the concept/evidence reframe primes the agent first) and
+    BEFORE `<workflow>` (so the revision discipline is loaded before
+    the per-batch step ladder runs). Claude review on PR #219 caught
+    that the original test only checked the lower bound, matching the
+    two-bound pattern used by `test_expert_questions_between_concept_and_workflow`."""
     concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
     revision_idx = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
-    assert concept_idx != -1 and revision_idx != -1
-    assert concept_idx < revision_idx, (
-        "<revision_style> must follow <concept_vs_thread> so the "
-        "CONCEPT/EVIDENCE reframe primes the revision-style rules"
+    workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    assert concept_idx != -1 and revision_idx != -1 and workflow_idx != -1
+    assert concept_idx < revision_idx < workflow_idx, (
+        "<revision_style> must load after <concept_vs_thread> and "
+        "before <workflow> so the CONCEPT/EVIDENCE reframe primes it "
+        "and the revision discipline is loaded before the per-batch steps"
     )
 
 
