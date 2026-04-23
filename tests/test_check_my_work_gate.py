@@ -13,10 +13,13 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from src.compile.middleware.check_my_work_gate import GATE_REJECT_MESSAGE
 from src.compile.middleware.check_my_work_gate import GATE_REJECT_PAT
+from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_MESSAGE
+from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_PAT
 from src.compile.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
 
 # ---------------------------------------------------------------------------
@@ -252,6 +255,167 @@ async def test_awrap_tool_call_passes_through_after_write() -> None:
 
     assert isinstance(result, ToolMessage)
     assert result.status != "error"
+
+
+# ---------------------------------------------------------------------------
+# Post-write requirement (after_model nudge)
+# ---------------------------------------------------------------------------
+
+
+def _state_with_final_ai(content: str = "done") -> dict[str, Any]:
+    """Build an AgentState snapshot where the agent just issued an empty AIMessage.
+
+    An empty AIMessage = no tool calls, which is the classic exit
+    signal in the langchain agent loop.
+    """
+    return {"messages": [AIMessage(content=content)]}
+
+
+def _state_still_looping() -> dict[str, Any]:
+    """Build an AgentState snapshot mid-loop (agent still calling tools)."""
+    ai = AIMessage(
+        content="calling check",
+        tool_calls=[
+            {
+                "name": "check_my_work",
+                "args": {"raw_email_path": "raw/foo.md"},
+                "id": "tc_1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    return {"messages": [ai]}
+
+
+def test_post_write_requirement_nudges_on_exit_without_check() -> None:
+    """Agent writes content, then tries to exit without check_my_work → nudge."""
+    mw = CheckMyWorkGateMiddleware()
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    update = mw.after_model(_state_with_final_ai(), MagicMock())
+
+    assert update is not None
+    assert update["jump_to"] == "model"
+    messages = update["messages"]
+    assert len(messages) == 1
+    injected = messages[0]
+    assert isinstance(injected, AIMessage)
+    assert POST_WRITE_NUDGE_PAT.search(str(injected.content))
+
+
+def test_post_write_requirement_cleared_by_successful_check() -> None:
+    """Write, then successful check_my_work, then exit → no nudge."""
+    mw = CheckMyWorkGateMiddleware()
+
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"}, "call_2")
+    mw.wrap_tool_call(check_req, _critique_handler())
+
+    update = mw.after_model(_state_with_final_ai(), MagicMock())
+
+    assert update is None
+
+
+def test_post_write_requirement_no_nudge_when_no_writes() -> None:
+    """Pure trivial_skip batch (no content writes) → no nudge on exit."""
+    mw = CheckMyWorkGateMiddleware()
+    # Simulate `log_insight("trivial_skip", ...)` — not a content
+    # write, doesn't flip the pending flag.
+    insight_req = _make_request("log_insight", {"kind": "trivial_skip"})
+    mw.wrap_tool_call(
+        insight_req,
+        lambda r: ToolMessage(content='{"ok": true}', tool_call_id=r.tool_call["id"]),
+    )
+
+    update = mw.after_model(_state_with_final_ai(), MagicMock())
+
+    assert update is None
+
+
+def test_post_write_requirement_no_nudge_mid_loop() -> None:
+    """Agent wrote content but is still issuing tool calls → don't nudge yet."""
+    mw = CheckMyWorkGateMiddleware()
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    # Still calling tools — the agent hasn't tried to exit yet.
+    update = mw.after_model(_state_still_looping(), MagicMock())
+
+    assert update is None
+
+
+def test_post_write_requirement_does_not_double_nudge() -> None:
+    """Two consecutive exit attempts without an intervening write → nudge once."""
+    mw = CheckMyWorkGateMiddleware()
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    first = mw.after_model(_state_with_final_ai(), MagicMock())
+    assert first is not None
+
+    # Agent ignores the nudge and exits again — don't keep injecting.
+    # Downstream guards (PR C) catch the repeat refusal.
+    second = mw.after_model(_state_with_final_ai(), MagicMock())
+    assert second is None
+
+
+def test_post_write_requirement_rearms_after_fresh_write() -> None:
+    """Nudge once, agent writes more content → nudge again on next exit attempt."""
+    mw = CheckMyWorkGateMiddleware()
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+    assert mw.after_model(_state_with_final_ai(), MagicMock()) is not None
+
+    # Agent does another write without ever calling check_my_work — a
+    # fresh unchecked write should re-arm the nudge.
+    write_req2 = _make_request("edit_file", {"file_path": "wiki/topics/bar.md"}, "call_3")
+    mw.wrap_tool_call(write_req2, _success_handler("edit_file"))
+
+    update = mw.after_model(_state_with_final_ai(), MagicMock())
+    assert update is not None
+
+
+def test_post_write_requirement_failed_check_does_not_clear() -> None:
+    """Write, then error-status check_my_work result → still nudge on exit."""
+    mw = CheckMyWorkGateMiddleware()
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    check_req = _make_request("check_my_work", {"raw_email_path": "raw/foo.md"}, "call_2")
+    mw.wrap_tool_call(check_req, _error_handler("check_my_work"))
+
+    update = mw.after_model(_state_with_final_ai(), MagicMock())
+    assert update is not None
+
+
+@pytest.mark.asyncio
+async def test_post_write_requirement_async_path() -> None:
+    """Async `aafter_model` mirrors sync behavior."""
+    mw = CheckMyWorkGateMiddleware()
+
+    async def async_success(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content='{"ok": true}',
+            tool_call_id=request.tool_call["id"],
+            name="write_file",
+        )
+
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    await mw.awrap_tool_call(write_req, async_success)
+
+    update = await mw.aafter_model(_state_with_final_ai(), MagicMock())
+
+    assert update is not None
+    assert update["jump_to"] == "model"
+    assert POST_WRITE_NUDGE_PAT.search(str(update["messages"][0].content))
+
+
+def test_post_write_nudge_pattern_matches_canonical_message() -> None:
+    """Shared regex matches the middleware's own nudge message."""
+    assert POST_WRITE_NUDGE_PAT.search(POST_WRITE_NUDGE_MESSAGE) is not None
 
 
 # ---------------------------------------------------------------------------

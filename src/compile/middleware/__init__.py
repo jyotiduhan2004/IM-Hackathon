@@ -6,6 +6,8 @@ rather than replacing defaults. See `compiler.create_compiler` for wiring.
 
 from src.compile.middleware.check_my_work_gate import GATE_REJECT_MESSAGE
 from src.compile.middleware.check_my_work_gate import GATE_REJECT_PAT
+from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_MESSAGE
+from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_PAT
 from src.compile.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
 from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
 from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
@@ -20,6 +22,8 @@ from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddlewa
 __all__ = [
     "GATE_REJECT_MESSAGE",
     "GATE_REJECT_PAT",
+    "POST_WRITE_NUDGE_MESSAGE",
+    "POST_WRITE_NUDGE_PAT",
     "CheckMyWorkGateMiddleware",
     "ChronologicalScopeMiddleware",
     "EditPayloadSanityMiddleware",
