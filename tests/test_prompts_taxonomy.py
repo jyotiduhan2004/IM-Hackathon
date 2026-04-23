@@ -822,13 +822,17 @@ def test_inline_citations_section_present() -> None:
 
 def test_inline_citations_after_concept_vs_thread() -> None:
     """v12-U3: `<inline_citations>` loads AFTER `<concept_vs_thread>`
-    so the concept/evidence reframe primes the agent before it learns
-    the claim-level citation mechanics. Section order matters for how
-    the model weights guidance."""
+    AND `<expert_questions>` so the concept/evidence reframe and 5W
+    checklist prime the agent before it learns claim-level citation
+    mechanics. Guards against a future edit that slips citations
+    between the reframe and the question list — Claude review caught
+    this gap on PR #218."""
     concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    expert_idx = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
     citations_idx = COMPILER_SYSTEM_PROMPT.find("<inline_citations>")
-    assert concept_idx != -1 and citations_idx != -1
-    assert concept_idx < citations_idx, (
-        "<inline_citations> must load after <concept_vs_thread> so the "
-        "concept-vs-thread reframe primes the citation teaching"
+    assert concept_idx != -1 and expert_idx != -1 and citations_idx != -1
+    assert concept_idx < expert_idx < citations_idx, (
+        "<inline_citations> must load after <concept_vs_thread> and "
+        "<expert_questions> so the reframe + 5W checklist prime the "
+        "citation teaching"
     )
