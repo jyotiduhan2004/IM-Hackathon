@@ -13,7 +13,12 @@ needs.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.compile.prompts import COMPILER_SYSTEM_PROMPT
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_COMPILE_ALL_SRC = (_REPO_ROOT / "scripts" / "compile_all.py").read_text(encoding="utf-8")
 
 
 def _workflow_block() -> str:
@@ -88,13 +93,15 @@ def test_decision_guidance_lives_in_workflow() -> None:
 def test_workflow_prompt_under_budget() -> None:
     """Informational token-budget guard. v10-U4 merged two ~1700-token
     sections into one; v11-U7 reframed Required→Suggested H2s and added
-    thread-subject anti-pattern call-outs (~200 chars). The ceiling is
-    30500 chars — crossing it means a later edit re-introduced
-    duplication or bloat. Raise only on a deliberate feature that
-    genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 30500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v11-U7 baseline "
-        "was ~30k. If the growth is deliberate, raise this ceiling; otherwise "
+    thread-subject anti-pattern call-outs (~200 chars); v12-U1 added
+    `<concept_vs_thread>` (~2.5k chars) teaching the concept-vs-thread
+    reframe with a worked good/bad Summary pair. The ceiling is 34000
+    chars — crossing it means a later edit re-introduced duplication or
+    bloat. Raise only on a deliberate feature that genuinely needs more
+    space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 34000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U1 baseline "
+        "was ~33k. If the growth is deliberate, raise this ceiling; otherwise "
         "it's probably re-introduced duplication."
     )
 
@@ -649,4 +656,93 @@ def test_domain_frontmatter_teaches_multi_value_form() -> None:
     assert "domains: [" in COMPILER_SYSTEM_PROMPT, (
         "prompt must teach the `domains: [a, b]` multi-value form "
         "so topics spanning two domains render on both hubs"
+    )
+
+
+def test_concept_vs_thread_section_present() -> None:
+    """v12-U1: the prompt must carry a `<concept_vs_thread>` section
+    teaching the reframe — page is a CONCEPT, emails are EVIDENCE.
+    Without this section the agent falls back to email-summarization
+    priors and the Summary line reads like a thread intro. The section
+    must name both the concept/evidence split and the anti-pattern
+    (thread-subject H2s, strikethrough) concretely — abstract rules
+    without examples don't survive first contact with real batches."""
+    assert "<concept_vs_thread>" in COMPILER_SYSTEM_PROMPT
+    assert "</concept_vs_thread>" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    end = COMPILER_SYSTEM_PROMPT.find("</concept_vs_thread>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Core reframe vocabulary present.
+    assert "CONCEPT" in block and "EVIDENCE" in block
+    # Anti-pattern named by example so the model recognizes it.
+    assert "Launch Announcement" in block or "Final Decision" in block
+    # Collapsible-archive preference (not strikethrough) is called out.
+    lowered = block.lower()
+    assert "strikethrough" in lowered
+    assert "<details>" in block or "collapsible" in lowered
+    # Worked good/bad example grounds the rule.
+    assert "GOOD" in block and "BAD" in block
+
+
+def test_concept_vs_thread_precedes_workflow() -> None:
+    """v12-U1: `<concept_vs_thread>` must load before `<workflow>` so
+    the reframe primes the agent before it reads the per-step workflow
+    ladder. Section order matters for how the model weights guidance."""
+    concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
+    assert concept_idx != -1 and workflow_idx != -1
+    assert concept_idx < workflow_idx, (
+        "<concept_vs_thread> must precede <workflow> so the CONCEPT vs "
+        "EVIDENCE reframe is loaded before the workflow steps"
+    )
+
+
+def test_topic_page_type_teaches_concept_not_thread() -> None:
+    """v12-U1: the `<page_types>` topic description must explicitly say
+    the page is about the concept, not the emails, and must call out
+    thread-subject H2s (`## Launch Announcement`, `## Bug Report`,
+    `## Testing Results`, `## Final Decision`) by name as the
+    anti-pattern. Without the explicit listing the model defaults to
+    templating H2s off the thread Subject line."""
+    start = COMPILER_SYSTEM_PROMPT.find("<page_types>")
+    end = COMPILER_SYSTEM_PROMPT.find("</page_types>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Concept-not-thread framing on the topic bullet itself.
+    assert "about the concept" in block
+    # All four thread-subject H2 anti-patterns named in the topic bullet.
+    for antipattern in (
+        "## Launch Announcement",
+        "## Bug Report",
+        "## Testing Results",
+        "## Final Decision",
+    ):
+        assert antipattern in block, (
+            f"topic page_type must name `{antipattern}` as an anti-pattern H2"
+        )
+
+
+def test_per_batch_instruction_uses_concept_frame() -> None:
+    """v12-U1: the per-batch instruction template in
+    `scripts/compile_all.py` must carry the CONCEPT/EVIDENCE reframe.
+    The old "Compile the following N uncompiled raw emails" frame
+    biased the agent toward email-summarization; the V12 frame asks
+    the agent to update/create the CONCEPT page the emails are
+    evidence for. We assert on the source text because the template
+    is inlined in `main()` — there is no extractable helper."""
+    # The new CONCEPT framing must be present, case-sensitive.
+    assert "CONCEPT page" in _COMPILE_ALL_SRC, (
+        "per-batch instruction must use the `CONCEPT page` framing per v12-U1"
+    )
+    # Evidence-vs-concept split called out explicitly.
+    assert "EVIDENCE" in _COMPILE_ALL_SRC
+
+
+def test_per_batch_instruction_drops_old_framing() -> None:
+    """v12-U1: the "Compile the following …" opener biased the agent
+    toward treating the batch as an email-summarization task. The new
+    instruction reframes as "update or create the CONCEPT page". Guard
+    against a revert."""
+    assert "Compile the following" not in _COMPILE_ALL_SRC, (
+        "per-batch instruction still uses the pre-v12 `Compile the "
+        "following …` opener; the v12-U1 reframe should have replaced it"
     )

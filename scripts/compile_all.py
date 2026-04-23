@@ -1741,12 +1741,29 @@ def main(
             earliest = batch[0].get("date", "")[:10] if batch else ""
 
             instruction = (
-                f"Compile the following {len(batch)} uncompiled raw emails from one "
-                f"thread (thread_id={thread_id}, earliest={earliest}) into wiki pages. "
-                f"Process them chronologically as a conversation. When multiple replies "
-                f"build on the same decision/policy/feature, merge them into a single "
-                f"coherent wiki page rather than one page per message. "
-                f"Focus on writing the right wiki content.\n\n"
+                f"Your job is to update or create the CONCEPT page that best "
+                f"describes the subject of these {len(batch)} emails from one "
+                f"thread (thread_id={thread_id}, earliest={earliest}). The emails "
+                f"are EVIDENCE — what was announced, what was built, what was "
+                f"tested, what was decided, what went wrong, who asked what. "
+                f"The wiki page is a CONCEPT — a durable description of the "
+                f"feature / initiative / decision / system itself, independent "
+                f"of the thread that surfaced it. Ask yourself before writing: "
+                f'"If the emails went away tomorrow, would this page still '
+                f'stand as a useful description of the thing?" If the Summary '
+                f"reads like a thread intro (`This thread discusses...`, `We "
+                f"announced...`, `The team decided...`), rewrite it as a "
+                f"concept definition (`<Thing> is <description>. It <does X> "
+                f"for <who>`). When the concept page already exists, UPDATE it: "
+                f"absorb new evidence into the current-truth Summary, append a "
+                f"`Recent changes` bullet, and add `Open questions` if the "
+                f"emails raise unresolved decisions. Never dump the email "
+                f"thread verbatim. Never add `## Launch Announcement` / "
+                f"`## Bug Report` / `## Testing Results` / `## Final Decision` "
+                f"as H2 headings — those describe one email, not a concept. "
+                f"Process the emails chronologically as a conversation; when "
+                f"multiple replies build on the same concept, merge them into "
+                f"a single coherent page rather than one page per message.\n\n"
                 f"Files to compile:\n{batch_files}"
             )
 

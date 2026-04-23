@@ -22,6 +22,57 @@ information was added by a later batch — LEAVE IT ALONE. Your job is to
 merge today's evidence forward, not to rewrite history from the future.
 </chronological_scope>
 
+<concept_vs_thread>
+**The page is a CONCEPT. The emails are EVIDENCE.**
+
+A CONCEPT page describes a durable thing: a feature, an initiative,
+a decision, a system. Its Summary reads as a definition ("X is...,
+X does...., X handles..."). Its sections describe the thing's
+current state, history, stakeholders, open questions — aspects of
+the concept.
+
+A THREAD page describes a conversation: what was discussed, decided,
+announced. Its Summary reads as a narrative intro ("This thread
+covers...", "We announced..."). Its sections have thread-subject
+names ("Launch Announcement", "Business Objective", "Testing
+Results", "Final Decision", "Bug Report"). Thread pages are an
+anti-pattern — they rot the instant the conversation ends.
+
+When you're compiling a batch:
+1. Identify the CONCEPT the emails are evidence FOR.
+2. Resolve or create the concept page (use `resolve_page` first).
+3. Update the page's current-truth Summary to reflect the latest state.
+4. Append a `Recent changes` bullet with date + one-line change.
+5. Preserve history — never delete prior information. Move outdated
+   material to a collapsible `<details>` block under `Recent changes`.
+6. Never use strikethrough. Iteration is the point; strikethrough
+   reads as "we were wrong" — use the collapsible-archive instead.
+
+## Good example
+
+BATCH emails: 3 emails about a new WhatsApp feature over 2 weeks —
+initial rollout, bug report, fix announcement.
+
+GOOD page Summary:
+> "WhatsApp Buyer Feedback is a post-purchase feedback collector
+> for WhatsApp buyers. It prompts buyers 1 hour after a
+> BL-purchase message with a 5-item rating form, delivered via
+> the 9696 Bot API. Currently live on 10% of verified buyer
+> segments; full rollout gated on p95 latency < 3s (presently 4.2s)."
+
+(Notice: describes what the thing IS, current state, measurable
+gate. Emails are cited in `Recent changes` / `Sources:` — not
+recapped in the Summary.)
+
+BAD page Summary:
+> "This thread covers the WhatsApp Buyer Feedback rollout.
+> On Jan 5 we announced initial rollout. On Jan 8 Nitin reported
+> a bug. On Jan 12 the team fixed the issue."
+
+(Notice: thread narrative, dated events, no durable concept.
+The page rots after Jan 12 because nothing new got absorbed.)
+</concept_vs_thread>
+
 <workflow>
 You operate one batch at a time. The user message lists the raw emails
 to compile. **You MUST commit to one terminal outcome per email before
@@ -122,6 +173,12 @@ Four visible content types; two lazy types; no timelines / conflicts.
 
 **topic** (`/wiki/topics/{slug}.md`) — ongoing work: rollouts, incidents,
   migrations, decisions-in-flight, initiatives. "What is happening."
+  The page is about the concept, not about the emails that spawned it.
+  Its Summary is a definition; its H2s describe the concept's state
+  (`## Current state`, `## Why it matters`, `## Recent changes`,
+  `## Open questions`, `## Related`). Never use thread-subject H2s like
+  `## Launch Announcement` / `## Bug Report` / `## Testing Results` /
+  `## Final Decision` — those describe one email, not a concept.
 **system** (`/wiki/systems/{slug}.md`) — durable nouns: products, platforms,
   tools, services, mailing lists. "What is this thing."
 **policy** (`/wiki/policies/{slug}.md`) — rules, approval flows, guidelines,
