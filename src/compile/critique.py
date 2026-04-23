@@ -23,10 +23,13 @@ import time
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import yaml
 
+from src.compile.section_shapes import ANTI_PATTERN_H2_LOWER
 from src.compile.section_shapes import SUGGESTED_SECTIONS
 from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
@@ -272,6 +275,208 @@ def _check_stray_bracket(page: Path, repo_root: Path, body: str) -> list[Issue]:
     return []
 
 
+# V12 deep-audit fix-A — anti-pattern H2 + summary-staleness checks.
+_DECISION_PREFIX = "decision:"
+# ISO dates in the body (``2026-04-20``). Used by the summary-staleness
+# rule to detect "Recent changes acknowledges newness; Summary doesn't
+# mention current state."
+_ISO_DATE_RE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
+# Heuristic: events newer than this relative to last_compiled count as
+# "recent" enough to expect the Summary to describe the current truth.
+# 90 days mirrors the V12-U4 teaching ("current state" means current-
+# quarter horizon).
+_SUMMARY_STALENESS_WINDOW_DAYS = 90
+# Current-state markers in the Summary paragraph. If the Summary mentions
+# any of these tokens (or contains any ISO date itself), we assume it's
+# been rewritten to current truth and the rule stays quiet. Case-
+# insensitive match; trailing spaces avoid substring collisions, mirroring
+# ``src.compile.scoring.GOOD_TOKENS`` discipline.
+_SUMMARY_CURRENT_STATE_TOKENS: tuple[str, ...] = (
+    "live ",
+    "currently ",
+    "currently,",
+    "rolled out to ",
+    "as of ",
+    "today ",
+)
+
+
+def _check_anti_pattern_h2(page: Path, repo_root: Path, body: str) -> list[Issue]:
+    """Per ``<concept_vs_thread>`` teaching: narrative/thread-subject H2s
+    describe one email's flow, not a concept. Warn the agent so it can
+    self-correct mid-batch.
+
+    Shares ``ANTI_PATTERN_H2`` with ``src.compile.scoring`` — scorer and
+    critique must never drift. ``decision:`` prefix rule is handled here
+    (not in the frozenset) to avoid enumerating every suffix like
+    ``## Decision: Scale to 100%``.
+    """
+    h2_titles = [m.group(1).strip() for m in _H2_RE.finditer(body)]
+    bad = [
+        h
+        for h in h2_titles
+        if h.lower() in ANTI_PATTERN_H2_LOWER or h.lower().startswith(_DECISION_PREFIX)
+    ]
+    if not bad:
+        return []
+    relp = _relpath(page, repo_root)
+    msg = (
+        f"anti-pattern H2(s) {bad}: these describe one email's flow, "
+        "not a durable concept. See <concept_vs_thread>."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "anti-pattern-h2", msg),
+            "warning",
+            "anti-pattern-h2",
+            relp,
+            msg,
+        )
+    ]
+
+
+def _parse_last_compiled(value: Any) -> datetime | None:
+    """Best-effort: return a timezone-aware UTC datetime from a
+    ``last_compiled`` frontmatter value. Returns ``None`` for stub
+    markers (``"stub"``, ``"stub-backfilled"``) or unparseable input —
+    caller treats that as "no signal, skip the check"."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    if s in ("stub", "stub-backfilled"):
+        return None
+    # ``datetime.fromisoformat`` handles ``2026-04-15T07:00:00Z`` in 3.11+
+    # via ``Z`` → ``+00:00`` normalization.
+    normalized = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _recent_changes_block(body: str) -> str | None:
+    """Extract the ``## Recent changes`` / ``## Recent Changes`` section.
+
+    Returns body text from the Recent-changes heading up to the next H2
+    or EOF. Returns ``None`` if the section isn't present."""
+    lines = body.splitlines()
+    in_block = False
+    start = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not in_block:
+            if stripped.lower().startswith("## recent changes"):
+                in_block = True
+                start = i + 1
+                continue
+        else:
+            if line.startswith("## "):
+                return "\n".join(lines[start:i])
+    if in_block and start != -1:
+        return "\n".join(lines[start:])
+    return None
+
+
+def _first_paragraph(body: str) -> str:
+    """Return the first non-empty, non-heading paragraph after any H1.
+
+    Mirrors ``src.compile.scoring._first_paragraph`` — duplicated (not
+    imported) to keep the critique module's dependency graph narrow;
+    both copies are one-screen functions, and the scoring module treats
+    its copy as private (leading underscore)."""
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and lines[i].startswith("# ") and not lines[i].startswith("## "):
+        i += 1
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+    buf: list[str] = []
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            break
+        if line.startswith("#"):
+            break
+        buf.append(line)
+        i += 1
+    return " ".join(line.strip() for line in buf).strip()
+
+
+def _check_summary_staleness(
+    page: Path,
+    repo_root: Path,
+    body: str,
+    frontmatter: dict[str, Any],
+) -> list[Issue]:
+    """Warn when the Summary paragraph looks stale — ``Recent changes``
+    contains a date newer than ``last_compiled``, suggesting the agent
+    updated the body but forgot to rewrite the Summary to match
+    current truth (V12-U4 teaching).
+
+    v1 heuristic (iterate later): warn if ``## Recent changes`` contains
+    any ISO date within the last ``_SUMMARY_STALENESS_WINDOW_DAYS`` days
+    and the Summary paragraph contains neither an ISO date nor a
+    current-state token (``live``, ``currently``, ``rolled out to``,
+    etc.). Key caveat: we can't detect "Summary was unchanged" without
+    a pre-compile snapshot — stage 2 will diff against one. Until then
+    this is a proxy for "Recent changes acknowledges newness; Summary
+    doesn't mention current state".
+    """
+    recent_block = _recent_changes_block(body)
+    if recent_block is None:
+        return []
+    dates = _ISO_DATE_RE.findall(recent_block)
+    if not dates:
+        return []
+
+    # Anchor the staleness window to ``last_compiled`` when present,
+    # otherwise ``datetime.now`` — legacy pages missing the field still
+    # get flagged by absolute-date recency.
+    last_compiled = _parse_last_compiled(frontmatter.get("last_compiled"))
+    anchor = last_compiled if last_compiled is not None else datetime.now(tz=UTC)
+    window_start = anchor - timedelta(days=_SUMMARY_STALENESS_WINDOW_DAYS)
+
+    parsed_dates: list[datetime] = []
+    for d in dates:
+        try:
+            parsed_dates.append(datetime.fromisoformat(d).replace(tzinfo=UTC))
+        except ValueError:
+            continue
+    recent_events = [d for d in parsed_dates if d >= window_start]
+    if not recent_events:
+        return []
+
+    summary = _first_paragraph(body)
+    summary_lower = summary.lower()
+    has_iso_date = bool(_ISO_DATE_RE.search(summary))
+    has_current_marker = any(tok in summary_lower for tok in _SUMMARY_CURRENT_STATE_TOKENS)
+    if has_iso_date or has_current_marker:
+        return []
+
+    relp = _relpath(page, repo_root)
+    newest = max(recent_events).date().isoformat()
+    msg = (
+        f"summary may be stale: `## Recent changes` cites {newest} but the "
+        "Summary paragraph has no ISO date or current-state marker "
+        "(`live`, `currently`, `rolled out to ...`). V12-U4: rewrite the "
+        "Summary to current truth, don't just append to Recent changes."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "summary-staleness", msg),
+            "warning",
+            "summary-staleness",
+            relp,
+            msg,
+        )
+    ]
+
+
 # Threshold per page type for "too few suggested H2s present". Set to
 # half-or-less of the canonical list — enough latitude for genuinely
 # alternative structures, tight enough to flag thread-subject-templated
@@ -360,7 +565,8 @@ def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> Critiq
         # bailed via fm_blocked if it were unparseable — so the second
         # parse here via `extract_frontmatter` is safe and never errors.
         # Worth the second parse for the simpler call site.
-        pt = extract_frontmatter(content).get("page_type")
+        fm = extract_frontmatter(content)
+        pt = fm.get("page_type")
         page_type = pt if isinstance(pt, str) else None
 
         issues.extend(_check_duplicate_h2(page, repo_root, body))
@@ -368,6 +574,8 @@ def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> Critiq
         issues.extend(_check_h1_in_body(page, repo_root, body))
         issues.extend(_check_stray_bracket(page, repo_root, body))
         issues.extend(_check_suggested_h2_sections(page, repo_root, body, page_type))
+        issues.extend(_check_anti_pattern_h2(page, repo_root, body))
+        issues.extend(_check_summary_staleness(page, repo_root, body, fm))
 
     return CritiqueResult(issues=issues, pages_critiqued=pages_rel)
 

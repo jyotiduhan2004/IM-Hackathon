@@ -256,3 +256,214 @@ def test_suggested_h2s_skips_decision_pages(tmp_path: Path) -> None:
     )
     result = critique_pages([page], wiki, tmp_path)
     assert all(w.check != "missing_suggested_h2s" for w in result.warnings)
+
+
+# --- anti-pattern H2 (V12 50-compile deep audit fix-A) --------------------
+
+
+def _write_page_with_fm(path: Path, fm_lines: list[str], body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = "---\n" + "\n".join(fm_lines) + "\n---\n"
+    path.write_text(fm + body, encoding="utf-8")
+
+
+def test_anti_pattern_h2_fires_on_qa_testing_results(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nCurrently live for 50% of traffic.\n\n## QA Testing Results\nAll green.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [w for w in result.warnings if w.check == "anti-pattern-h2"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    assert "QA Testing Results" in matches[0].message
+
+
+def test_anti_pattern_h2_fires_on_business_requirements(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nCurrently in beta.\n\n## Business Requirements\nDoc text.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [w for w in result.warnings if w.check == "anti-pattern-h2"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    assert "Business Requirements" in matches[0].message
+
+
+def test_anti_pattern_h2_fires_on_decision_prefix(tmp_path: Path) -> None:
+    """``## Decision: Scale to 100%`` matches via the decision-prefix rule."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nCurrently live.\n\n## Decision: Scale to 100%\nWe shipped.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [w for w in result.warnings if w.check == "anti-pattern-h2"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    assert "Decision: Scale to 100%" in matches[0].message
+
+
+def test_anti_pattern_h2_does_not_fire_on_clean_shape(tmp_path: Path) -> None:
+    """``## Current state`` + ``## Why it matters`` must not trigger."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nCurrently live at 50%.\n\n"
+        "## Current state\nRolling out to 50%.\n\n"
+        "## Why it matters\nImproves signal.\n\n"
+        "## Key decisions\nShip it.\n\n## Recent changes\nSome history.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "anti-pattern-h2" for w in result.warnings)
+
+
+def test_anti_pattern_h2_is_warning_not_blocker(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nCurrently live.\n\n## QA Testing Results\nAll green.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "anti-pattern-h2" for b in result.blockers)
+
+
+# --- summary staleness (V12 50-compile deep audit fix-A) ------------------
+
+
+def test_summary_staleness_fires_when_summary_lacks_current_markers(
+    tmp_path: Path,
+) -> None:
+    """``Recent changes`` has a 2026-04-20 date but Summary says "was
+    launched in January" — no current-state marker, so warn.
+
+    ``last_compiled`` is set just after the recent-change date so the
+    90-day window includes it (rules out "old page, recent event"
+    legitimate cases)."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nThe system was launched in January.\n\n"
+        "## Current state\nSomething.\n\n"
+        "## Recent changes\n- 2026-04-20: rolled out to 50%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [w for w in result.warnings if w.check == "summary-staleness"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    assert "2026-04-20" in matches[0].message
+
+
+def test_summary_staleness_does_not_fire_when_summary_has_current_marker(
+    tmp_path: Path,
+) -> None:
+    """Summary saying "Currently rolled out to 50% since 2026-04-20" has
+    both a current-state token and an ISO date — the rule must stay
+    quiet."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nCurrently rolled out to 50% since 2026-04-20.\n\n"
+        "## Current state\nDetails.\n\n"
+        "## Recent changes\n- 2026-04-20: rolled out to 50%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "summary-staleness" for w in result.warnings)
+
+
+def test_summary_staleness_skips_when_no_recent_changes_section(
+    tmp_path: Path,
+) -> None:
+    """No ``## Recent changes`` section — nothing to diff, skip cleanly."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nThe system was launched in January.\n\n## Current state\nThings.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "summary-staleness" for w in result.warnings)
+
+
+def test_summary_staleness_skips_when_recent_changes_has_only_old_dates(
+    tmp_path: Path,
+) -> None:
+    """Recent changes dated only from > 90 days before ``last_compiled``
+    — no recency signal, rule stays quiet."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nThe system was launched in January.\n\n"
+        "## Recent changes\n- 2025-01-01: initial release.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(w.check != "summary-staleness" for w in result.warnings)
+
+
+def test_summary_staleness_is_warning_not_blocker(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nThe system was launched in January.\n\n"
+        "## Recent changes\n- 2026-04-20: rolled out to 50%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "summary-staleness" for b in result.blockers)
