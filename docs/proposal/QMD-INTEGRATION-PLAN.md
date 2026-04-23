@@ -216,7 +216,7 @@ No new confidence threshold — use qmd's rerank score normalised to 0-1 as `con
 
 ## One-line status tracker
 
-- [x] Phase 0: spike — **GO** (2026-04-23, 85% hit rate on 20 live queries, audit at `docs/audits/qmd-spike-2026-04-23.md`)
+- [x] Phase 0: spike — **GO** (2026-04-23, 85% hit rate on 40 Langfuse queries — sampled seed=42 — see audit at `docs/audits/qmd-spike-2026-04-23.md`)
 - [ ] Phase 1: build + merge
 - [ ] Phase 2: smoke + measure + docstring-from-traces
 - [ ] Phase 3a: raw/ collection — deferred
