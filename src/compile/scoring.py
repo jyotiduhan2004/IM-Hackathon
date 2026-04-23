@@ -17,6 +17,13 @@ empty sections, email-slug wikilinks, FM+body `Related` duplication) are
 exactly the structural-corruption patterns the first four heuristics
 miss behind otherwise good surface signals.
 
+The ``THREAD_SUBJECT_H2`` bad-list and ``GOOD_TOKENS`` good-list were
+recalibrated 2026-04-23 against a V12 smoke compile (photosearch +
+mcat-cleaning pages): bad-list picked up verbose siblings like
+``QA Testing Results`` and a ``Decision:`` prefix rule; good-list grew
+beyond ownership verbs to cover deployment-state prose like ``runs``,
+``currently``, ``rolled out``.
+
 The scorer CLI in ``scripts/score_wiki.py`` is the only intended caller
 in app code; tests exercise these functions with synthetic strings.
 """
@@ -61,9 +68,22 @@ THREAD_SUBJECT_H2: frozenset[str] = frozenset(
         "Thread Summary",
         "Email Summary",
         "Discussion",
+        # Added 2026-04-23 from V12 smoke (photosearch page) — verbose or
+        # narrative variants the exact-match list missed. ``Decision:``
+        # prefix (``## Decision: Scale to 100%``) is handled separately in
+        # ``score_concept_shape`` to avoid enumerating every suffix.
+        "QA Testing Results",
+        "Business Requirements",
+        "Leadership Response",
+        "Leadership Response and Goals",
+        "Early Impact Analysis",
+        "Follow-up",
+        "Ticket Reference",
+        "Key Stakeholder Feedback",
     ]
 )
 _THREAD_SUBJECT_H2_LOWER: frozenset[str] = frozenset(h.lower() for h in THREAD_SUBJECT_H2)
+_DECISION_PREFIX: str = "decision:"
 
 # Past-tense / narrative tokens that imply the summary is recounting history
 # instead of stating current truth. Trailing spaces are load-bearing: they
@@ -89,6 +109,15 @@ BAD_TOKENS: tuple[str, ...] = (
 # inside ``analysis ``, ``basis ``, ``crisis ``, ``This `` (Th-I-S-space),
 # etc., silently inflating ``summary_currency`` on 300+ pages. ``is
 # responsible`` stays because the full phrase is specific enough.
+#
+# Expanded 2026-04-23 after the V12 smoke showed definitional prose like
+# "Enhanced feedback popup ... Currently rolled out to 50%" scored a flat
+# 5/10 because none of the original 7 ownership verbs fired. The new
+# entries cover verb-based function descriptions (``runs``, ``delivers``,
+# ``powers``), deployment-state markers (``live``, ``currently``, ``rolled
+# out``), and stronger scope signals (``handles all``). ``rolled out`` is
+# intentionally missing its trailing space — it's already a multi-word
+# anchor so substring collisions aren't a risk.
 GOOD_TOKENS: tuple[str, ...] = (
     "provides ",
     "handles ",
@@ -97,6 +126,18 @@ GOOD_TOKENS: tuple[str, ...] = (
     "covers ",
     "manages ",
     "enables ",
+    "runs ",
+    "works ",
+    "delivers ",
+    "supports ",
+    "powers ",
+    "automates ",
+    "drives ",
+    "generates ",
+    "live ",
+    "currently ",
+    "rolled out",
+    "handles all ",
 )
 
 # Generated hub pages that link to most topics — counting their outbound
@@ -165,9 +206,21 @@ def score_concept_shape(body: str) -> tuple[int, dict[str, Any]]:
     pages for bad H2 names when the underlying content was fine; the old
     weight over-penalized cosmetic issues that ``structural_smells`` now
     catches more precisely (duplicate H2s, empty sections).
+
+    Also recalibrated 2026-04-23 against the V12 smoke (photosearch
+    page): ``## Decision: Scale to 100%``-shaped H2s now trigger via a
+    ``decision:`` prefix rule so we don't need to enumerate every
+    suffix. Verbose / narrative siblings (``QA Testing Results``,
+    ``Business Requirements``, ``Leadership Response``, ``Early Impact
+    Analysis``, etc.) were added to ``THREAD_SUBJECT_H2``.
     """
     h2_titles = [m.group(1).strip() for m in _H2_RE.finditer(body)]
-    bad_matches = [h for h in h2_titles if h.lower() in _THREAD_SUBJECT_H2_LOWER]
+    bad_matches = [
+        h
+        for h in h2_titles
+        if (lowered := h.lower()) in _THREAD_SUBJECT_H2_LOWER
+        or lowered.startswith(_DECISION_PREFIX)
+    ]
     count_bad = len(bad_matches)
     score = max(0, 10 - count_bad)
     return score, {

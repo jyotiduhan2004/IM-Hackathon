@@ -454,6 +454,90 @@ def test_concept_shape_case_insensitive_match() -> None:
     assert score == 8
 
 
+# --- concept_shape V12-smoke calibration (scorer v3) -----------------------
+
+
+def test_concept_shape_decision_prefix_is_bad_match() -> None:
+    """``## Decision: Scale to 100%`` (and variants) trigger via prefix rule.
+
+    Added 2026-04-23 from V12 smoke — enumerating every suffix would bloat
+    ``THREAD_SUBJECT_H2`` without end, so ``decision:`` prefix is a
+    single case-insensitive check inside ``score_concept_shape``.
+    """
+    body = (
+        "## Decision: Scale to 100%\n\nX.\n\n"
+        "## decision: deprecate legacy flow\n\nY.\n\n"
+        "## Current state\n\nZ.\n"
+    )
+    score, dbg = score_concept_shape(body)
+    assert dbg["count_bad"] == 2
+    # Both decision-prefixed H2s appear in bad_matches verbatim.
+    assert "Decision: Scale to 100%" in dbg["bad_matches"]
+    assert "decision: deprecate legacy flow" in dbg["bad_matches"]
+    assert score == 8  # 10 - 2
+
+
+def test_concept_shape_qa_testing_results_is_bad_match() -> None:
+    """Verbose sibling of ``Testing Results`` — direct hit from photosearch smoke."""
+    body = "## QA Testing Results\n\nAll green.\n\n## Current state\n\nWords.\n"
+    score, dbg = score_concept_shape(body)
+    assert dbg["count_bad"] == 1
+    assert "QA Testing Results" in dbg["bad_matches"]
+    assert score == 9
+
+
+def test_concept_shape_v12_smoke_bad_list_entries_all_match() -> None:
+    """Every new 2026-04-23 canonical entry fires the penalty."""
+    body = "\n\n".join(
+        f"## {h}\n\nx."
+        for h in [
+            "QA Testing Results",
+            "Business Requirements",
+            "Leadership Response",
+            "Leadership Response and Goals",
+            "Early Impact Analysis",
+            "Follow-up",
+            "Ticket Reference",
+            "Key Stakeholder Feedback",
+        ]
+    )
+    _, dbg = score_concept_shape(body)
+    assert dbg["count_bad"] == 8
+
+
+# --- summary_currency V12-smoke calibration (scorer v3) --------------------
+
+
+def test_summary_currency_photosearch_opener_scores_at_least_six() -> None:
+    """Photosearch-shaped prose: ``Enhanced ... Currently rolled out to 50%.``
+
+    Under scorer v2 this scored a flat 5 (neutral) because none of the
+    ownership verbs fired. Scorer v3 adds ``currently `` + ``rolled out``
+    so definitional deployment-state prose now registers.
+    """
+    body = "Enhanced feedback popup for X. Currently rolled out to 50%.\n\n## Current state\n"
+    score, dbg = score_summary_currency(body)
+    assert score >= 6
+    # Both new tokens should fire on this opener.
+    assert dbg["good_count"] >= 2
+
+
+def test_summary_currency_verb_prose_scores_at_least_seven() -> None:
+    """Multi-verb prose: ``runs daily, powers the BL feed, handles all image uploads.``
+
+    Three GOOD_TOKENS fire: ``runs ``, ``powers ``, ``handles all ``. Note
+    that ``handles all `` contains ``handles ``, so ``str.count`` will
+    report both — the test tolerates either count.
+    """
+    body = (
+        "The system runs daily, powers the BL feed, and handles all image uploads.\n\n"
+        "## Current state\n"
+    )
+    score, dbg = score_summary_currency(body)
+    assert score >= 7
+    assert dbg["good_count"] >= 3
+
+
 # --- _select_topic_paths hub filter (F2) -----------------------------------
 
 
