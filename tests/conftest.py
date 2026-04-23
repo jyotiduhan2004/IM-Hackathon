@@ -277,6 +277,27 @@ def _load_messages_ddl() -> str:
       ON {TEST_SCHEMA}.compile_attempts (message_id);
     CREATE INDEX compile_attempts_run_idx
       ON {TEST_SCHEMA}.compile_attempts (run_id);
+
+    CREATE TABLE {TEST_SCHEMA}.page_feedback (
+      id              BIGSERIAL PRIMARY KEY,
+      run_id          UUID NOT NULL,
+      page_slug       TEXT NOT NULL,
+      page_version    TEXT NOT NULL,
+      source          TEXT NOT NULL,
+      score           NUMERIC,
+      finding         TEXT NOT NULL,
+      severity        TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'blocker')),
+      captured_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      captured_by     TEXT NOT NULL,
+      raw_json        JSONB NOT NULL DEFAULT '{{}}'::jsonb
+    );
+
+    CREATE INDEX page_feedback_page_slug_idx
+      ON {TEST_SCHEMA}.page_feedback (page_slug, captured_at DESC);
+    CREATE INDEX page_feedback_source_idx
+      ON {TEST_SCHEMA}.page_feedback (source, captured_at DESC);
+    CREATE INDEX page_feedback_run_id_idx
+      ON {TEST_SCHEMA}.page_feedback (run_id);
     """
 
 
@@ -373,6 +394,9 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
             f"{TEST_SCHEMA}.compile_runs"
         )
         conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.ingest_cursors")
+        # page_feedback has no FK to any other table — slug-keyed on purpose
+        # (see src/db/page_feedback.py) — so it gets its own truncate.
+        conn.execute(f"TRUNCATE TABLE {TEST_SCHEMA}.page_feedback")
 
     yield
 
