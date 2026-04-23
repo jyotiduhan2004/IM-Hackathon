@@ -117,13 +117,18 @@ BAD_TOKENS: tuple[str, ...] = (
 # ``powers``), deployment-state markers (``live``, ``currently``), and
 # stronger scope signals (``handles all``).
 #
-# Codex + Claude review on PR #221 caught two substring collisions the
-# first draft missed:
+# Codex + Claude review on PR #221 caught three substring collisions
+# the first draft missed:
 # - ``"works "`` fires inside ``frameworks ``, ``networks `` — dropped.
 # - ``"rolled out"`` fires inside ``controlled output`` — dropped.
-# The replacement ``"rolled out to "`` keeps the deployment-state signal
-# without colliding: "controlled output to" is not a sensible English
-# phrase. Keep the trailing-space discipline for all other tokens.
+#   The replacement ``"rolled out to "`` keeps the deployment-state
+#   signal without colliding: "controlled output to" is not a sensible
+#   English phrase.
+# - ``"generates "`` fires inside ``regenerates `` — dropped for
+#   consistency with the works/rolled-out fix. ``runs ``, ``powers ``,
+#   ``delivers `` already cover the definitional-prose case well
+#   enough that losing ``generates `` doesn't hurt signal.
+# Keep the trailing-space discipline for all other tokens.
 #
 # ``"currently "`` stays with a known limitation: it fires inside
 # negations ("is NOT currently active"). Accepting the noise because the
@@ -148,7 +153,6 @@ GOOD_TOKENS: tuple[str, ...] = (
     "powers ",
     "automates ",
     "drives ",
-    "generates ",
     "live ",
     "currently ",
     "rolled out to ",
