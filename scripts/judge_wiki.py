@@ -304,7 +304,12 @@ def _write_markdown(out_path: Path, rows: list[dict[str, Any]]) -> None:
 @click.option(
     "--model",
     default=None,
-    help="LiteLLM model id. Defaults to $LITELLM_MODEL or anthropic/claude-sonnet-4-6.",
+    help=(
+        "LiteLLM model id. Defaults to $LITELLM_MODEL or "
+        "``openai/anthropic/claude-sonnet-4-6`` — the ``openai/`` prefix routes "
+        "through ``settings.litellm_base_url`` (the team proxy) instead of "
+        "trying direct Anthropic auth."
+    ),
 )
 @click.option(
     "--confirm",
@@ -343,7 +348,7 @@ def main(
             sys.exit(1)
 
     personas = _resolve_personas(persona)
-    resolved_model = model or os.environ.get("LITELLM_MODEL", "anthropic/claude-sonnet-4-6")
+    resolved_model = model or os.environ.get("LITELLM_MODEL", "openai/anthropic/claude-sonnet-4-6")
 
     wiki_dir = Path(settings.wiki_dir).resolve()
     all_slugs = _enumerate_topic_slugs(wiki_dir)

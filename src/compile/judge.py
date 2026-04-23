@@ -146,11 +146,23 @@ def _parse_judge_json(raw: str) -> dict[str, Any]:
 def call_judge(system_prompt: str, user_prompt: str, model: str) -> dict[str, Any]:
     """Single LiteLLM call + one parse-failure retry. Returns parsed rubric dict.
 
-    Retry policy: one extra attempt on parse failure with "Return VALID JSON
-    only." appended to the user message. Network/API errors bubble up — the
-    CLI decides whether to continue with the next page or abort.
+    Routes through ``settings.litellm_base_url`` when set (team LiteLLM
+    proxy), falling back to direct provider auth otherwise — mirrors
+    ``src/compile/compiler.py:_build_model_client`` so we don't need a
+    second set of provider API keys for the judge path.
+
+    Retry policy: one extra attempt on parse failure with "Return VALID
+    JSON only." appended to the user message. Network/API errors bubble
+    up — the CLI decides whether to continue with the next page or abort.
     """
     import litellm
+
+    from src.config import settings
+
+    completion_kwargs: dict[str, Any] = {}
+    if settings.litellm_base_url:
+        completion_kwargs["api_base"] = settings.litellm_base_url
+        completion_kwargs["api_key"] = settings.openai_api_key or "dummy"
 
     attempts: list[dict[str, Any]] = [
         {"user": user_prompt},
@@ -165,6 +177,7 @@ def call_judge(system_prompt: str, user_prompt: str, model: str) -> dict[str, An
                 {"role": "user", "content": attempt["user"]},
             ],
             temperature=0.0,
+            **completion_kwargs,
         )
         raw = response.choices[0].message.content or ""
         last_raw = raw
