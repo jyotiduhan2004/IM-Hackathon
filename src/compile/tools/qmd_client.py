@@ -23,22 +23,17 @@ Design notes:
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import time
 from typing import Any
 
+from src.config import settings
+
 # `qmd://<collection>/<slug>.md` — matches the shape qmd returns in
 # `file` fields on query output. `.md` suffix is optional so future
 # qmd changes don't silently break slug extraction.
 _QMD_URI_RE = re.compile(r"qmd://[^/]+/(?P<slug>.+?)(?:\.md)?$")
-
-# Configurable via env for ops to bump without a code change when the
-# GPU is warming models. 45s covers the worst cold-start rerank we
-# observed in the spike (embedding 300ms + expansion 1.2s + rerank
-# up to 16s + process spawn ~500ms).
-_DEFAULT_TIMEOUT_S = int(os.environ.get("QMD_TIMEOUT_S", "45"))
 
 
 def _extract_slug(qmd_file_uri: str) -> str:
@@ -53,7 +48,7 @@ def is_enabled() -> bool:
     Flipping to off is the manual rollback path — no code change
     needed, just env + restart.
     """
-    return os.environ.get("USE_SEMANTIC_RESOLVE", "0").strip() in ("1", "true", "True", "yes")
+    return settings.use_semantic_resolve
 
 
 def query_qmd(
@@ -85,7 +80,7 @@ def query_qmd(
     Caller is expected to fall back to SQL on any error path.
     """
     t0 = time.perf_counter()
-    timeout = timeout_s if timeout_s is not None else _DEFAULT_TIMEOUT_S
+    timeout = timeout_s if timeout_s is not None else settings.qmd_timeout_s
     try:
         proc = subprocess.run(
             ["qmd", "query", query, "-n", str(limit), "--json"],

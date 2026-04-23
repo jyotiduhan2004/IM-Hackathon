@@ -347,7 +347,17 @@ def _scoped_connect() -> Iterator[psycopg.Connection]:
 
 @pytest.fixture(autouse=True)
 def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Repoint src.db.connect and clear all catalog tables before each test."""
+    """Repoint src.db.connect and clear all catalog tables before each test.
+
+    Also resets pydantic-settings-driven flags (qmd, etc.) to their
+    declared defaults so tests don't see the developer's .env values
+    (USE_SEMANTIC_RESOLVE=1 etc.).
+    """
+    from src.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "use_semantic_resolve", False)
+    monkeypatch.setattr(_settings, "qmd_timeout_s", 45)
+
     import src.db as db_pkg
     import src.db.compile_runs as db_compile_runs
     import src.db.cursors as db_cursors

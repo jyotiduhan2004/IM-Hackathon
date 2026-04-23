@@ -18,21 +18,9 @@ import pytest
 from src.compile.tools import qmd_client
 
 
-@pytest.fixture(autouse=True)
-def _stable_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reset env-driven state between tests.
-
-    ``USE_SEMANTIC_RESOLVE`` and ``QMD_TIMEOUT_S`` both feed defaults
-    read at import time; we clear them so each test starts from the
-    documented defaults.
-    """
-    monkeypatch.delenv("USE_SEMANTIC_RESOLVE", raising=False)
-    monkeypatch.delenv("QMD_TIMEOUT_S", raising=False)
-    yield
-
-
 # ---------------------------------------------------------------------------
-# is_enabled
+# is_enabled — flag comes from pydantic-settings. Conftest's autouse fixture
+# resets settings.use_semantic_resolve to False before every test.
 # ---------------------------------------------------------------------------
 
 
@@ -40,16 +28,11 @@ def test_is_enabled_defaults_off() -> None:
     assert qmd_client.is_enabled() is False
 
 
-@pytest.mark.parametrize("val", ["1", "true", "True", "yes"])
-def test_is_enabled_truthy(val: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", val)
+def test_is_enabled_true_when_flag_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.config import settings as _s
+
+    monkeypatch.setattr(_s, "use_semantic_resolve", True)
     assert qmd_client.is_enabled() is True
-
-
-@pytest.mark.parametrize("val", ["0", "false", "no", " ", ""])
-def test_is_enabled_falsy(val: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", val)
-    assert qmd_client.is_enabled() is False
 
 
 # ---------------------------------------------------------------------------

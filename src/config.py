@@ -67,7 +67,6 @@ class Settings(BaseSettings):
         env_file=_discover_env_file(_REPO_ROOT),
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",
     )
 
     # LLM — `llm_model_pool` is the source of truth; every batch picks
@@ -139,6 +138,13 @@ class Settings(BaseSettings):
     # Paths
     raw_dir: Path = Path("raw")
     wiki_dir: Path = Path("wiki")
+
+    # qmd semantic retriever (Phase 1). When True, resolve_page routes
+    # ambiguous queries through the qmd CLI before SQL fallback.
+    # qmd_timeout_s caps the per-call subprocess wall-clock (45s covers
+    # worst cold-start rerank observed in the spike).
+    use_semantic_resolve: bool = False
+    qmd_timeout_s: int = 45
 
     @property
     def attachments_dir(self) -> Path:

@@ -79,7 +79,7 @@ def test_response_has_no_operational_telemetry_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Latency + internal retriever state must stay out of the LLM view."""
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="foo",
@@ -110,7 +110,7 @@ def test_flag_on_exact_slug_wins_even_when_semantic_missed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even if semantic doesn't return the page, the exact SQL lookup wins."""
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="marketplace-launch",
@@ -155,7 +155,7 @@ def test_flag_on_exact_hit_carries_snippet_when_semantic_also_found_it(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="seller-isq",
@@ -193,7 +193,7 @@ def test_flag_on_no_exact_returns_semantic_candidates(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     for slug, title in [
         ("seller-bl-api-optimization", "Seller BL API Optimization"),
         ("seller-bl-api-hit-optimisation", "Seller BL API Hit Optimisation"),
@@ -247,7 +247,7 @@ def test_flag_on_semantic_skips_candidates_not_in_catalog(
     Happens when the semantic index is ahead of the post-batch catalog
     sync — we don't want to fabricate page_type / status for a ghost.
     """
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="real-page",
@@ -281,7 +281,7 @@ def test_flag_on_semantic_error_falls_back_to_fuzzy(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="whatsapp-onboarding",
@@ -308,7 +308,7 @@ def test_flag_on_semantic_empty_falls_back_to_fuzzy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Semantic returned OK but with zero candidates — still fall back."""
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     repo.upsert_wiki_page(
         db_conn,
         slug="whatsapp-onboarding",
@@ -339,7 +339,7 @@ def test_email_query_uses_sql_path_even_with_flag_on(
 ) -> None:
     from src.db import users as users_repo
 
-    monkeypatch.setenv("USE_SEMANTIC_RESOLVE", "1")
+    monkeypatch.setattr("src.config.settings.use_semantic_resolve", True)
     users_repo.upsert_user(db_conn, email="alice@example.com", display_name="Alice")
     repo.upsert_wiki_page(
         db_conn,
