@@ -32,7 +32,12 @@ Raw data artifacts (in `/tmp/`, not committed):
 
 - Scorer v3 mean-of-means: **6.94** on the 16 V12-touched pages
   (vs full-corpus pre-V12 mean of 5.86 on scorer v2, 4.04 on scorer v1).
-  Net scorer delta: **+1.08 points**.
+  Net scorer delta: **+1.08 points** — **caveat (Claude review)**:
+  scorer v2→v3 expanded the bad-list + rebalanced `graph_health`, so
+  the numeric delta mixes rubrics. Direction is solid ("V12 shifts
+  surface structure"), magnitude is approximate. An apples-to-apples
+  re-score would re-run v3 on the pre-V12 snapshot at
+  `.snapshots/pre-compile-20260423T102909Z/`; deferred as follow-up.
 - Judge persona mean-of-means (newbie + pm + ia across 16 pages): ≈ **5.92**.
   Compared to the 13-page pre-V12 run (judge mean ≈ 5.5), a modest
   **+0.4** improvement.
@@ -99,8 +104,10 @@ Per-model tool-call + duration means over 50 batches:
   reads more, edits more. Batch 17 (z-ai/glm-5) ran 586s with 88 tool
   calls and 4 reviewer cycles, bouncing across 3 slugs (m-site /
   m-site-pdp / m-site-opening-enquiry-form) before settling. That's
-  the in-batch churn the sibling-draft-check middleware was designed
-  to catch; evidently it isn't firing (or is configured too loosely).
+  the in-batch churn the sibling-draft-check middleware
+  (`src/compile/middleware/sibling_draft_check.py` — v11-U9) was
+  designed to catch; evidently it isn't firing (or is configured
+  too loosely).
 - **moonshotai/kimi-k2.6 (new)**: middling. Compiled mcat-cleaning in
   707s (batch 46, 38 tools, 2 reviewer cycles) — longest batch in
   the run. **One anomalous batch 45** (`b3f4dd022eba`, kimi-k2.6):
@@ -127,10 +134,10 @@ the `write_file` path for new pages.
 | `## QA Testing Results` H2 | **4** | mobile-company-varnish-optimization, msite-pdp-html-rewrite-phase-2, photosearch-star-rating-feedback-popup, m-site-opening-enquiry-form |
 | `## Business Objective/Requirements` H2 | 3 | seller-bl-api-optimization, whatsapp-8181-carousel-ab-test, photosearch-star-rating-feedback-popup |
 | `## Testing Results` (bare) H2 | 2 | seller-bl-api-optimization, whatsapp-8181-carousel-ab-test |
-| `## Decision: <...>` H2 | 1 | photosearch-star-rating-feedback-popup (`Decision: Scale to 100%`) |
+| `## Decision: <...>` H2 | 1 | photosearch-star-rating-feedback-popup (`Decision: Scale to 100%`) — **connects to #145**: this is a missed lazy-decision-page opportunity. Per CLAUDE.md the agent should mint a `[[decision/scale-photosearch-100pct]]` wikilink (post-stub materialisation), not inline it as an H2. |
 | Body `## Related` AND frontmatter `related:` (dup) | **11/16** | all compiled topics except pns-calls, seller-performance-dashboard, tov-display, pns-call-summary, seller-bl-user-details |
 | 0 inline `[^msg-*]` footnotes | 3 | gst-registration-..., seller-bl-user-details-..., m-site-opening-enquiry-form-... |
-| Body `[[<name>-indiamart-com]]` email-slug wikilinks | **14/16**, **304 total** | all except pns-call-summary-lead-manager and buyer-searched-keywords-on-bl-card |
+| Body `[[<name>-indiamart-com]]` email-slug wikilinks | **14/16**, **304 total** | all except pns-call-summary-lead-manager and buyer-searched-keywords-on-bl-card. Per `wiki/people/` directory scan these slugs DO resolve (auto-stub creates the person page on first wikilink), so they don't register as broken in `graph_health`. Readability/collision concern per judge persona findings in §5, not graph-breakage. |
 | Summary kept verbatim (not rewritten for current-truth) | 11/16 | everything except 2 NEW pages + 3 partial rewrites |
 
 **photosearch-star-rating-feedback-popup concentrates 4 anti-patterns** —
@@ -215,6 +222,9 @@ thinness if it ran.
 **Conclusion**: Needs code-level verification — is the reviewer gate
 wired to `write_file` of a new topic, or only to `patch_page` on an
 existing one? If the latter, that's a real system gap.
+**Code pointer**: `src/compile/middleware/check_my_work_gate.py:92-136`
+(gate middleware) + `src/compile/compiler.py` (agent loop setup where
+middleware is wired in). Tier 1 #1 fix lives there.
 
 ---
 
@@ -251,16 +261,21 @@ Qualitative findings recurring across personas on bottom-5 pages
 
 ## 6. Cost + throughput — is V12 affordable at scale?
 
-- **Per compiled page**: $0.34 (including preflight)
-- **Per trivial_skip**: $0.07
-- **Overall run**: $5.76 for 50 emails → 17 compiled
-- **Full 5348-email queue estimate**: 5348 × (0.34 × 0.34 +
-  0.07 × 0.66) = **~$858** end-to-end (0.34 compile rate from this
-  sample). Current budget ceiling is $150; needs **another ~5x top-up**
-  before full-queue is feasible.
-- Run at current rate: 5348 × 2 min/batch = ~178 hours = **~7.5 days
-  wall time** at single-batch-per-minute. Parallelization would cut
-  this meaningfully but hasn't been tested.
+- **Per compiled page**: $0.34 (LiteLLM budget; includes preflight + agent turns).
+- **Per trivial_skip**: $0.07.
+- **Overall run**: $5.76 for 50 emails → 17 compiled (**compile-rate = 17/50 ≈ 34%**).
+- **Full 5348-email queue extrapolation** (linear, same compile rate):
+  `5348 × (0.34 × 0.34_compile_rate + 0.66_skip_rate × 0.07)`
+  = 5348 × (0.1156 + 0.0462) = 5348 × 0.1618 ≈ **~$866**.
+  (Codex flagged the earlier `$858` number as base-mixed; recomputed
+  with explicit rate.)
+  Current budget ceiling is $150; needs **~5-6× top-up** before
+  full-queue is feasible.
+- **Runtime extrapolation**: 50 emails took ~107 min wall at
+  single-batch-serial = 2.14 min per batch mean. 5348 batches ×
+  2.14 min ≈ **191 hours ≈ 8 days** single-serial.
+  Parallelization to `--batch-size 5` cuts wall-time roughly 5× to
+  ~38 hours if LiteLLM rate limits don't bottleneck — **untested**.
 
 **z-ai/glm-5 tool-count**: 25.8 avg is a real outlier. If it produced
 25–30% better outcomes, worth the cost; data doesn't support that —
@@ -364,6 +379,13 @@ Worth a dedicated trace dive — may indicate a silent failure mode.
 ---
 
 ## Raw artifact paths (for follow-up dives)
+
+> **Note on `/tmp/` paths**: artifacts under `/tmp/` are ephemeral —
+> they survive this session only. Only paths under `docs/feedback/`,
+> `docs/audits/`, and `.snapshots/` are committed/persisted. See the
+> methodology note at the end for why the Langfuse trace dumps are
+> kept in `/tmp/` for this audit.
+
 
 - Judge CSV: `docs/feedback/judge-2026-04-23.csv` (48 rows, 16 pages × 3 personas)
 - Judge MD: `docs/feedback/judge-2026-04-23.md` (per-page qualitative)
