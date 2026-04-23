@@ -272,8 +272,6 @@ def test_cli_live_run_writes_csv_and_md_no_db(
     mod = judge_wiki_module
     wiki = tmp_path / "wiki"
     _seed_topics(wiki, 2)
-    feedback_dir = tmp_path / "docs_feedback"
-    feedback_dir.mkdir()
 
     monkeypatch.setattr(mod.settings, "wiki_dir", wiki)
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)

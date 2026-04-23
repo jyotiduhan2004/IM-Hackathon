@@ -52,14 +52,21 @@ from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.utils import split_frontmatter  # noqa: E402
 
-structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ],
-)
 logger = structlog.get_logger(__name__)
+
+
+def _configure_logging() -> None:
+    """Idempotent structlog setup. Called from ``main()`` so test imports
+    don't mutate the global structlog config as a side effect.
+    """
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(),
+        ],
+    )
+
 
 ALL_PERSONAS: tuple[str, ...] = ("newbie", "pm", "ia")
 DEFAULT_SEED = 20260419
@@ -289,6 +296,7 @@ def main(
     confirm: bool,
 ) -> None:
     """Run the LLM judge over a sample of wiki topic pages."""
+    _configure_logging()
     # --- Flag validation ---
     if bool(random_pct_str) == bool(pages):
         click.echo("Error: exactly one of --random or --pages must be set.", err=True)
