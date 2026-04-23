@@ -97,12 +97,14 @@ def test_workflow_prompt_under_budget() -> None:
     `<concept_vs_thread>` (~2.5k chars) teaching the concept-vs-thread
     reframe with a worked good/bad Summary pair; v12-U2 added
     `<expert_questions>` (~2.8k chars) teaching the 5W + IndiaMart-
-    flavored expert questions. The ceiling is 36500 chars — crossing
-    it means a later edit re-introduced duplication or bloat. Raise
-    only on a deliberate feature that genuinely needs more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 36500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U2 baseline "
-        "was ~35.6k. If the growth is deliberate, raise this ceiling; otherwise "
+    flavored expert questions; v12-U3 added `<inline_citations>`
+    (~2k chars) teaching inline `[^msg-*]` footnote syntax + `## Sources`
+    footnote block. The ceiling is 38500 chars — crossing it means a
+    later edit re-introduced duplication or bloat. Raise only on a
+    deliberate feature that genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 38500, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; v12-U3 baseline "
+        "was ~37k. If the growth is deliberate, raise this ceiling; otherwise "
         "it's probably re-introduced duplication."
     )
 
@@ -786,4 +788,47 @@ def test_expert_questions_between_concept_and_workflow() -> None:
     assert concept_idx < expert_idx < workflow_idx, (
         "<expert_questions> must appear after <concept_vs_thread> and "
         "before <workflow> so the 5W checklist primes the workflow"
+    )
+
+
+def test_inline_citations_section_present() -> None:
+    """v12-U3: the prompt must carry an `<inline_citations>` section
+    teaching inline `[^msg-*]` footnote syntax. Without claim-level
+    citations the reader can't verify where each fact came from —
+    the judge persona study flagged "unverifiable claims" repeatedly.
+    The section must name the footnote syntax, the `## Sources`
+    footnote block, and point at the actual helper that returns the
+    raw_path the agent needs to build the hash (`get_thread_context`,
+    which surfaces `raw_path` in its `messages_summary`). Abstract
+    rules without the syntax snippet + source block shape don't
+    survive first contact with real batches."""
+    assert "<inline_citations>" in COMPILER_SYSTEM_PROMPT
+    assert "</inline_citations>" in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find("<inline_citations>")
+    end = COMPILER_SYSTEM_PROMPT.find("</inline_citations>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    # Footnote syntax present — this is the load-bearing token. The
+    # literal bracket+caret sequence must survive pre-commit / YAML
+    # escaping unchanged.
+    assert "[^msg-" in block, "inline footnote syntax `[^msg-` missing"
+    assert "## Sources" in block
+    # Helper reference matches the real tool that exposes raw_path
+    # (see src/compile/tools/raw_access.py:get_thread_context).
+    assert "get_thread_context" in block, (
+        "inline_citations must reference the real helper that returns "
+        "raw_path (`get_thread_context` in src/compile/tools/raw_access.py)"
+    )
+
+
+def test_inline_citations_after_concept_vs_thread() -> None:
+    """v12-U3: `<inline_citations>` loads AFTER `<concept_vs_thread>`
+    so the concept/evidence reframe primes the agent before it learns
+    the claim-level citation mechanics. Section order matters for how
+    the model weights guidance."""
+    concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
+    citations_idx = COMPILER_SYSTEM_PROMPT.find("<inline_citations>")
+    assert concept_idx != -1 and citations_idx != -1
+    assert concept_idx < citations_idx, (
+        "<inline_citations> must load after <concept_vs_thread> so the "
+        "concept-vs-thread reframe primes the citation teaching"
     )

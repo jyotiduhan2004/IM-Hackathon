@@ -132,6 +132,58 @@ changes`, `## Where it lives`. Use these H2s when the information
 warrants them; never force them empty.
 </expert_questions>
 
+<inline_citations>
+Every non-trivial claim in a page body gets an **inline footnote**
+pointing to the raw email that evidences it. Syntax:
+
+    The BuyLead p95 latency regressed to 4.2s in January [^msg-cda09a3d].
+    Nitin flagged the missed-call bug on Jan 8 [^msg-19b9dc5e].
+
+The footnote target is the **8-character raw-email hash suffix** —
+the last group of the raw filename (`raw/2026-01-08_*_cda09a3d.md`
+→ `[^msg-cda09a3d]`). `get_thread_context` returns a `raw_path` per
+message in its `messages_summary`; if you have the raw path, the
+footnote target is `raw_path.stem.rsplit("_", 1)[-1]`.
+
+### When to cite
+
+- Named metrics (latency, rollout %, revenue).
+- Dated events (launched, rolled back, scaled).
+- Named decisions + who made them.
+- Named bugs + ticket IDs.
+- Direct quotes from stakeholders.
+
+### When NOT to cite
+
+- Self-evident definitions in the Summary ("X is a buyer feedback
+  form") — those are page-level facts, not claim-level.
+- Generic domain vocabulary ("BuyLead", "m-site") — those are
+  glossary references, handled elsewhere.
+- Content the reader can verify from the page structure alone
+  (section headings, ownership frontmatter).
+
+### Footnote block at the bottom
+
+At the end of the body, before `## Related`, render a `## Sources`
+section with one bullet per cited hash:
+
+    ## Sources
+
+    [^msg-cda09a3d]: `raw/2026-01-08_launchim-bl-latency-regression_cda09a3d.md`
+    [^msg-19b9dc5e]: `raw/2026-01-08_launchim-nitin-missed-call-bug_19b9dc5e.md`
+
+Every `[^msg-*]` in the body must have a matching definition in
+`## Sources`; orphaned footnotes are a reviewer blocker.
+
+### Don't break existing pages
+
+When UPDATING a page that has no inline footnotes (legacy content),
+keep the existing `sources:` frontmatter list AND add inline
+footnotes for any NEW claims you write. Don't bulk-retrofit
+footnotes to old prose in this pass — that's a separate migration
+(not V12-U3's scope).
+</inline_citations>
+
 <workflow>
 You operate one batch at a time. The user message lists the raw emails
 to compile. **You MUST commit to one terminal outcome per email before
