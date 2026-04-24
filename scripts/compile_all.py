@@ -116,9 +116,7 @@ def _regenerate_landing_surfaces(wiki_dir: str) -> None:
             click.echo(fmt(fn(wiki_path)))
         except Exception as exc:  # noqa: BLE001 — landing gen must never abort a run
             logger.warning("landing-failed", generator=name, error=str(exc))
-            click.echo(
-                f"WARN: landing generator {name!r} failed: {exc}", err=True
-            )
+            click.echo(f"WARN: landing generator {name!r} failed: {exc}", err=True)
 
 
 def _stamp_frontmatter_compiled(fm: dict[str, Any], now_iso: str, model_name: str) -> None:
@@ -142,6 +140,12 @@ def _stamp_recently_modified_pages(
     is absent — pages updated by the agent in this run already have a
     stale stamp from a previous compile, so the index pass skips them.
 
+    Also updates the catalog mirror — ``wiki_pages.last_compiled_at`` — so
+    `resolve_page` ordering + Langfuse freshness scores reflect the
+    just-completed run (#165). The frontmatter and DB stamp are written
+    together; a DB blip logs a warning but does not roll back the
+    on-disk frontmatter (the catalog self-heals on the next sync).
+
     Returns (stamped_count, skipped_count). `skipped` covers pages whose
     frontmatter looks corrupt (missing `title`/`page_type` after extraction)
     — same guard `update_wiki_index` uses to avoid clobbering mangled pages.
@@ -152,6 +156,7 @@ def _stamp_recently_modified_pages(
 
     now_iso = datetime.now(UTC).isoformat()
     stamped, skipped = 0, 0
+    stamped_slugs: list[str] = []
 
     for category in _WIKI_CATEGORIES:
         cat_dir = wiki_path / category
@@ -174,10 +179,51 @@ def _stamp_recently_modified_pages(
                 body = extract_body(content)
                 md_file.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
                 stamped += 1
+                stamped_slugs.append(md_file.stem)
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("stamp skip", path=str(md_file), error=str(exc))
                 skipped += 1
+
+    # Catalog mirror — keep ``wiki_pages.last_compiled_at`` in lockstep
+    # with the on-disk frontmatter so downstream consumers (resolve_page
+    # ordering, Langfuse freshness scores) see a live value instead of
+    # the NULL #165 flagged. Runs in a single batch UPDATE; failures are
+    # logged but never re-raised (catalog staleness < crashed coordinator).
+    if stamped_slugs:
+        _stamp_catalog_last_compiled(stamped_slugs)
+
     return stamped, skipped
+
+
+def _stamp_catalog_last_compiled(slugs: list[str]) -> None:
+    """UPDATE ``wiki_pages.last_compiled_at = now()`` for each slug.
+
+    Companion to the frontmatter stamp in ``_stamp_recently_modified_pages``
+    — #165 noted the DB column was NULL on every topic page because the
+    agent's ``stamp_page_compiled_at`` tool only writes frontmatter.
+    Wraps in try/except + logs: the frontmatter is already persisted, a
+    DB blip must not crash the compile coordinator (next catalog sync
+    reconciles).
+    """
+    if not slugs:
+        return
+    # Lazy import so the conftest monkeypatch on ``src.db.connect`` is
+    # picked up (same pattern as ``_sync_wiki_catalog``).
+    from src.db import connect as _connect
+
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE wiki_pages SET last_compiled_at = now() WHERE slug = ANY(%s)",
+                (list(slugs),),
+            )
+            conn.commit()
+    except psycopg.Error as exc:
+        logger.warning(
+            "stamp_catalog_last_compiled_failed",
+            slugs_count=len(slugs),
+            error=str(exc),
+        )
 
 
 _CONTENT_PAGE_DIRS: tuple[str, ...] = (
@@ -433,10 +479,25 @@ def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
                 logger.warning("catalog_sync_read_failed", path=str(page_abs), error=str(exc))
                 continue
             fm = extract_frontmatter(content)
+            # Empty-frontmatter guard (#180). `--- / {} / ---` and other
+            # missing-field frontmatter produced catalog rows with a
+            # stem-derived title and default status — the validator
+            # flagged the page as broken but the catalog still reported
+            # it as synced. Refuse to upsert when both ``page_type`` and
+            # ``title`` are absent; the coordinator can't tell a legit
+            # page from a mangled one.
             title_raw = fm.get("title")
-            title = title_raw.strip() if isinstance(title_raw, str) and title_raw.strip() else None
-            if not title:
-                title = page_abs.stem.replace("-", " ").title()
+            fm_title = title_raw.strip() if isinstance(title_raw, str) else ""
+            type_raw = fm.get("page_type")
+            fm_type = type_raw.strip() if isinstance(type_raw, str) else ""
+            if not fm_title and not fm_type:
+                logger.info(
+                    "catalog_skipped",
+                    path=str(page_abs),
+                    reason="empty_frontmatter",
+                )
+                continue
+            title = fm_title or page_abs.stem.replace("-", " ").title()
             status_raw = fm.get("status")
             status = (
                 status_raw
@@ -869,6 +930,11 @@ def _append_batch_log(
 
 
 _MERGE_CANDIDATES_HEADER = (
+    "---\n"
+    'title: "Merge candidates"\n'
+    "page_type: coordinator_notes\n"
+    "status: active\n"
+    "---\n\n"
     "# Merge candidates\n\n"
     "Append-only queue populated by the reviewer subagent when it flags two\n"
     "pages as duplicates. Each block is one batch. Apply with:\n\n"
@@ -876,6 +942,28 @@ _MERGE_CANDIDATES_HEADER = (
     "        --pair slug-a,slug-b --keep slug-a --dry-run\n\n"
     "Then re-run with ``--commit`` when the diff looks right.\n\n"
 )
+
+
+def _ensure_merge_candidates_frontmatter(queue_path: Path) -> None:
+    """Prepend the canonical header (with YAML frontmatter) to an existing
+    ``merge_candidates.md`` that lacks frontmatter.
+
+    Critique's ``find_touched_pages`` treats any recently-modified page
+    with no parseable frontmatter as a "broken" touched page and pulls
+    it into unrelated batch reviews — the Codex-flagged "poisoned input
+    set" that caused #179. Prepending the header is idempotent: once
+    the file has `page_type: coordinator_notes`, subsequent appends
+    re-check and no-op.
+    """
+    try:
+        existing = queue_path.read_text(encoding="utf-8")
+    except OSError:
+        return  # caller will re-create with the full header
+    if existing.lstrip().startswith("---"):
+        return  # already has frontmatter; leave alone
+    # Pre-existing content without frontmatter: prepend the header so
+    # the file becomes critique-safe without losing the backlog.
+    queue_path.write_text(_MERGE_CANDIDATES_HEADER + existing, encoding="utf-8")
 
 
 def _append_merge_candidates(
@@ -909,6 +997,11 @@ def _append_merge_candidates(
 
         if not queue_path.exists():
             queue_path.write_text(_MERGE_CANDIDATES_HEADER, encoding="utf-8")
+        else:
+            # Legacy files without frontmatter are "broken" to the
+            # critique touched-pages scan — backfill the header so the
+            # file isn't pulled into unrelated batch reviews.
+            _ensure_merge_candidates_frontmatter(queue_path)
 
         timestamp = datetime.now(UTC).isoformat(timespec="seconds")
         lines = [f"## {timestamp} — trace `{trace_id}`", ""]
@@ -1015,6 +1108,55 @@ def _collect_content_cited_message_ids(message_ids: list[str]) -> set[str]:
 _SKIP_INSIGHT_CATEGORIES = frozenset({"trivial_skip", "already_captured"})
 
 
+def _collect_attempts_compiled_message_ids(run_id: UUID, message_ids: list[str]) -> set[str]:
+    """Secondary compile evidence (#174): return message_ids that already
+    have ``compile_attempts.outcome='compiled'`` stamped in the current run.
+
+    WHY — the primary signal is a content-page touch
+    (``_collect_content_cited_message_ids``). That misses the legitimate
+    edge case where the agent did real work (``write_draft_page``,
+    ``edit_file``) but the only citation landed on a people/entity stub
+    — the page_type filter excludes those by design, so the message
+    wrongly stays ``pending`` and the next run's kimi batch re-processes
+    it and often lands on ``skipped``. That was the ~5% waste #174
+    identified.
+
+    Scoping the lookup to ``run_id`` keeps the signal tight: older
+    compile-attempts (from prior runs) don't reach across and flip
+    messages the current run never processed.
+
+    Fails open — a DB blip returns an empty set so the coordinator
+    leaves the message pending rather than falsely promoting it.
+    """
+    if not message_ids:
+        return set()
+    from src.db import connect as _connect
+
+    try:
+        with _connect() as conn:
+            rows = cast(
+                list[dict[str, Any]],
+                conn.execute(
+                    """
+                    SELECT DISTINCT message_id
+                      FROM compile_attempts
+                     WHERE run_id = %s
+                       AND outcome = 'compiled'
+                       AND message_id = ANY(%s)
+                    """,
+                    (run_id, list(message_ids)),
+                ).fetchall(),
+            )
+    except Exception as exc:  # noqa: BLE001 — attempts lookup is best-effort
+        logger.warning(
+            "attempts_compiled_fetch_failed",
+            run_id=str(run_id),
+            error=str(exc),
+        )
+        return set()
+    return {r["message_id"] for r in rows}
+
+
 def _insights_skip_paths(run_id: UUID) -> set[str]:
     """Return `email_path`s the agent flagged as skip-worthy this run.
 
@@ -1098,29 +1240,48 @@ def _mark_batch_compiled(
     message_ids = [str(row["message_id"]) for row in row_by_path.values()]
     content_cited = _collect_content_cited_message_ids(message_ids)
     skip_paths = _insights_skip_paths(run_id) if run_id is not None else set()
+    # Secondary compile signal (#174): message_ids that already have an
+    # attempts-row outcome='compiled' in this run. Catches the edge case
+    # where the agent's only citation was to a people/entity stub —
+    # content-page filter drops those but the attempts row says the
+    # batch did real work.
+    attempts_compiled: set[str] = (
+        _collect_attempts_compiled_message_ids(run_id, message_ids) if run_id is not None else set()
+    )
 
     compiled_ids: list[str] = []
     skipped_ids: list[str] = []
     not_cited_paths: list[str] = []
     for path, row in row_by_path.items():
         mid = str(row["message_id"])
-        if mid in content_cited:
+        cited_in_content = mid in content_cited
+        outcome_in_attempts = mid in attempts_compiled
+        if cited_in_content or outcome_in_attempts:
             finish_message_compile(mid, compile_model=compile_model)
             compiled_ids.append(mid)
-            continue
-        if path in skip_paths:
+            decision = "compiled"
+        elif path in skip_paths:
             # ``mark_skipped`` is a no-op on already-compiled/claimed
             # rows (state guard inside the repo function), so ordering
             # vs. the ``content_cited`` branch is safe either way.
             mark_skipped(mid, "insight:trivial_or_already_captured")
             skipped_ids.append(mid)
-            continue
-        logger.warning(
-            "batch email not cited in content page; leaving pending",
-            path=path,
+            decision = "skipped"
+        else:
+            logger.warning(
+                "batch email not cited in content page; leaving pending",
+                path=path,
+                message_id=mid,
+            )
+            not_cited_paths.append(path)
+            decision = "kept_pending"
+        logger.info(
+            "state_flip_decision",
             message_id=mid,
+            outcome_in_attempts=outcome_in_attempts,
+            cited_in_content_page=cited_in_content,
+            decision=decision,
         )
-        not_cited_paths.append(path)
     return compiled_ids, skipped_ids, not_cited_paths, missing
 
 

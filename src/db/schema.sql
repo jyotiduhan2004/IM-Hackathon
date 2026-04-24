@@ -184,7 +184,8 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
                           ('topic', 'entity', 'system', 'policy',
                            'timeline', 'conflict',
                            'domain', 'glossary', 'decision', 'person',
-                           'home', 'changes')),
+                           'home', 'changes',
+                           'coordinator_notes')),
   -- Default flipped from 'current' → 'active' on 2026-04-16 via
   -- src/db/migrations/202604162000_wiki_pages_default_status_active.sql.
   -- CHECK still accepts the legacy triplet so reads of un-migrated rows

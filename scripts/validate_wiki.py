@@ -90,6 +90,7 @@ VALID_PAGE_TYPES = {
     "person",
     "home",
     "changes",
+    "coordinator_notes",
 }
 CATEGORY_TO_TYPE = {
     "topics": "topic",

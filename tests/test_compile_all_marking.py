@@ -398,3 +398,304 @@ def test_mark_terminal_guard_exhausted_paths_preserves_compiled(
 
     assert flipped == []  # compiled rows don't flip
     assert _state(db_conn, "m1") == "compiled"
+
+
+# ---------------------------------------------------------------------------
+# Secondary compile signal (#174): attempts-based fallback.
+# ---------------------------------------------------------------------------
+
+
+def _insert_attempt(conn, *, message_id: str, run_id: uuid.UUID, outcome: str | None = None) -> int:
+    """Insert a ``compile_attempts`` row. When ``outcome`` is set, also
+    stamp ``finished_at``. Returns the row id."""
+    if outcome is None:
+        row = conn.execute(
+            """
+            INSERT INTO compile_attempts (
+              message_id, run_id, compile_model
+            )
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (message_id, run_id, "test-model"),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            INSERT INTO compile_attempts (
+              message_id, run_id, compile_model, outcome, finished_at
+            )
+            VALUES (%s, %s, %s, %s, now())
+            RETURNING id
+            """,
+            (message_id, run_id, "test-model", outcome),
+        ).fetchone()
+    return int(row["id"])
+
+
+def test_mark_batch_compiled_attempts_signal_flips_people_only_touch(
+    compile_all_module, db_conn, tmp_path
+) -> None:
+    """#174 secondary signal: person-only touch PLUS attempts outcome='compiled'
+    in the current run flips the message to compiled (the ~5% waste case)."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    run_id = _insert_run(db_conn)
+    # Agent's only citation was a people stub — content-page filter
+    # normally excludes this. But the attempt row says it compiled.
+    person_id = _insert_page(db_conn, slug="alice", page_type="person")
+    _insert_touch(db_conn, message_id="m1", page_id=person_id)
+    _insert_attempt(db_conn, message_id="m1", run_id=run_id, outcome="compiled")
+    db_conn.commit()
+
+    batch = [{"path": "raw/a.md"}]
+    compiled, skipped, not_cited_paths, _missing = mod._mark_batch_compiled(
+        batch, tmp_path, run_id=run_id
+    )
+    assert compiled == ["m1"]
+    assert skipped == []
+    assert not_cited_paths == []
+    assert _state(db_conn, "m1") == "compiled"
+
+
+def test_mark_batch_compiled_attempts_signal_scoped_by_run(
+    compile_all_module, db_conn, tmp_path
+) -> None:
+    """A prior run's outcome='compiled' attempt must not flip this run's message."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    old_run = _insert_run(db_conn)
+    current_run = _insert_run(db_conn)
+    # outcome='compiled' attached to the OLD run id — should be ignored.
+    _insert_attempt(db_conn, message_id="m1", run_id=old_run, outcome="compiled")
+    db_conn.commit()
+
+    batch = [{"path": "raw/a.md"}]
+    compiled, skipped, not_cited_paths, _missing = mod._mark_batch_compiled(
+        batch, tmp_path, run_id=current_run
+    )
+    assert compiled == []
+    assert skipped == []
+    assert not_cited_paths == ["raw/a.md"]
+    assert _state(db_conn, "m1") == "pending"
+
+
+def test_mark_batch_compiled_in_flight_attempts_do_not_flip(
+    compile_all_module, db_conn, tmp_path
+) -> None:
+    """In-flight attempts (outcome IS NULL) are not evidence of success —
+    only stamped ``outcome='compiled'`` counts as the secondary signal."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    run_id = _insert_run(db_conn)
+    # In-flight attempt (NULL outcome) — the normal within-batch state
+    # before ``_record_attempts_outcome`` fires. Must not auto-flip.
+    _insert_attempt(db_conn, message_id="m1", run_id=run_id, outcome=None)
+    db_conn.commit()
+
+    batch = [{"path": "raw/a.md"}]
+    compiled, _skipped, not_cited_paths, _missing = mod._mark_batch_compiled(
+        batch, tmp_path, run_id=run_id
+    )
+    assert compiled == []
+    assert not_cited_paths == ["raw/a.md"]
+    assert _state(db_conn, "m1") == "pending"
+
+
+def test_collect_attempts_compiled_message_ids(compile_all_module, db_conn) -> None:
+    """Helper returns only message_ids with a stamped 'compiled' outcome
+    attached to the given run_id."""
+    mod = compile_all_module
+    _insert_message(db_conn, message_id="m1", raw_path="raw/a.md")
+    _insert_message(db_conn, message_id="m2", raw_path="raw/b.md")
+    _insert_message(db_conn, message_id="m3", raw_path="raw/c.md")
+    run_id = _insert_run(db_conn)
+    other_run = _insert_run(db_conn)
+    _insert_attempt(db_conn, message_id="m1", run_id=run_id, outcome="compiled")
+    _insert_attempt(db_conn, message_id="m2", run_id=run_id, outcome="failed")
+    _insert_attempt(db_conn, message_id="m3", run_id=other_run, outcome="compiled")
+    db_conn.commit()
+
+    cited = mod._collect_attempts_compiled_message_ids(run_id, ["m1", "m2", "m3"])
+    assert cited == {"m1"}
+
+
+# ---------------------------------------------------------------------------
+# #179 — merge_candidates.md frontmatter.
+# ---------------------------------------------------------------------------
+
+
+def test_append_merge_candidates_writes_frontmatter_on_first_append(
+    compile_all_module, tmp_path
+) -> None:
+    """First append creates ``merge_candidates.md`` with YAML frontmatter
+    that validates as ``page_type: coordinator_notes`` — otherwise critique's
+    touched-pages scan flags it as 'broken' and loops the gate (#179)."""
+    mod = compile_all_module
+    pairs = [{"slug_a": "a", "slug_b": "b", "note": "duplicate"}]
+    written = mod._append_merge_candidates(pairs, str(tmp_path), trace_id="run-1:batch-1")
+    assert written == 1
+
+    content = (tmp_path / "merge_candidates.md").read_text(encoding="utf-8")
+    assert content.startswith("---\n")
+    # Canonical frontmatter block — page_type must be coordinator_notes so
+    # the wiki_pages CHECK + validator accept the catalog row.
+    head = content.split("---", 2)[1]
+    assert 'title: "Merge candidates"' in head
+    assert "page_type: coordinator_notes" in head
+    assert "status: active" in head
+
+
+def test_append_merge_candidates_backfills_legacy_file(compile_all_module, tmp_path) -> None:
+    """An existing ``merge_candidates.md`` without frontmatter gets the
+    header prepended on the next append — legacy files migrate in place."""
+    mod = compile_all_module
+    queue = tmp_path / "merge_candidates.md"
+    queue.write_text("# Merge candidates\n\nSome legacy content\n", encoding="utf-8")
+
+    pairs = [{"slug_a": "x", "slug_b": "y", "note": "merge me"}]
+    written = mod._append_merge_candidates(pairs, str(tmp_path), trace_id="run-1:batch-1")
+    assert written == 1
+
+    content = queue.read_text(encoding="utf-8")
+    assert content.startswith("---\n")
+    head = content.split("---", 2)[1]
+    assert "page_type: coordinator_notes" in head
+    # Legacy body is preserved.
+    assert "Some legacy content" in content
+    # New append landed too.
+    assert "[x] vs [y]" in content
+
+
+def test_append_merge_candidates_idempotent_frontmatter(compile_all_module, tmp_path) -> None:
+    """Re-append over an already-correct file leaves the header untouched
+    (exactly one frontmatter block, not a nested one)."""
+    mod = compile_all_module
+    pairs = [{"slug_a": "a", "slug_b": "b", "note": "n"}]
+    mod._append_merge_candidates(pairs, str(tmp_path), trace_id="run-1:batch-1")
+    mod._append_merge_candidates(pairs, str(tmp_path), trace_id="run-1:batch-2")
+
+    content = (tmp_path / "merge_candidates.md").read_text(encoding="utf-8")
+    # Exactly two `---` markers (opening + closing of the single header).
+    assert content.count("---\n") == 2
+
+
+# ---------------------------------------------------------------------------
+# #180 — empty-frontmatter guard on catalog sync.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_wiki_catalog_skips_empty_frontmatter(compile_all_module, db_conn, tmp_path) -> None:
+    """A page with empty YAML frontmatter (``---\\n{}\\n---``) is NOT
+    upserted into ``wiki_pages`` — the catalog must not pretend a mangled
+    page exists (#180)."""
+    mod = compile_all_module
+    topics = tmp_path / "topics"
+    topics.mkdir(parents=True)
+    # Empty-frontmatter case — exactly the shape #180 flagged.
+    bad_page = topics / "google-ads-account-guardrails.md"
+    bad_page.write_text("---\n{}\n---\n\nbody\n", encoding="utf-8")
+    # A well-formed sibling proves the loop still processes other rows.
+    good_page = topics / "good-one.md"
+    good_page.write_text(
+        "---\ntitle: Good\npage_type: topic\nstatus: active\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    db_conn.commit()
+
+    synced = mod._sync_wiki_catalog([bad_page, good_page], tmp_path)
+    assert synced == 1  # only the good page
+
+    row = db_conn.execute("SELECT slug FROM wiki_pages ORDER BY slug").fetchall()
+    slugs = [r["slug"] for r in row]
+    assert slugs == ["good-one"]
+
+
+def test_sync_wiki_catalog_keeps_upserting_when_title_missing(
+    compile_all_module, db_conn, tmp_path
+) -> None:
+    """A page with frontmatter that has ``page_type`` but no ``title`` still
+    syncs (the fallback stem-derived title kicks in) — the guard targets
+    EMPTY frontmatter, not merely incomplete."""
+    mod = compile_all_module
+    topics = tmp_path / "topics"
+    topics.mkdir(parents=True)
+    page = topics / "topic-no-title.md"
+    page.write_text("---\npage_type: topic\nstatus: active\n---\n\nbody\n", encoding="utf-8")
+    db_conn.commit()
+
+    synced = mod._sync_wiki_catalog([page], tmp_path)
+    assert synced == 1
+    row = db_conn.execute(
+        "SELECT slug, title FROM wiki_pages WHERE slug = %s", ("topic-no-title",)
+    ).fetchone()
+    assert row is not None
+    assert row["title"] == "Topic No Title"  # stem fallback
+
+
+# ---------------------------------------------------------------------------
+# #165 — last_compiled_at DB stamp.
+# ---------------------------------------------------------------------------
+
+
+def test_stamp_recently_modified_pages_updates_wiki_pages_last_compiled_at(
+    compile_all_module, db_conn, tmp_path
+) -> None:
+    """Stamping a page bumps BOTH the frontmatter `last_compiled` AND the
+    catalog mirror `wiki_pages.last_compiled_at` (#165)."""
+    import time
+
+    mod = compile_all_module
+    # Pre-seed the catalog row with NULL last_compiled_at — mimics the
+    # production state that #165 called out.
+    _insert_page(db_conn, slug="topic-a", page_type="topic")
+    db_conn.commit()
+
+    # Freshly-written topic page on disk.
+    topics = tmp_path / "topics"
+    topics.mkdir(parents=True)
+    page = topics / "topic-a.md"
+    page.write_text(
+        "---\ntitle: Topic A\npage_type: topic\nstatus: active\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    # `since_timestamp` just before the write so the page is "recent".
+    since = time.time() - 60
+
+    stamped, skipped = mod._stamp_recently_modified_pages(str(tmp_path), since, "test-model")
+    assert stamped == 1
+    assert skipped == 0
+
+    # Frontmatter stamp landed on disk.
+    content = page.read_text(encoding="utf-8")
+    assert "last_compiled:" in content
+
+    # DB mirror stamped — was NULL before the run (#165 symptom).
+    row = db_conn.execute(
+        "SELECT last_compiled_at FROM wiki_pages WHERE slug = %s",
+        ("topic-a",),
+    ).fetchone()
+    assert row is not None
+    assert row["last_compiled_at"] is not None
+
+
+def test_stamp_catalog_last_compiled_batch_updates_multiple_slugs(
+    compile_all_module, db_conn
+) -> None:
+    """Helper batches UPDATEs across every passed slug."""
+    mod = compile_all_module
+    _insert_page(db_conn, slug="a", page_type="topic")
+    _insert_page(db_conn, slug="b", page_type="system")
+    db_conn.commit()
+
+    mod._stamp_catalog_last_compiled(["a", "b"])
+
+    rows = db_conn.execute("SELECT slug, last_compiled_at FROM wiki_pages ORDER BY slug").fetchall()
+    assert all(r["last_compiled_at"] is not None for r in rows)
+
+
+def test_stamp_catalog_last_compiled_empty_noop(compile_all_module) -> None:
+    """Empty slug list is a no-op (no DB round-trip, no crash)."""
+    mod = compile_all_module
+    # Should not raise even without any DB connection wiring.
+    mod._stamp_catalog_last_compiled([])

@@ -178,7 +178,8 @@ def _load_messages_ddl() -> str:
                               ('topic', 'entity', 'system', 'policy',
                                'timeline', 'conflict',
                                'domain', 'glossary', 'decision', 'person',
-                               'home', 'changes')),
+                               'home', 'changes',
+                               'coordinator_notes')),
       status                TEXT NOT NULL DEFAULT 'active'
                             CHECK (status IN
                               ('current', 'superseded', 'contested',
