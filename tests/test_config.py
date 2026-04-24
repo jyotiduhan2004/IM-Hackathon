@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from src.config import _discover_env_file
+from src.config import settings
 
 
 def test_discover_env_file_prefers_local_env(tmp_path: Path) -> None:
@@ -35,3 +36,12 @@ def test_discover_env_file_returns_none_without_local_or_shared_env(tmp_path: Pa
     (repo_root / ".git").write_text("gitdir: /tmp/missing-gitdir\n", encoding="utf-8")
 
     assert _discover_env_file(repo_root) is None
+
+
+def test_model_pool_default() -> None:
+    """Default pool: grok + kimi + qwen3.6-plus (post PR #225 gate-flip dipstick)."""
+    assert settings.model_pool == [
+        "x-ai/grok-4.1-fast",
+        "moonshotai/kimi-k2.6",
+        "qwen/qwen3.6-plus",
+    ]

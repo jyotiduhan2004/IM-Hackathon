@@ -112,7 +112,25 @@ class Settings(BaseSettings):
     #   confirmed. x-ai/grok-4.1-fast stays in the pool — it was added
     #   alongside these two on 2026-04-15 for wider A/B coverage and its
     #   team-key access is working.
-    llm_model_pool: str = "minimax/minimax-m2.7,z-ai/glm-5,x-ai/grok-4.1-fast"
+    # - moonshotai/kimi-k2.6 (2026-04-24): 100% valid across 12 attempts
+    #   (3 compiled / 9 correct already_captured skips / 0 failures).
+    #   High skip discrimination; strong frontier-tier behavior.
+    #   Same-email cross-check confirmed skips were correct for content
+    #   already in the wiki. Added to pool.
+    # - qwen/qwen3.5-122b-a10b (2026-04-23): 5-attempt one-off, 0
+    #   compiled / 4 trivial-skips / 1 recursion-fail. Replaced by
+    #   qwen3.6-plus (next entry).
+    # - qwen/qwen3.6-plus (2026-04-24): untested on this pipeline but
+    #   flagged by user as worth trying. `_healthy_pool` guard will
+    #   drop if it misbehaves. Added.
+    # - minimax/minimax-m2.7 + z-ai/glm-5 (2026-04-24): dropped from
+    #   pool after PR #225 gate-flip caused 31.6% + 24.6% recursion-
+    #   limit fail (vs 5.3% + 0% pre-merge). Dipstick confirmed: grok
+    #   succeeded 17/17 on same-email head-to-head. Out until gate-
+    #   loop fixes (idempotent check_my_work + people-wikilink
+    #   autofix) land + a smoke re-verifies <5% rec-fail per re-
+    #   enabled model.
+    llm_model_pool: str = "x-ai/grok-4.1-fast,moonshotai/kimi-k2.6,qwen/qwen3.6-plus"
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
