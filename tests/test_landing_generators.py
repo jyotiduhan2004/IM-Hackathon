@@ -11,10 +11,8 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
-from src.compile.compiler import _APPROVED_ALIASES
 from src.compile.compiler import _DOMAINS
 from src.compile.compiler import _generate_changes
-from src.compile.compiler import _generate_glossary
 from src.compile.compiler import _generate_home
 from src.compile.compiler import _regenerate_decision_stubs
 from src.compile.compiler import _regenerate_domain_hubs
@@ -122,32 +120,6 @@ def test_domain_hub_idempotent(tmp_path: Path) -> None:
     assert first == second
 
 
-def test_generate_glossary_extracts_inline_definitions(tmp_path: Path) -> None:
-    _write_page(
-        tmp_path / "topics" / "seller.md",
-        {"title": "Seller ISQ", "page_type": "topic"},
-        "ABC (Alpha Beta Corp) launched the item quantity check.\n",
-    )
-    path = _generate_glossary(tmp_path)
-    content = path.read_text()
-    assert "| ABC | Alpha Beta Corp |" in content
-    # Approved aliases always appear even if no page defined them inline.
-    for term, expansion in _APPROVED_ALIASES.items():
-        assert f"| {term} | {expansion} |" in content
-
-
-def test_generate_glossary_idempotent(tmp_path: Path) -> None:
-    _write_page(
-        tmp_path / "topics" / "a.md",
-        {"title": "A"},
-        "XYZ (Cross System) is running.\n",
-    )
-    path = _generate_glossary(tmp_path)
-    first = path.read_text()
-    _generate_glossary(tmp_path)
-    assert first == path.read_text()
-
-
 def test_generate_home_lists_all_domains_and_recent(tmp_path: Path) -> None:
     _write_page(
         tmp_path / "topics" / "recent.md",
@@ -175,25 +147,38 @@ def test_generate_changes_no_db_writes_stub(tmp_path: Path) -> None:
 
 
 def test_generate_changes_groups_by_day(tmp_path: Path) -> None:
+    # Post-2026-04-24: _generate_changes reads pages from the filesystem
+    # (not compile_attempts from Postgres). Seed two pages touched on
+    # different days and expect two day-grouped sections.
     now = datetime.now(UTC)
-    rows = [
+    _write_page(
+        tmp_path / "topics" / "today-page.md",
         {
-            "attempted_at": now,
-            "outcome": "compiled",
-            "compile_model": "minimax-m2.7",
+            "title": "Today Page",
+            "page_type": "topic",
+            "status": "active",
+            "last_compiled": now.isoformat(),
         },
+        "Content from today.\n",
+    )
+    _write_page(
+        tmp_path / "topics" / "yesterday-page.md",
         {
-            "attempted_at": now - timedelta(days=1),
-            "outcome": "failed",
-            "compile_model": "grok-4.1-fast",
+            "title": "Yesterday Page",
+            "page_type": "topic",
+            "status": "active",
+            "last_compiled": (now - timedelta(days=1)).isoformat(),
         },
-    ]
-    path = _generate_changes(tmp_path, db_conn=_FakeConn(rows=rows))
+        "Content from yesterday.\n",
+    )
+    path = _generate_changes(tmp_path)
     content = path.read_text()
-    # Two distinct day headings present.
     assert content.count("## ") >= 2
-    assert "minimax-m2.7" in content
-    assert "grok-4.1-fast" in content
+    assert "[[topics/today-page]]" in content
+    assert "[[topics/yesterday-page]]" in content
+    # Must NOT leak LLM compile-runtime detail any more.
+    assert "minimax" not in content
+    assert "grok" not in content
 
 
 def test_regenerate_decision_stubs_creates_missing(tmp_path: Path) -> None:

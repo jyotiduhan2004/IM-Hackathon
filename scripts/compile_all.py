@@ -39,7 +39,6 @@ from src.compile.cache_stats import BatchStatsCallback  # noqa: E402
 from src.compile.categories import WIKI_CATEGORIES as _WIKI_CATEGORIES  # noqa: E402
 from src.compile.compiler import _extract_merge_candidates  # noqa: E402
 from src.compile.compiler import _generate_changes  # noqa: E402
-from src.compile.compiler import _generate_glossary  # noqa: E402
 from src.compile.compiler import _generate_home  # noqa: E402
 from src.compile.compiler import _regenerate_decision_stubs  # noqa: E402
 from src.compile.compiler import _regenerate_domain_hubs  # noqa: E402
@@ -95,8 +94,9 @@ def _regenerate_landing_surfaces(wiki_dir: str) -> None:
             _regenerate_domain_hubs,
             lambda r: f"Regenerated {len(r)} domain hubs.",
         ),
-        ("glossary", _generate_glossary, lambda _r: "Regenerated glossary.md."),
-        ("home", _generate_home, lambda _r: "Regenerated home.md."),
+        # Glossary removed 2026-04-24 — regex extractor produced misleading
+        # definitions (`BL = "Monolith + Modular"`, `DAU = "January 8, 2026"`).
+        ("home", _generate_home, lambda _r: "Regenerated index.md (reader home)."),
         ("changes", _generate_changes, lambda _r: "Regenerated changes.md."),
         (
             "decisions",
@@ -104,11 +104,21 @@ def _regenerate_landing_surfaces(wiki_dir: str) -> None:
             lambda r: f"Regenerated {len(r)} decision stubs.",
         ),
     )
+    # Silent-failure trap learned 2026-04-24: a prior revision logged
+    # landing-gen exceptions only through structlog, so when
+    # `_regenerate_domain_hubs` silently no-op'd the 8 domain pages never
+    # materialized — and the failure was invisible to the operator running
+    # `make publish`. The pipeline must not abort (derived surfaces aren't
+    # authoritative), but humans need to see the failure on stderr so they
+    # can diagnose before the next publish.
     for name, fn, fmt in jobs:
         try:
             click.echo(fmt(fn(wiki_path)))
         except Exception as exc:  # noqa: BLE001 — landing gen must never abort a run
             logger.warning("landing-failed", generator=name, error=str(exc))
+            click.echo(
+                f"WARN: landing generator {name!r} failed: {exc}", err=True
+            )
 
 
 def _stamp_frontmatter_compiled(fm: dict[str, Any], now_iso: str, model_name: str) -> None:
@@ -344,9 +354,15 @@ _VALID_WIKI_STATUS = {"current", "superseded", "contested", "active", "archived"
 # them — `_sync_and_stamp_landing_surfaces` handles these separately.
 # Each maps to its semantic page_type (CHECK accepts all three after
 # 202604161300_wiki_pages_home_changes.sql).
+# Post-2026-04-24 routing:
+#   - `index.md` serves `/` (the 8-domain reader home; was `home.md`).
+#   - `changes.md` stays the same (product activity feed; rewritten in PR).
+#   - `compile-status.md` is the ops view (was `index.md`); intentionally
+#     NOT cataloged — it's internal ops, not something `resolve_page` should
+#     surface and the `wiki_pages.page_type` CHECK has no matching value.
+# Glossary was removed in the same PR — do not resurrect by mapping here.
 _TOP_LEVEL_LANDING_PAGE_TYPES: dict[str, str] = {
-    "home.md": "home",
-    "glossary.md": "glossary",
+    "index.md": "home",
     "changes.md": "changes",
 }
 

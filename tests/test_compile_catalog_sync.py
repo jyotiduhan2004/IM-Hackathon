@@ -15,8 +15,10 @@ shared test DB:
 - re-running is idempotent (row count doesn't grow)
 
 `_sync_and_stamp_landing_surfaces`:
-- top-level home/glossary/changes + domains/decisions get catalog rows
-- each top-level file maps to its semantic page_type (home/glossary/changes)
+- top-level index/changes + domains/decisions get catalog rows
+  (post 2026-04-24: `home.md`→`index.md`, glossary removed,
+  `compile-status.md` excluded — internal ops, no matching page_type)
+- each top-level file maps to its semantic page_type (home/changes)
 - mtime stamping rewrites frontmatter with last_compiled + updated_by
 - absent wiki dir / no landing files → (0, 0) no-op
 """
@@ -245,26 +247,22 @@ def test_sync_is_idempotent(tmp_path: Path, db_conn: psycopg.Connection) -> None
 
 def test_landing_surfaces_sync_and_stamp(tmp_path: Path, db_conn: psycopg.Connection) -> None:
     """`_sync_and_stamp_landing_surfaces` must:
-    1. upsert wiki_pages rows for top-level home.md / glossary.md / changes.md
-       (all three as page_type='glossary')
+    1. upsert wiki_pages rows for top-level index.md / changes.md
+       (post 2026-04-24 routing: `index.md` is the reader home, glossary
+       subsystem removed, `compile-status.md` intentionally NOT cataloged)
     2. upsert wiki_pages rows for wiki/domains/*.md as page_type='domain'
     3. upsert wiki_pages rows for wiki/decisions/*.md as page_type='decision'
     4. stamp every surviving page's frontmatter with `last_compiled`
     """
     wiki = tmp_path / "wiki"
     _write_page(
-        wiki / "home.md",
-        {"title": "Home", "page_type": "index", "status": "active"},
-        "body",
-    )
-    _write_page(
-        wiki / "glossary.md",
-        {"title": "Glossary", "page_type": "glossary", "status": "active"},
+        wiki / "index.md",
+        {"title": "Home", "page_type": "home", "status": "active"},
         "body",
     )
     _write_page(
         wiki / "changes.md",
-        {"title": "Changes", "page_type": "index", "status": "active"},
+        {"title": "Changes", "page_type": "changes", "status": "active"},
         "body",
     )
     _write_page(
@@ -280,28 +278,29 @@ def test_landing_surfaces_sync_and_stamp(tmp_path: Path, db_conn: psycopg.Connec
 
     stamped, synced = compile_all._sync_and_stamp_landing_surfaces(str(wiki), "landing-test-model")
 
-    # 3 top-level + 1 domain + 1 decision
-    assert stamped == 5
-    assert synced == 5
+    # 2 top-level + 1 domain + 1 decision
+    assert stamped == 4
+    assert synced == 4
 
     from src.db.wiki_pages import find_by_slug
 
-    home_row = find_by_slug("home")
-    glossary_row = find_by_slug("glossary")
+    home_row = find_by_slug("index")
     changes_row = find_by_slug("changes")
     domain_row = find_by_slug("landing-test-agents")
     decision_row = find_by_slug("landing-test-adopt-x")
 
     assert home_row is not None and home_row["page_type"] == "home"
-    assert glossary_row is not None and glossary_row["page_type"] == "glossary"
     assert changes_row is not None and changes_row["page_type"] == "changes"
     assert domain_row is not None and domain_row["page_type"] == "domain"
     assert decision_row is not None and decision_row["page_type"] == "decision"
 
+    # Glossary must NOT be cataloged post-removal.
+    assert find_by_slug("glossary") is None
+
     # Stamping: last_compiled must appear in the rewritten frontmatter.
-    home_content = (wiki / "home.md").read_text(encoding="utf-8")
-    assert "last_compiled:" in home_content
-    assert "updated_by: landing-test-model" in home_content
+    index_content = (wiki / "index.md").read_text(encoding="utf-8")
+    assert "last_compiled:" in index_content
+    assert "updated_by: landing-test-model" in index_content
 
 
 def test_landing_surfaces_noop_when_wiki_missing(
@@ -337,11 +336,16 @@ def test_landing_surfaces_skips_mangled_top_level_file(
 ) -> None:
     """A mangled top-level file (no title/page_type) must NOT be stamped —
     the catalog sync can still fall back to stem-title, but we mustn't
-    corrupt a file the regenerator left in a bad state."""
+    corrupt a file the regenerator left in a bad state.
+
+    Uses `index.md` (the post-2026-04-24 reader-home path); `home.md` is
+    no longer in `_TOP_LEVEL_LANDING_PAGE_TYPES` so it would produce a
+    `synced == 0` no-op rather than exercising the fallback path.
+    """
     wiki = tmp_path / "wiki"
     wiki.mkdir()
     # Body only, no frontmatter at all.
-    (wiki / "home.md").write_text("raw body, no fm\n", encoding="utf-8")
+    (wiki / "index.md").write_text("raw body, no fm\n", encoding="utf-8")
 
     stamped, synced = compile_all._sync_and_stamp_landing_surfaces(str(wiki), "any-model")
     # Not stamped (no title/page_type guard), but cataloged (stem fallback).

@@ -67,6 +67,11 @@ class Settings(BaseSettings):
         env_file=_discover_env_file(_REPO_ROOT),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Tolerate unknown env keys so a newer `.env` (from a newer branch
+        # that added fields like `USE_SEMANTIC_RESOLVE` or `QMD_TIMEOUT_S`)
+        # doesn't break Settings() on this branch. Those keys just aren't
+        # read here — the features they gate live on other branches.
+        extra="ignore",
     )
 
     # LLM — `llm_model_pool` is the source of truth; every batch picks

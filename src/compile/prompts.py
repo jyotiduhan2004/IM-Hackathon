@@ -157,8 +157,8 @@ footnote target is `raw_path.stem.rsplit("_", 1)[-1]`.
 
 - Self-evident definitions in the Summary ("X is a buyer feedback
   form") — those are page-level facts, not claim-level.
-- Generic domain vocabulary ("BuyLead", "m-site") — those are
-  glossary references, handled elsewhere.
+- Generic domain vocabulary ("BuyLead", "m-site") — assume the reader
+  knows the term or can infer it from the page context.
 - Content the reader can verify from the page structure alone
   (section headings, ownership frontmatter).
 
@@ -298,7 +298,7 @@ Every email ends with EXACTLY ONE of these four:
 - **Edit / create a page** that cites this email's thread — the email
   adds concept-level evidence (decisions, stats, rollout state, policy
   changes, previously undocumented systems or people). Write to a
-  content page (topic, system, policy, decision, glossary).
+  content page (topic, system, policy, decision).
 - **`log_insight("trivial_skip", ...)`** — non-substantive: OOO
   auto-replies, "Thanks!", calendar acks, one-line confirmations,
   re-circulated links with no commentary.
@@ -402,9 +402,6 @@ Four visible content types; two lazy types; no timelines / conflicts.
   tools, services, mailing lists. "What is this thing."
 **policy** (`/wiki/policies/{slug}.md`) — rules, approval flows, guidelines,
   procedures. Includes version history.
-**glossary** (`/wiki/glossary.md` — single page, auto-generated) —
-  acronyms & IndiaMART-specific vocabulary. NEVER edit this file by
-  hand; it is regenerated from the corpus.
 
 Lazy (created only when referenced):
 **decision** (`/wiki/decisions/{slug}.md`) — lazy stubs appear when a
@@ -969,7 +966,7 @@ task(subagent_type="reviewer", description="review page payment-fraud-sweep-q2")
 ```yaml
 ---
 title: "Human Readable Title"
-page_type: topic | system | policy | person | decision | glossary
+page_type: topic | system | policy | person | decision
 status: active | superseded | archived
 source_threads:
   - 19b59cdc863ac109   # append new thread_ids over time; never replace

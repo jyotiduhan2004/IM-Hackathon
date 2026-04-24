@@ -589,7 +589,14 @@ def _compile_progress_block() -> list[str]:
 
 @tool
 def update_wiki_index(wiki_dir: str = "wiki") -> str:
-    """Regenerate wiki/index.md by scanning all wiki pages and their frontmatter.
+    """Regenerate `wiki/compile-status.md` — internal ops view of the compile
+    pipeline (counts, weekly coverage, per-category page listings).
+
+    `/` is served by `wiki/index.md` (the North-Star 8-domain-card home,
+    written by `_generate_home`). This function's output lives at
+    `/compile-status/` so the owner can still inspect pipeline health
+    without that view being the reader front door. Prior to 2026-04-24 this
+    function wrote `wiki/index.md` directly; that stomped the reader home.
 
     Also auto-stamps `last_compiled` on any page missing the field, using the
     current real UTC time. This guarantees every page has a timestamp without
@@ -647,7 +654,10 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
                 continue
 
     lines = [
-        "# Knowledge Base Index",
+        "# Compile status",
+        "",
+        "Internal pipeline view — counts, weekly coverage, and the full page",
+        "catalog. For the reader-facing home, see [/]( ./).",
         "",
         f"Last updated: {now_iso}",
         "",
@@ -663,12 +673,22 @@ def update_wiki_index(wiki_dir: str = "wiki") -> str:
             cat_blocks.append("")
             total += len(entries)
 
-    lines.insert(3, f"Total pages: {total}")
-    lines.insert(4, "")
+    lines.insert(5, f"Total pages: {total}")
+    lines.insert(6, "")
     lines.extend(cat_blocks)
 
-    index_path = wiki_path / "index.md"
+    index_path = wiki_path / "compile-status.md"
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Retire the legacy `wiki/index.md` written by this function before
+    # 2026-04-24 — `_generate_home` now owns that path. Safe to unlink
+    # because `_generate_home` (called later in the landing-surfaces
+    # phase) will recreate index.md with the reader-facing home content.
+    legacy_index = wiki_path / "index.md"
+    if legacy_index.exists():
+        try:
+            legacy_index.unlink()
+        except OSError:
+            pass
 
     # Rebuild reader-facing landing pages (home.md + section indexes) so the
     # deployed site shows real page listings instead of the hand-written
@@ -2172,12 +2192,13 @@ def validate_page_draft(
 
 
 # Re-exported from `src.compile.landing` — kept at module level so existing
-# callers (`from src.compile.compiler import _generate_glossary` etc.) and
-# tests keep working after the landing-generators extraction. Explicit
-# `as` aliases are required by mypy-strict's `implicit_reexport = false`.
-from src.compile.landing import _APPROVED_ALIASES as _APPROVED_ALIASES  # noqa: E402
+# callers (`from src.compile.compiler import _generate_home` etc.) and tests
+# keep working after the landing-generators extraction. Explicit `as` aliases
+# are required by mypy-strict's `implicit_reexport = false`.
+#
+# Glossary re-exports (`_APPROVED_ALIASES`, `_generate_glossary`) removed
+# 2026-04-24 alongside the underlying regex extractor.
 from src.compile.landing import _generate_changes as _generate_changes  # noqa: E402
-from src.compile.landing import _generate_glossary as _generate_glossary  # noqa: E402
 from src.compile.landing import _generate_home as _generate_home  # noqa: E402
 from src.utils import extract_body as _extract_body  # noqa: E402
 from src.utils import extract_frontmatter as _extract_frontmatter  # noqa: E402

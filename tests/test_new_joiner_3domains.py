@@ -128,15 +128,21 @@ def _md_target_to_slug(href: str) -> str:
 
 
 def _reachable_from_home(wiki_dir: Path, target_slug: str, max_hops: int) -> bool:
-    """BFS from ``wiki/home.md`` following both link styles up to ``max_hops``.
+    """BFS from the wiki home page following both link styles up to ``max_hops``.
 
     Follows wikilinks (``[[foo]]``) and markdown links
-    (``[Foo](domains/foo.md)``); home.md uses the latter for domain
+    (``[Foo](domains/foo.md)``); the home uses the latter for domain
     cards. A page is reachable if ``_resolve_slug`` for the target
-    matches any page visited within the hop budget. ``home.md`` itself
+    matches any page visited within the hop budget. The home page itself
     counts as hop 0.
+
+    As of 2026-04-24 the home lives at ``wiki/index.md`` (MkDocs serves
+    it at ``/``); accepts legacy ``home.md`` too so historical fixtures
+    keep working.
     """
-    home = wiki_dir / "home.md"
+    home = wiki_dir / "index.md"
+    if not home.exists():
+        home = wiki_dir / "home.md"
     if not home.exists():
         return False
     target_path = _resolve_slug(wiki_dir, target_slug)

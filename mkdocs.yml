@@ -11,7 +11,7 @@ use_directory_urls: true
 # index files — but the main nav is curated by hand, not a filesystem dump.
 # See docs/issues/10-phase1-implementation-plan.md (Workstream 2).
 nav:
-  - Home: home.md
+  - Home: index.md
   - Domains:
       - domains/index.md
   - Topics:
@@ -20,9 +20,10 @@ nav:
       - systems/index.md
   - Policies:
       - policies/index.md
-  - Glossary: glossary.md
   - Changes: changes.md
-  - About: about.md
+  - About:
+      - about.md
+      - Compile status: compile-status.md
 
 # Exclude draft pages from the build (anticipates the _drafts/ folder
 # added by the drafts-review workstream).

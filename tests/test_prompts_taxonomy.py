@@ -174,15 +174,23 @@ def test_workflow_step_7_points_to_editorial_notes_section() -> None:
     assert "editorial_notes" in workflow
 
 
-def test_taxonomy_covers_four_plus_two() -> None:
-    """4+2 taxonomy: topic / system / policy / glossary visible; decision /
-    person lazy."""
-    visible = ("**topic**", "**system**", "**policy**", "**glossary**")
+def test_taxonomy_covers_three_plus_two() -> None:
+    """3+2 taxonomy (post glossary removal 2026-04-24): topic / system /
+    policy visible; decision / person lazy.
+
+    Glossary was removed because the regex extractor produced misleading
+    definitions (`BL = "Monolith + Modular"`, `DAU = "January 8, 2026"`).
+    Reintroduce via an LLM pass if a real demand appears.
+    """
+    visible = ("**topic**", "**system**", "**policy**")
     lazy = ("**decision**", "**person**")
     for v in visible:
         assert v in COMPILER_SYSTEM_PROMPT, f"missing visible type: {v}"
     for lz in lazy:
         assert lz in COMPILER_SYSTEM_PROMPT, f"missing lazy type: {lz}"
+    # Regression guard: glossary must NOT come back.
+    assert "**glossary**" not in COMPILER_SYSTEM_PROMPT
+    assert "page_type: glossary" not in COMPILER_SYSTEM_PROMPT
 
 
 def test_new_status_vocabulary_taught() -> None:
