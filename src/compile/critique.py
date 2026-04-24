@@ -49,6 +49,21 @@ _BROKEN_PAGE_STALENESS_SECONDS = 600
 _WIKI_CATEGORIES = ("topics", "entities", "people", "systems", "policies", "decisions")
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
+# Email-shaped people slug: ``aa-indiamart-com``, ``neeraj-gmail-com`` — the
+# ``email_to_slug`` output. Used by ``_check_broken_wikilinks`` to demote a
+# missing-people-page from ``blocker`` to ``warning``: the agent can't
+# create people stubs by hand (see #167); auto-stub creation fires
+# elsewhere. Pattern mirrors ``src.compile.scoring._EMAIL_SLUG_WIKILINK_RE``.
+_PEOPLE_SLUG_RE = re.compile(
+    r"^[a-z0-9]+(?:-[a-z0-9]+)*-(?:indiamart-com|gmail-com|amazon-com)$",
+    re.IGNORECASE,
+)
+# Footnote markers. Usage: ``[^msg-bff57907]`` in prose / Recent changes.
+# Definition: ``[^msg-bff57907]: text`` in ``## References``. #157 fix —
+# agents were writing usages without matching defs, leaving dangling
+# footnote references that render as raw brackets in the published wiki.
+_FOOTNOTE_USE_RE = re.compile(r"\[\^(msg-[a-z0-9-]+)\](?!:)", re.IGNORECASE)
+_FOOTNOTE_DEF_RE = re.compile(r"^\[\^(msg-[a-z0-9-]+)\]:", re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass
@@ -102,18 +117,38 @@ def _read_raw_thread_id(raw_path: str) -> str | None:
     return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
-def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
+def find_touched_pages(
+    raw_path: str,
+    wiki_dir: Path,
+    batch_touched: set[str] | list[str] | None = None,
+) -> list[Path]:
     """Return wiki pages whose frontmatter cites this raw email.
 
     Matches `sources:` by basename (legacy citation) OR `source_threads:` by
     thread_id (Phase A U5 page-level citation). Either shape counts; the
     caller doesn't have to normalize the "raw/" prefix since the match
     compares basenames — `raw/foo.md`, `./raw/foo.md`, and `foo.md` all hit.
+
+    Broken-frontmatter pages (unparseable YAML) are surfaced ONLY when their
+    path is in ``batch_touched`` — the coordinator-supplied set of page
+    paths/stems the agent wrote or edited this batch. Without that scope the
+    broken-page fallback pulls unrelated whole-wiki churn (``wiki/index.md``,
+    ``wiki/log.md``, merge candidates) into a per-batch critique — the
+    "poisoned input set" finding from Codex's audit (#169).
+
+    Args:
+        raw_path: path to the raw email (legacy shape).
+        wiki_dir: root of the wiki to scan.
+        batch_touched: optional set of wiki-page paths/stems this agent
+            batch actually touched. Used to scope the recently-broken fallback.
+            When ``None`` (legacy callers), the broken-page fallback is
+            disabled entirely — never whole-wiki.
     """
     raw_basename = Path(raw_path).name
     raw_thread_id = _read_raw_thread_id(raw_path)
     pages: list[Path] = []
     broken: list[Path] = []
+    touched_set = _normalize_batch_touched(batch_touched)
     if not wiki_dir.exists():
         return pages
     for md in wiki_dir.rglob("*.md"):
@@ -123,26 +158,13 @@ def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
             continue
         fm_text, _ = split_frontmatter(content)
         if not fm_text:
-            # Broken frontmatter — can't confirm citation, but a page with
-            # no parseable frontmatter is itself a blocker the agent should
-            # know about. We only surface pages that were touched recently
-            # (mtime within the batch window) so we don't nag about pre-
-            # existing broken pages from other batches.
-            try:
-                age = time.time() - md.stat().st_mtime
-            except OSError:
-                age = _BROKEN_PAGE_STALENESS_SECONDS + 1
-            if age <= _BROKEN_PAGE_STALENESS_SECONDS:
+            if _is_recently_broken_and_in_batch(md, touched_set):
                 broken.append(md)
             continue
         try:
             fm = yaml.safe_load(fm_text) or {}
         except yaml.YAMLError:
-            try:
-                age = time.time() - md.stat().st_mtime
-            except OSError:
-                age = _BROKEN_PAGE_STALENESS_SECONDS + 1
-            if age <= _BROKEN_PAGE_STALENESS_SECONDS:
+            if _is_recently_broken_and_in_batch(md, touched_set):
                 broken.append(md)
             continue
         if not isinstance(fm, dict):
@@ -169,6 +191,41 @@ def find_touched_pages(raw_path: str, wiki_dir: Path) -> list[Path]:
     # Recently-broken pages go to the front so their blockers are obvious
     # in the audit output even when they don't cite this raw email.
     return broken + pages
+
+
+def _normalize_batch_touched(
+    batch_touched: set[str] | list[str] | None,
+) -> set[str] | None:
+    """Flatten caller-provided touched paths into a set of identifiers we
+    can match ``Path``s against. Accepts stems (``a-touched``), filenames
+    (``a-touched.md``), or full relpaths (``wiki/topics/a-touched.md``)."""
+    if batch_touched is None:
+        return None
+    result: set[str] = set()
+    for entry in batch_touched:
+        if not isinstance(entry, str):
+            continue
+        result.add(entry)
+        p = Path(entry)
+        result.add(p.name)
+        result.add(p.stem)
+    return result
+
+
+def _is_recently_broken_and_in_batch(md: Path, touched: set[str] | None) -> bool:
+    """Gate the broken-frontmatter fallback on BOTH mtime recency AND
+    agent-batch scope. ``touched=None`` means the caller didn't pass a
+    batch scope — skip the fallback entirely rather than polluting the
+    per-batch critique with unrelated whole-wiki churn (#169)."""
+    if touched is None:
+        return False
+    if md.name not in touched and md.stem not in touched and str(md) not in touched:
+        return False
+    try:
+        age = time.time() - md.stat().st_mtime
+    except OSError:
+        return False
+    return age <= _BROKEN_PAGE_STALENESS_SECONDS
 
 
 def _check_frontmatter(page: Path, repo_root: Path, content: str) -> list[Issue]:
@@ -236,23 +293,54 @@ def _check_duplicate_h2(page: Path, repo_root: Path, body: str) -> list[Issue]:
 def _check_broken_wikilinks(
     page: Path, repo_root: Path, body: str, known_slugs: set[str]
 ) -> list[Issue]:
-    broken: list[str] = []
+    """Split broken wikilinks into two severities: blocker for real concept
+    references (the agent must fix or create those), warning for email-
+    shaped people slugs (``aa-indiamart-com``) where the people page
+    doesn't exist yet — the agent can't hand-create those; auto-stub
+    creation fires elsewhere (#167)."""
+    broken_hard: list[str] = []
+    broken_people: list[str] = []
     for link in WIKILINK_RE.findall(body):
         target = parse_wikilink_target(link)
         # CLAUDE.md teaches prefix-style wikilinks as canonical
         # (`[[system/foo]]`, `[[decisions/bar]]`). `known_slugs` is keyed
         # on bare stem, so strip the category prefix before lookup.
         slug = target.rsplit("/", 1)[-1] if target else target
-        if slug and slug not in known_slugs:
-            broken.append(target)
-    if not broken:
-        return []
+        if not slug or slug in known_slugs:
+            continue
+        if _PEOPLE_SLUG_RE.match(slug):
+            broken_people.append(target)
+        else:
+            broken_hard.append(target)
+
+    issues: list[Issue] = []
     relp = _relpath(page, repo_root)
-    preview = ", ".join(broken[:5])
-    if len(broken) > 5:
-        preview += f" (+{len(broken) - 5} more)"
-    msg = f"{len(broken)} broken wikilink(s): {preview}"
-    return [Issue(_issue_id(relp, "broken-wikilink", msg), "blocker", "broken-wikilink", relp, msg)]
+    if broken_hard:
+        preview = ", ".join(broken_hard[:5])
+        if len(broken_hard) > 5:
+            preview += f" (+{len(broken_hard) - 5} more)"
+        msg = f"{len(broken_hard)} broken wikilink(s): {preview}"
+        issues.append(
+            Issue(_issue_id(relp, "broken-wikilink", msg), "blocker", "broken-wikilink", relp, msg)
+        )
+    if broken_people:
+        preview = ", ".join(broken_people[:5])
+        if len(broken_people) > 5:
+            preview += f" (+{len(broken_people) - 5} more)"
+        msg = (
+            f"{len(broken_people)} legacy people-slug wikilink(s) without a people "
+            f"page: {preview}. Auto-stub creation handles these; no agent action required."
+        )
+        issues.append(
+            Issue(
+                _issue_id(relp, "broken-people-slug", msg),
+                "warning",
+                "broken-people-slug",
+                relp,
+                msg,
+            )
+        )
+    return issues
 
 
 def _check_h1_in_body(page: Path, repo_root: Path, body: str) -> list[Issue]:
@@ -273,6 +361,35 @@ def _check_stray_bracket(page: Path, repo_root: Path, body: str) -> list[Issue]:
                 Issue(_issue_id(relp, "stray-bracket", msg), "blocker", "stray-bracket", relp, msg)
             ]
     return []
+
+
+def _check_footnote_defs(page: Path, repo_root: Path, body: str) -> list[Issue]:
+    """Every ``[^msg-<hash>]`` usage needs a matching ``[^msg-<hash>]:``
+    definition somewhere in the body (typically ``## References``).
+    Missing defs render as raw bracket text in the published wiki — the
+    ``dspy-gepa-intent-classification`` finding from #157."""
+    uses = {m.group(1).lower() for m in _FOOTNOTE_USE_RE.finditer(body)}
+    defs = {m.group(1).lower() for m in _FOOTNOTE_DEF_RE.finditer(body)}
+    missing = sorted(uses - defs)
+    if not missing:
+        return []
+    relp = _relpath(page, repo_root)
+    preview = ", ".join(f"[^{m}]" for m in missing[:5])
+    if len(missing) > 5:
+        preview += f" (+{len(missing) - 5} more)"
+    msg = (
+        f"{len(missing)} footnote usage(s) without a matching definition: "
+        f"{preview}. Add `[^msg-<hash>]: <source text>` under `## References`."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "footnote-missing-def", msg),
+            "blocker",
+            "footnote-missing-def",
+            relp,
+            msg,
+        )
+    ]
 
 
 # V12 deep-audit fix-A — anti-pattern H2 + summary-staleness checks.
@@ -335,6 +452,35 @@ def _check_anti_pattern_h2(page: Path, repo_root: Path, body: str) -> list[Issue
     ]
 
 
+def _check_recent_changes_h2(
+    page: Path, repo_root: Path, body: str, page_type: str | None
+) -> list[Issue]:
+    """Topic pages MUST have a ``## Recent changes`` H2 — it's the place
+    where ongoing batch history lives. Missing it means new emails get
+    appended as fresh H2s (``## Launch Announcement``, etc.), which is
+    exactly the anti-pattern V12 is trying to kill (#158)."""
+    if page_type != "topic":
+        return []
+    h2_titles_lower = {m.group(1).strip().lower() for m in _H2_RE.finditer(body)}
+    if "recent changes" in h2_titles_lower:
+        return []
+    relp = _relpath(page, repo_root)
+    msg = (
+        "missing `## Recent changes` H2. Topic pages use this section to "
+        "append dated batch updates — without it, new emails get jammed "
+        "into fresh thread-subject H2s. Add the section even if empty."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "missing-recent-changes-h2", msg),
+            "blocker",
+            "missing-recent-changes-h2",
+            relp,
+            msg,
+        )
+    ]
+
+
 def _parse_last_compiled(value: Any) -> datetime | None:
     """Best-effort: return a timezone-aware UTC datetime from a
     ``last_compiled`` frontmatter value. Returns ``None`` for stub
@@ -355,6 +501,20 @@ def _parse_last_compiled(value: Any) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt
+
+
+def _parse_iso_dates(text: str) -> list[datetime]:
+    """Extract all ISO-formatted dates from ``text`` as UTC datetimes.
+    Malformed matches (``2026-13-40``) are skipped silently — ``_ISO_DATE_RE``
+    is permissive by design to catch prose variants like ``on 2026-04-20``
+    or ``(2026-04-20)``, so callers expect best-effort parsing."""
+    parsed: list[datetime] = []
+    for match in _ISO_DATE_RE.findall(text):
+        try:
+            parsed.append(datetime.fromisoformat(match).replace(tzinfo=UTC))
+        except ValueError:
+            continue
+    return parsed
 
 
 def _recent_changes_block(body: str) -> str | None:
@@ -430,8 +590,8 @@ def _check_summary_staleness(
     recent_block = _recent_changes_block(body)
     if recent_block is None:
         return []
-    dates = _ISO_DATE_RE.findall(recent_block)
-    if not dates:
+    parsed_dates = _parse_iso_dates(recent_block)
+    if not parsed_dates:
         return []
 
     # Anchor the staleness window to ``last_compiled`` when present,
@@ -441,12 +601,6 @@ def _check_summary_staleness(
     anchor = last_compiled if last_compiled is not None else datetime.now(tz=UTC)
     window_start = anchor - timedelta(days=_SUMMARY_STALENESS_WINDOW_DAYS)
 
-    parsed_dates: list[datetime] = []
-    for d in dates:
-        try:
-            parsed_dates.append(datetime.fromisoformat(d).replace(tzinfo=UTC))
-        except ValueError:
-            continue
     recent_events = [d for d in parsed_dates if d >= window_start]
     if not recent_events:
         return []
@@ -471,6 +625,59 @@ def _check_summary_staleness(
             _issue_id(relp, "summary-staleness", msg),
             "warning",
             "summary-staleness",
+            relp,
+            msg,
+        )
+    ]
+
+
+def _check_summary_stale_date(
+    page: Path,
+    repo_root: Path,
+    body: str,
+) -> list[Issue]:
+    """Blocker-level date comparison: if ``## Recent changes`` has a
+    bullet with a date strictly newer than any date mentioned in the
+    Summary paragraph, the Summary is demonstrably out of sync with the
+    page's own history (V12-U4 teaching, #182).
+
+    Stricter than ``_check_summary_staleness`` (which warns on absence of
+    any current-state marker): this rule only fires when we have
+    evidence on both sides — Recent-changes date AND Summary date — and
+    they disagree on direction. False-positive rate stays low because
+    the signal is explicit.
+    """
+    recent_block = _recent_changes_block(body)
+    if recent_block is None:
+        return []
+    recent_dates = _parse_iso_dates(recent_block)
+    if not recent_dates:
+        return []
+
+    summary_dates = _parse_iso_dates(_first_paragraph(body))
+    if not summary_dates:
+        # No date in Summary — covered by the warning-level
+        # `_check_summary_staleness` rule; this blocker needs explicit
+        # evidence on both sides.
+        return []
+
+    newest_recent = max(recent_dates)
+    newest_summary = max(summary_dates)
+    if newest_recent <= newest_summary:
+        return []
+
+    relp = _relpath(page, repo_root)
+    msg = (
+        f"summary stale: `## Recent changes` has an entry on "
+        f"{newest_recent.date().isoformat()} but the Summary's newest "
+        f"date is {newest_summary.date().isoformat()}. Rewrite the "
+        "Summary to reflect the latest change before returning."
+    )
+    return [
+        Issue(
+            _issue_id(relp, "summary-stale-date", msg),
+            "blocker",
+            "summary-stale-date",
             relp,
             msg,
         )
@@ -573,9 +780,12 @@ def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> Critiq
         issues.extend(_check_broken_wikilinks(page, repo_root, body, known_slugs))
         issues.extend(_check_h1_in_body(page, repo_root, body))
         issues.extend(_check_stray_bracket(page, repo_root, body))
+        issues.extend(_check_footnote_defs(page, repo_root, body))
+        issues.extend(_check_recent_changes_h2(page, repo_root, body, page_type))
         issues.extend(_check_suggested_h2_sections(page, repo_root, body, page_type))
         issues.extend(_check_anti_pattern_h2(page, repo_root, body))
         issues.extend(_check_summary_staleness(page, repo_root, body, fm))
+        issues.extend(_check_summary_stale_date(page, repo_root, body))
 
     return CritiqueResult(issues=issues, pages_critiqued=pages_rel)
 

@@ -104,7 +104,8 @@ def test_critique_clean_page(tmp_path: Path) -> None:
         "Foo",
         ["raw/x.md"],
         "\nThis is a clean lead paragraph. It has two sentences.\n\n"
-        "## Overview\nBody.\n\n## Related\n- [[bar]]\n",
+        "## Overview\nBody.\n\n## Recent changes\n- 2026-04-20 — something.\n\n"
+        "## Related\n- [[bar]]\n",
     )
     _write_page(wiki / "topics" / "bar.md", "Bar", ["raw/y.md"], "\n## Overview\nB.\n")
 
@@ -467,3 +468,279 @@ def test_summary_staleness_is_warning_not_blocker(tmp_path: Path) -> None:
     )
     result = critique_pages([page], wiki, tmp_path)
     assert all(b.check != "summary-staleness" for b in result.blockers)
+
+
+# --- #169 — find_touched_pages scope ---------------------------------------
+
+
+def test_find_touched_pages_does_not_include_unrelated_recent_mtime(
+    tmp_path: Path,
+) -> None:
+    """Without a ``batch_touched`` scope, the broken-frontmatter fallback
+    MUST NOT slurp unrelated recently-modified pages (index.md, merge
+    candidates). Regression coverage for #169."""
+    import os
+
+    wiki = tmp_path / "wiki"
+    # `a-touched` is a legitimate citation by this raw email.
+    _write_page(
+        wiki / "topics" / "a-touched.md",
+        "A Touched",
+        ["raw/2026-04-15_x_abc12345.md"],
+        "\n## Overview\nbody\n\n## Recent changes\n- 2026-04-20 — y.\n",
+    )
+    # `b-generated` is a freshly-written unparseable file (e.g. index.md
+    # rewritten between batches). Without scope, the old fallback would
+    # pull this in.
+    b = wiki / "b-generated.md"
+    b.parent.mkdir(parents=True, exist_ok=True)
+    b.write_text("no frontmatter at all, just text\n", encoding="utf-8")
+    # `c-old` is an old unparseable file — mtime well outside the 600s
+    # window — so it never qualifies regardless of scope.
+    c = wiki / "c-old.md"
+    c.write_text("also no frontmatter\n", encoding="utf-8")
+    old = tmp_path.stat().st_mtime - 3600
+    os.utime(c, (old, old))
+
+    # No batch_touched scope → broken-page fallback is disabled; only
+    # citation-matching pages come back.
+    touched = find_touched_pages("raw/2026-04-15_x_abc12345.md", wiki)
+    names = [p.name for p in touched]
+    assert "a-touched.md" in names
+    assert "b-generated.md" not in names
+    assert "c-old.md" not in names
+
+    # With a batch scope that includes a-touched ONLY, the broken b-
+    # generated file is still excluded because it's not in the scope.
+    touched_scoped = find_touched_pages(
+        "raw/2026-04-15_x_abc12345.md", wiki, batch_touched={"a-touched"}
+    )
+    names_scoped = [p.name for p in touched_scoped]
+    assert "a-touched.md" in names_scoped
+    assert "b-generated.md" not in names_scoped
+    assert "c-old.md" not in names_scoped
+
+
+def test_find_touched_pages_scope_includes_batch_broken_page(tmp_path: Path) -> None:
+    """When ``batch_touched`` names a page that happens to have unparseable
+    frontmatter AND was touched within the 600s window, it IS surfaced —
+    the agent just corrupted a page and the critique should report it."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    broken = wiki / "topics" / "just-broke.md"
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("---\nbroken YAML: : :\n", encoding="utf-8")
+
+    touched = find_touched_pages(
+        "raw/2026-04-15_x_abc12345.md",
+        wiki,
+        batch_touched={"just-broke"},
+    )
+    names = [p.name for p in touched]
+    assert "just-broke.md" in names
+
+
+# --- #167 — legacy people-slug → warning, not blocker ---------------------
+
+
+def test_broken_legacy_people_slug_is_warning_not_blocker(tmp_path: Path) -> None:
+    """``[[ishan-tomar-indiamart-com]]`` resolves to a non-existent people
+    page; critique should WARN (auto-stub fires elsewhere) rather than
+    BLOCK the agent. Regression for #167."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n## Overview\nAsked [[ishan-tomar-indiamart-com]].\n\n"
+        "## Recent changes\n- 2026-04-20 — logged.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    # warning fires on the legacy slug
+    matches = [w for w in result.warnings if w.check == "broken-people-slug"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
+    assert "ishan-tomar-indiamart-com" in matches[0].message
+    # must NOT be a blocker
+    assert all(b.check != "broken-people-slug" for b in result.blockers)
+    assert all(b.check != "broken-wikilink" for b in result.blockers)
+
+
+def test_broken_concept_slug_stays_blocker(tmp_path: Path) -> None:
+    """Non-people broken wikilinks keep their blocker severity — the
+    people-slug demotion is narrow, scoped to email-shaped slugs only."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\n## Overview\nSee [[some-missing-concept]].\n\n"
+        "## Recent changes\n- 2026-04-20 — logged.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert any(b.check == "broken-wikilink" for b in result.blockers), result.issues
+
+
+# --- #157 — footnote defs must match usages -------------------------------
+
+
+def test_footnote_usage_without_def_is_blocker(tmp_path: Path) -> None:
+    """``[^msg-bff57907]`` in the body requires ``[^msg-bff57907]:`` in
+    ``## References``. Without it, the footnote renders as raw bracket
+    text — regression for the dspy-gepa-intent-classification finding."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n"
+        "## Recent changes\n- 2026-04-20 — shipped [^msg-bff57907]\n\n"
+        "## References\n- source\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [b for b in result.blockers if b.check == "footnote-missing-def"]
+    assert len(matches) == 1, [b.message for b in result.blockers]
+    assert "msg-bff57907" in matches[0].message
+
+
+def test_footnote_usage_with_def_no_blocker(tmp_path: Path) -> None:
+    """Matching def present — no blocker."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n"
+        "## Recent changes\n- 2026-04-20 — shipped [^msg-bff57907]\n\n"
+        "## References\n[^msg-bff57907]: email from dev team\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "footnote-missing-def" for b in result.blockers)
+
+
+# --- #158 — Recent-changes H2 required on topic pages ---------------------
+
+
+def test_topic_without_recent_changes_h2_is_blocker(tmp_path: Path) -> None:
+    """Topic pages MUST have ``## Recent changes``. Regression for
+    bl-notification-timing-optimization / pns-call-summary findings."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n## Overview\nBody.\n\n## Related\n- [[bar]]\n",
+    )
+    _write_page(
+        wiki / "topics" / "bar.md",
+        "Bar",
+        ["raw/y.md"],
+        "\n## Overview\n\n## Recent changes\n- 2026-04-20 — x.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [b for b in result.blockers if b.check == "missing-recent-changes-h2"]
+    assert len(matches) == 1, [b.message for b in result.blockers]
+
+
+def test_topic_with_recent_changes_h2_no_blocker(tmp_path: Path) -> None:
+    """Topic page with ``## Recent changes`` — rule stays quiet."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page(
+        page,
+        "Foo",
+        ["raw/x.md"],
+        "\nLead paragraph.\n\n## Overview\nBody.\n\n"
+        "## Recent changes\n- 2026-04-20 — rolled out.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "missing-recent-changes-h2" for b in result.blockers)
+
+
+def test_non_topic_missing_recent_changes_no_blocker(tmp_path: Path) -> None:
+    """Decision / policy / system pages are not subject to this rule."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "decisions" / "scale-foo.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "---\ntitle: Scale Foo\npage_type: decision\nstatus: active\n"
+        "sources:\n- raw/x.md\n---\n\n"
+        "Lead paragraph.\n\n## Overview\nBody.\n",
+        encoding="utf-8",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "missing-recent-changes-h2" for b in result.blockers)
+
+
+# --- #182 — Summary-stale-date (blocker) ----------------------------------
+
+
+def test_summary_stale_when_recent_changes_has_newer_entry(tmp_path: Path) -> None:
+    """``## Recent changes`` bullet on 2026-04-20; Summary says "launched
+    on 2026-01-15". Blocker fires because the Summary is demonstrably
+    out of sync with the page's own history."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nLaunched on 2026-01-15 — initial rollout.\n\n"
+        "## Recent changes\n- 2026-04-20 — scaled to 100%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    matches = [b for b in result.blockers if b.check == "summary-stale-date"]
+    assert len(matches) == 1, [b.message for b in result.blockers]
+    assert "2026-04-20" in matches[0].message
+    assert "2026-01-15" in matches[0].message
+
+
+def test_summary_stale_date_quiet_when_summary_has_newest_date(tmp_path: Path) -> None:
+    """Summary explicitly cites 2026-04-20 → no date disagreement."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nScaled to 100% on 2026-04-20.\n\n## Recent changes\n- 2026-04-20 — scaled to 100%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "summary-stale-date" for b in result.blockers)
+
+
+def test_summary_stale_date_quiet_when_no_date_in_summary(tmp_path: Path) -> None:
+    """The blocker needs explicit date evidence on BOTH sides — Summary
+    without a date is handled by the existing warning-level rule."""
+    wiki = tmp_path / "wiki"
+    page = wiki / "topics" / "foo.md"
+    _write_page_with_fm(
+        page,
+        [
+            "title: Foo",
+            "page_type: topic",
+            "status: active",
+            "last_compiled: 2026-04-21T00:00:00Z",
+            "sources:",
+            "- raw/x.md",
+        ],
+        "\nThe system is currently in beta.\n\n## Recent changes\n- 2026-04-20 — scaled to 100%.\n",
+    )
+    result = critique_pages([page], wiki, tmp_path)
+    assert all(b.check != "summary-stale-date" for b in result.blockers)
