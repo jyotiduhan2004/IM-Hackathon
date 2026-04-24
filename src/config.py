@@ -169,6 +169,13 @@ class Settings(BaseSettings):
     use_semantic_resolve: bool = False
     qmd_timeout_s: int = 45
 
+    # Per-`agent.ainvoke` wall-clock timeout in seconds. Caps a single LLM
+    # round so a wedged proxy connection (2026-04-22 grok-4.1-fast: 5h31m
+    # mid-round hang) fails fast instead of exhausting `--batch-timeout`,
+    # which tracks cumulative time across model retries and can't bound a
+    # single hung round.
+    invoke_timeout_s: int = 150
+
     @property
     def attachments_dir(self) -> Path:
         return self.raw_dir / "attachments"

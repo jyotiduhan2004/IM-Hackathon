@@ -169,6 +169,9 @@ class CheckMyWorkGateMiddleware(AgentMiddleware):
 
         `file_path` / `slug` are pulled purely for the breadcrumb in
         `touched_paths`; the gate rule itself only needs the tool name.
+        Also bumps the compiler's write-epoch so the `check_my_work`
+        idempotency cache invalidates — deferred import avoids a
+        middleware→compiler cycle at module load.
         """
         self.successful_write_tools.add(tool_name)
         self._unchecked_write_pending = True
@@ -179,6 +182,10 @@ class CheckMyWorkGateMiddleware(AgentMiddleware):
         path = args.get("file_path") or args.get("slug") or ""
         if isinstance(path, str) and path:
             self.touched_paths.add(path)
+
+        from src.compile.compiler import _bump_write_epoch
+
+        _bump_write_epoch()
 
     def _record_check_my_work(self, result: ToolMessage | Command[Any]) -> None:
         """Clear the unchecked-write flag after a successful critique call.

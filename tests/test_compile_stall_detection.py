@@ -252,3 +252,74 @@ def test_batch_timeout_success_logs_compiled(compile_all_module, monkeypatch, tm
     log_text = (wiki_dir / "log.md").read_text(encoding="utf-8")
     assert "| compiled |" in log_text
     assert "| failed |" not in log_text
+
+
+# ---------------------------------------------------------------------------
+# Per-`agent.ainvoke` wall-clock timeout (#163)
+#
+# The outer `--batch-timeout` caps the whole batch including model retries,
+# so a single wedged LLM round can still hang for hours before the outer
+# budget trips. `_ainvoke_with_timeout` caps each round directly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_graph_ainvoke_times_out_and_raises():
+    """A `agent.ainvoke` that never returns must raise InvokeWallClockTimeout
+    well before the outer batch-timeout would have noticed.
+    """
+    from src.compile.compiler import InvokeWallClockTimeout
+    from src.compile.compiler import _ainvoke_with_timeout
+
+    class _HungAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            # Sleep well past the test's timeout so we can verify
+            # wait_for fires and raises, not the body returning early.
+            await __import__("asyncio").sleep(10)
+            return {"messages": []}
+
+    start = time.monotonic()
+    with pytest.raises(InvokeWallClockTimeout):
+        await _ainvoke_with_timeout(_HungAgent(), "do work", {}, timeout_s=1)
+    elapsed = time.monotonic() - start
+    # Must raise within ~2s of the 1s budget (tight but tolerant of
+    # CI jitter). If this takes 10s, wait_for didn't actually fire.
+    assert elapsed < 3.0, f"timeout should fire at ~1s, took {elapsed:.2f}s"
+
+
+@pytest.mark.asyncio
+async def test_graph_ainvoke_completes_under_timeout():
+    """A fast-returning `agent.ainvoke` must pass through without raising."""
+    from src.compile.compiler import _ainvoke_with_timeout
+
+    class _FastAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    result = await _ainvoke_with_timeout(_FastAgent(), "do work", {}, timeout_s=5)
+    assert result == {"messages": [{"role": "assistant", "content": "ok"}]}
+
+
+@pytest.mark.asyncio
+async def test_graph_ainvoke_preserves_other_exceptions():
+    """Exceptions raised inside ainvoke (not timeouts) must bubble up
+    unchanged — we only translate asyncio.TimeoutError.
+    """
+    from src.compile.compiler import _ainvoke_with_timeout
+
+    class _BoomAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            raise ValueError("inner failure")
+
+    with pytest.raises(ValueError, match="inner failure"):
+        await _ainvoke_with_timeout(_BoomAgent(), "do work", {}, timeout_s=5)
+
+
+def test_invoke_timeout_s_has_default():
+    """settings.invoke_timeout_s must have a sane default — a single round
+    shouldn't need more than a few minutes, and uncapped is the current bug.
+    """
+    from src.config import settings
+
+    assert isinstance(settings.invoke_timeout_s, int)
+    assert 30 <= settings.invoke_timeout_s <= 600

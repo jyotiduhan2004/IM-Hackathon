@@ -9,6 +9,7 @@ don't need a live model or LangGraph runner.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -464,4 +465,244 @@ def test_middleware_wired_into_compiler() -> None:
         "CheckMyWorkGateMiddleware.wrap_tool_call not found anywhere in "
         "ToolNode's wrapper chain — check that create_compiler passes the "
         "middleware into create_deep_agent(middleware=[...])."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Idempotent check_my_work cache (#168)
+#
+# After PR #225 wired the post-write nudge, agents started spinning on
+# broken-wikilink blockers — 4-7 consecutive blocked `check_my_work`
+# calls with zero intervening writes. Each call re-ran the full critique
+# for no reason. This cache short-circuits repeat calls when the module-
+# level write_epoch hasn't changed, returning the prior payload with
+# `unchanged_since: true` + a nudge to stop spinning.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def _reset_check_my_work_cache():
+    """Clear module-level cache + write_epoch between tests.
+
+    Tests in this block share module state; without this fixture a
+    leftover cache entry from one test can mask a miss expected by
+    another.
+    """
+    import src.compile.compiler as compiler_mod
+
+    compiler_mod._check_my_work_cache.clear()
+    compiler_mod._write_epoch = 0
+    yield
+    compiler_mod._check_my_work_cache.clear()
+    compiler_mod._write_epoch = 0
+
+
+def test_check_my_work_caches_when_no_writes_between(
+    monkeypatch, tmp_path, _reset_check_my_work_cache
+) -> None:
+    """Two consecutive calls with no edit between → second call returns
+    cached payload with `unchanged_since: true`, and critique_pages runs
+    only once (not twice).
+    """
+    import src.compile.compiler as compiler_mod
+    from src.compile import critique as critique_mod
+    from src.compile.critique import CritiqueResult
+
+    # Pretend the repo_root is tmp_path so no real wiki is touched.
+    monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
+
+    call_count = {"critique_pages": 0, "find_touched_pages": 0, "write_audit": 0}
+
+    def fake_find_touched_pages(_raw_path, _wiki_dir):
+        call_count["find_touched_pages"] += 1
+        return []
+
+    def fake_critique_pages(_paths, _wiki_dir, _repo_root):
+        call_count["critique_pages"] += 1
+        return CritiqueResult(
+            issues=[],
+            pages_critiqued=["wiki/topics/foo.md"],
+        )
+
+    def fake_write_audit(_result, _raw, _status, audit_dir, acknowledged_ids=None):
+        call_count["write_audit"] += 1
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = audit_dir / "stub.md"
+        audit_path.write_text("stub\n", encoding="utf-8")
+        return audit_path
+
+    monkeypatch.setattr(critique_mod, "find_touched_pages", fake_find_touched_pages)
+    monkeypatch.setattr(critique_mod, "critique_pages", fake_critique_pages)
+    monkeypatch.setattr(critique_mod, "write_audit", fake_write_audit)
+
+    raw_path = "raw/2026-04-23_test.md"
+    # First call — runs critique, populates cache.
+    first = compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    assert call_count["critique_pages"] == 1
+    assert first["status"] == "clean"
+    assert "unchanged_since" not in first
+
+    # Second call, no intervening write — hits cache.
+    second = compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    assert call_count["critique_pages"] == 1, "critique_pages must NOT run again"
+    assert second.get("unchanged_since") is True
+    assert "Same blockers" in second["message"] or "Same" in second["message"]
+
+
+def test_check_my_work_reruns_after_write(
+    monkeypatch, tmp_path, _reset_check_my_work_cache
+) -> None:
+    """Call, bump write_epoch (simulate an edit_file success), call again
+    → critique_pages must run twice.
+    """
+    import src.compile.compiler as compiler_mod
+    from src.compile import critique as critique_mod
+    from src.compile.critique import CritiqueResult
+
+    monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
+
+    call_count = {"critique_pages": 0}
+
+    def fake_find_touched_pages(_raw_path, _wiki_dir):
+        return []
+
+    def fake_critique_pages(_paths, _wiki_dir, _repo_root):
+        call_count["critique_pages"] += 1
+        return CritiqueResult(
+            issues=[],
+            pages_critiqued=["wiki/topics/foo.md"],
+        )
+
+    def fake_write_audit(_result, _raw, _status, audit_dir, acknowledged_ids=None):
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = audit_dir / "stub.md"
+        audit_path.write_text("stub\n", encoding="utf-8")
+        return audit_path
+
+    monkeypatch.setattr(critique_mod, "find_touched_pages", fake_find_touched_pages)
+    monkeypatch.setattr(critique_mod, "critique_pages", fake_critique_pages)
+    monkeypatch.setattr(critique_mod, "write_audit", fake_write_audit)
+
+    raw_path = "raw/2026-04-23_test.md"
+    compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    assert call_count["critique_pages"] == 1
+
+    # Simulate a successful write bumping the epoch.
+    compiler_mod._bump_write_epoch()
+
+    compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    assert call_count["critique_pages"] == 2, (
+        "After an edit, critique must re-run — cache should have invalidated."
+    )
+
+
+def test_cached_payload_preserves_audit_path(
+    monkeypatch, tmp_path, _reset_check_my_work_cache
+) -> None:
+    """The audit markdown path in the cached response matches the first run.
+
+    Prevents a regression where the cache copies only a subset of fields.
+    """
+    import src.compile.compiler as compiler_mod
+    from src.compile import critique as critique_mod
+    from src.compile.critique import CritiqueResult
+
+    monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
+
+    def fake_find_touched_pages(_raw_path, _wiki_dir):
+        return []
+
+    def fake_critique_pages(_paths, _wiki_dir, _repo_root):
+        return CritiqueResult(
+            issues=[],
+            pages_critiqued=["wiki/topics/foo.md"],
+        )
+
+    audit_paths: list[Path] = []
+
+    def fake_write_audit(_result, _raw, _status, audit_dir, acknowledged_ids=None):
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        # Unique name per call so the test can prove cache reuse —
+        # if the cache re-ran, write_audit would emit a second path
+        # and the cached payload would still point at the first.
+        audit_path = audit_dir / f"critique-{len(audit_paths)}.md"
+        audit_path.write_text("stub\n", encoding="utf-8")
+        audit_paths.append(audit_path)
+        return audit_path
+
+    monkeypatch.setattr(critique_mod, "find_touched_pages", fake_find_touched_pages)
+    monkeypatch.setattr(critique_mod, "critique_pages", fake_critique_pages)
+    monkeypatch.setattr(critique_mod, "write_audit", fake_write_audit)
+
+    raw_path = "raw/2026-04-23_test.md"
+    first = compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    first_audit = first["audit"]
+    assert first_audit.endswith("critique-0.md")
+
+    second = compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    assert second["audit"] == first_audit, (
+        "Cached payload must expose the SAME audit path — not a new one."
+    )
+    # write_audit should have fired exactly once (cache served the second call).
+    assert len(audit_paths) == 1
+
+
+def test_cache_invalidated_by_different_acknowledge(
+    monkeypatch, tmp_path, _reset_check_my_work_cache
+) -> None:
+    """Changing the acknowledge list must force a fresh critique — different
+    ack set ≠ same question, so the cache key must include ack_hash.
+    """
+    import src.compile.compiler as compiler_mod
+    from src.compile import critique as critique_mod
+    from src.compile.critique import CritiqueResult
+
+    monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
+
+    call_count = {"critique_pages": 0}
+
+    def fake_find_touched_pages(_raw_path, _wiki_dir):
+        return []
+
+    def fake_critique_pages(_paths, _wiki_dir, _repo_root):
+        call_count["critique_pages"] += 1
+        return CritiqueResult(
+            issues=[],
+            pages_critiqued=["wiki/topics/foo.md"],
+        )
+
+    def fake_write_audit(_result, _raw, _status, audit_dir, acknowledged_ids=None):
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = audit_dir / "stub.md"
+        audit_path.write_text("stub\n", encoding="utf-8")
+        return audit_path
+
+    monkeypatch.setattr(critique_mod, "find_touched_pages", fake_find_touched_pages)
+    monkeypatch.setattr(critique_mod, "critique_pages", fake_critique_pages)
+    monkeypatch.setattr(critique_mod, "write_audit", fake_write_audit)
+
+    raw_path = "raw/2026-04-23_test.md"
+    compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
+    compiler_mod.check_my_work.invoke({"raw_email_path": raw_path, "acknowledge": ["issue-abc"]})
+    # Second call had a different ack_hash → cache miss → critique runs again.
+    assert call_count["critique_pages"] == 2
+
+
+def test_bump_write_epoch_called_on_successful_content_write(
+    _reset_check_my_work_cache,
+) -> None:
+    """The middleware wires `_bump_write_epoch` into `_record_success`, so
+    recording a successful content write must increment the counter.
+    """
+    import src.compile.compiler as compiler_mod
+
+    mw = CheckMyWorkGateMiddleware()
+    start = compiler_mod._write_epoch
+
+    write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
+    mw.wrap_tool_call(write_req, _success_handler("write_file"))
+
+    assert compiler_mod._write_epoch == start + 1, (
+        "CheckMyWorkGateMiddleware._record_success must bump the module-level "
+        "write_epoch so the check_my_work cache invalidates."
     )

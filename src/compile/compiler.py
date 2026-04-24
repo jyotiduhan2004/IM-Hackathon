@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
+import hashlib
 import re
 import tempfile
 from datetime import UTC
@@ -93,6 +95,38 @@ _current_batch_topic_slugs_written: contextvars.ContextVar[set[str] | None] = (
 _current_batch_sibling_slugs_written: contextvars.ContextVar[set[str] | None] = (
     contextvars.ContextVar("current_batch_sibling_slugs_written", default=None)
 )
+
+
+class InvokeWallClockTimeout(Exception):  # noqa: N818 — public contract name
+    """Raised when a single `agent.ainvoke` round exceeds `invoke_timeout_s`.
+
+    Distinct from the outer `concurrent.futures.TimeoutError` raised by
+    `scripts/compile_all.py::_run_with_timeout`: that one tracks cumulative
+    batch wall-clock across model retries, while this one caps a single LLM
+    round. Without the inner cap, a wedged proxy (grok-4.1-fast 2026-04-22:
+    5h31m hang mid-round) exhausts the outer budget silently instead of
+    surfacing as a timeout.
+    """
+
+
+# Cache of prior `check_my_work` payloads keyed by
+# (raw_email_path, write_epoch, sha256(acknowledge)). Repeat calls with
+# no intervening write hit cache and return the prior payload so the
+# agent stops spinning (PR #225 regression: 4-7 blocked calls in a row
+# with zero edits between). `_write_epoch` bumps invalidate the entry.
+_check_my_work_cache: dict[tuple[str, int, str], dict[str, Any]] = {}
+
+# Bumped by `CheckMyWorkGateMiddleware._record_success` on every
+# successful content-page write — exposes one choke point to log or
+# instrument if the count diverges from the agent's self-report.
+_write_epoch: int = 0
+
+
+def _bump_write_epoch() -> int:
+    """Advance the write epoch and return the new value."""
+    global _write_epoch
+    _write_epoch += 1
+    return _write_epoch
 
 
 # === Custom Tools for the Compiler Agent ===
@@ -417,6 +451,9 @@ def check_my_work(
         ``{"ok": "false", "status": "blocked", "issues": [{id, check,
         page, message}, ...], "raw_email_path": str, "pages_critiqued":
         list[str], "audit": path, "hint": ...}`` when action is required.
+        Repeat calls with no intervening write include
+        ``"unchanged_since": true`` and a nudge in the message to stop
+        spinning.
     """
     from src.compile.critique import critique_pages
     from src.compile.critique import find_touched_pages
@@ -425,6 +462,24 @@ def check_my_work(
     repo_root = Path.cwd()
     wiki_dir = repo_root / "wiki"
     audit_dir = repo_root / "docs" / "audits"
+
+    # Sorted ack list so (['b', 'a'],) hashes the same as (['a', 'b'],).
+    ack_hash = hashlib.sha256((",".join(sorted(acknowledge or []))).encode("utf-8")).hexdigest()
+    cache_key = (raw_email_path, _write_epoch, ack_hash)
+    cached = _check_my_work_cache.get(cache_key)
+    if cached is not None:
+        payload = dict(cached)
+        payload["unchanged_since"] = True
+        payload["message"] = (
+            "Same blockers as last check_my_work call, no intervening "
+            "edits. Either write a page or call log_insight and return."
+        )
+        logger.info(
+            "check_my_work_cache_hit",
+            raw_email_path=raw_email_path,
+            write_epoch=_write_epoch,
+        )
+        return payload
 
     touched = find_touched_pages(raw_email_path, wiki_dir)
     result = critique_pages(touched, wiki_dir, repo_root)
@@ -442,7 +497,7 @@ def check_my_work(
             blockers=len(unresolved),
             audit=str(audit_path),
         )
-        return {
+        payload = {
             "ok": "false",
             "status": "blocked",
             "issues": [
@@ -465,9 +520,11 @@ def check_my_work(
                 "acknowledge=['issue_id', ...] to proceed."
             ),
         }
+        _check_my_work_cache[cache_key] = payload
+        return payload
 
     audit_path = write_audit(result, raw_email_path, "clean", audit_dir, acknowledged_ids=ack_ids)
-    return {
+    payload = {
         "ok": "true",
         "status": "clean",
         "warnings": len(result.warnings),
@@ -475,6 +532,8 @@ def check_my_work(
         "pages_critiqued": result.pages_critiqued,
         "audit": str(audit_path.relative_to(repo_root)),
     }
+    _check_my_work_cache[cache_key] = payload
+    return payload
 
 
 @tool
@@ -2721,9 +2780,12 @@ def run_compilation(
         topic_slugs_token = _current_batch_topic_slugs_written.set(set())
         sibling_slugs_token = _current_batch_sibling_slugs_written.set(set())
         try:
-            result = agent.invoke(
-                {"messages": [{"role": "user", "content": instruction}]},
-                config=config,
+            # Wrap the single agent round in `asyncio.wait_for` — the outer
+            # `--batch-timeout` tracks cumulative wall-clock across model
+            # retries and can't bound a single hung round (2026-04-22
+            # grok-4.1-fast: 5h31m mid-round hang).
+            result = asyncio.run(
+                _ainvoke_with_timeout(agent, instruction, config, settings.invoke_timeout_s)
             )
             _check_silent_fail(result, model=model_name)
             return result
@@ -2735,6 +2797,35 @@ def run_compilation(
             _current_raw_paths.reset(raw_paths_token)
     finally:
         _cleanup_compile_view(view_root)
+
+
+async def _ainvoke_with_timeout(
+    agent: Any,
+    instruction: str,
+    config: dict[str, Any],
+    timeout_s: int,
+) -> dict[str, Any]:
+    """Call `agent.ainvoke(...)` capped by `timeout_s` seconds.
+
+    Raises `InvokeWallClockTimeout` on expiry — callers pattern-match on
+    that to distinguish "wedged LLM round" from other `TimeoutError`s.
+    """
+    try:
+        return cast(
+            dict[str, Any],
+            await asyncio.wait_for(
+                agent.ainvoke(
+                    {"messages": [{"role": "user", "content": instruction}]},
+                    config=config,
+                ),
+                timeout=timeout_s,
+            ),
+        )
+    except TimeoutError as exc:
+        logger.error("invoke_wall_clock_timeout", timeout_s=timeout_s)
+        raise InvokeWallClockTimeout(
+            f"agent.ainvoke exceeded {timeout_s}s wall-clock limit"
+        ) from exc
 
 
 class SilentModelFailError(RuntimeError):
