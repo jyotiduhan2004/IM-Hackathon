@@ -324,6 +324,38 @@ common way to leave an email pending. Trigger when:
   bullet — stop and `log_insight("already_captured",
   email_path=<current raw>, message=<why covered>)` instead.
 
+### Question-delta exception
+
+Even when the concept page already exists, do NOT skip the email if
+it contains any of:
+
+- An unanswered question (ends with `?`) from a director / VP / CEO
+  / lead / founder.
+- An open decision marker: "we should decide", "pending approval",
+  "need input on".
+- A leadership ask: "can someone", "please confirm", "need your
+  thoughts".
+
+In these cases the page needs EXTENSION — append an `## Open
+questions` section (create if missing) with the question + asker +
+date + `[^msg-*]` footnote. Use `edit_file` / `patch_page`; do NOT
+call `log_insight("already_captured", ...)` — that discards the
+delta. Worked example:
+
+> Email from Amit Agarwal: "For Central Smart Orchestrator, we need
+> to decide: (1) enable for premium sellers first? (2) fallback if
+> orchestrator errors? (3) rollout window?"
+>
+> Page `topics/central-smart-orchestrator-api` EXISTS but doesn't
+> cover these. Action: patch `## Open questions`:
+>
+>     ## Open questions
+>
+>     From Amit Agarwal on 2026-01-23 [^msg-xxx]:
+>     - Enable for premium sellers first?
+>     - Fallback if orchestrator errors?
+>     - Rollout window?
+
 Investigatory insights (`topic_merge_candidate`, `structure_suggestion`,
 `question_for_human`, `prompt_ambiguity`, `tool_gap`,
 `supersession_doubt`) are INVESTIGATORY only — they flag meta-

@@ -112,13 +112,15 @@ def test_workflow_prompt_under_budget() -> None:
     ~400 chars rewording the decision-page guidance to match the
     lazy-creation contract; the V12 audit fix-C (2026-04-23) added
     ~400 chars teaching the `insufficient_decision` terminal category
-    + surfacing it in the tool reference. The ceiling is 42500 chars
-    — crossing it means a later edit re-introduced duplication or
-    bloat. Raise only on a deliberate feature that genuinely needs
+    + surfacing it in the tool reference; Wave-1-U6 added ~1.1k chars
+    carving out the question-delta exception (director asks extend
+    the page, do not skip as already_captured). The ceiling is 44000
+    chars — crossing it means a later edit re-introduced duplication
+    or bloat. Raise only on a deliberate feature that genuinely needs
     more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 42500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; V12-fix-C "
-        "baseline was ~42.3k (v12-U1 + v12-U2 + v12-U3 + v12-U4 + fix-C stacked). "
+    assert len(COMPILER_SYSTEM_PROMPT) < 44000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; Wave-1-U6 "
+        "baseline was ~43.3k (v12 stack + Wave-1-U6 question-delta carve-out). "
         "If the growth is deliberate, raise this ceiling; otherwise it's "
         "probably re-introduced duplication."
     )
@@ -979,6 +981,40 @@ def test_revision_style_teaches_lazy_decision_wikilink() -> None:
     # must know the link-from location.
     assert "wikilink" in lowered
     assert "Recent changes" in block
+
+
+def test_prompts_have_question_delta_exception() -> None:
+    """Wave-1-U6: `already_captured` must carve out emails that extend an
+    existing page with open questions / leadership asks.
+
+    The audit caught a false-skip on `central-smart-orchestrator-api`
+    Batch 9 — three director-level open questions from Amit Agarwal
+    were uncaptured because the concept page existed, so the agent
+    logged `already_captured` instead of extending the page's
+    `## Open questions` section. The carve-out must live inside the
+    decision block (post-v10-U4: `<workflow>`) so the agent sees it
+    BEFORE committing to `already_captured`."""
+    block = _workflow_block()
+    # Section marker must be present so the carve-out is visible at a glance.
+    assert "Question-delta exception" in block
+    # The fix mechanic — extend via `## Open questions`, not skip.
+    assert "Open questions" in block
+    # Trigger vocabulary the model can pattern-match against. Any ONE of
+    # these three phrases is enough — we avoid forcing prompt bloat by
+    # demanding all three.
+    lowered = block.lower()
+    assert any(
+        phrase in lowered for phrase in ("unanswered question", "open decision", "leadership ask")
+    ), "question-delta block must name at least one trigger vocabulary"
+    # The fix must explicitly rule out `log_insight("already_captured", ...)`
+    # — otherwise the agent still hears the "be aggressive about
+    # already_captured" nudge and defaults to the skip. Normalise
+    # whitespace so a line wrap between "do NOT" and the rest still
+    # matches.
+    normalised = " ".join(block.split())
+    assert 'do NOT call `log_insight("already_captured"' in normalised, (
+        "question-delta block must explicitly forbid logging already_captured"
+    )
 
 
 def test_revision_style_teaches_experiments_not_decisions() -> None:
