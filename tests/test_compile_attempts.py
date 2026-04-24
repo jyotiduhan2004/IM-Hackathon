@@ -248,18 +248,27 @@ def test_model_health_stats_counts_only_finished(db_conn: psycopg.Connection) ->
 
 
 def test_model_health_stats_timeout_counts_as_failure(db_conn: psycopg.Connection) -> None:
-    """Timeout is functionally a failure from the pool-health perspective
-    — the model didn't produce a usable compile."""
+    """Timeout feeds ``failed`` (and therefore fail_rate) but is tracked
+    separately in ``timeouts`` and excluded from ``failed_hard`` so the
+    absolute-cap guard can differentiate slow-but-healthy from broken."""
     _insert_message(db_conn, "m1")
     _insert_message(db_conn, "m2")
+    _insert_message(db_conn, "m3")
     _finished_attempt(db_conn, message_id="m1", model="model_X", outcome="timeout")
-    _finished_attempt(db_conn, message_id="m2", model="model_X", outcome="compiled")
+    _finished_attempt(db_conn, message_id="m2", model="model_X", outcome="failed")
+    _finished_attempt(db_conn, message_id="m3", model="model_X", outcome="compiled")
     db_conn.commit()
 
     stats = model_health_stats(since_hours=24)
     by_model = {s["compile_model"]: s for s in stats}
-    assert by_model["model_X"]["total"] == 2
-    assert by_model["model_X"]["failed"] == 1
+    row = by_model["model_X"]
+    assert row["total"] == 3
+    assert row["failed"] == 2  # timeout + failed → drags fail_rate
+    assert row["failed_hard"] == 1  # real failures only → abs-cap input
+    assert row["timeouts"] == 1
+    # fail_rate invariant: timeouts still feed the rate numerator so a
+    # consistently-slow model is still caught by the rate guard.
+    assert row["fail_rate"] == pytest.approx(2 / 3)
 
 
 def test_model_health_stats_respects_window(db_conn: psycopg.Connection) -> None:
@@ -322,9 +331,9 @@ def test_healthy_pool_drops_high_fail_rate_model(
 def test_healthy_pool_drops_on_absolute_failure_cap(
     compile_all_module: Any, db_conn: psycopg.Connection
 ) -> None:
-    """failed ≥ 10 drops the model regardless of fail_rate — covers models
-    that failed 10 of 50 calls (20%) but clearly have a systemic issue
-    with enough volume to matter."""
+    """failed_hard ≥ 10 drops the model regardless of fail_rate — covers
+    models that hard-failed 10 of 50 calls (20%) but clearly have a
+    systemic issue with enough volume to matter."""
     # 10 fails + 50 successes → ~17% fail rate but absolute cap hit.
     for i in range(60):
         _insert_message(db_conn, f"m{i}")
@@ -341,6 +350,30 @@ def test_healthy_pool_drops_on_absolute_failure_cap(
     kept, excluded = compile_all_module._healthy_pool(["model_A", "model_B"])
     assert kept == ["model_B"]
     assert excluded and excluded[0]["compile_model"] == "model_A"
+
+
+def test_healthy_pool_timeouts_alone_do_not_trip_abs_cap(
+    compile_all_module: Any, db_conn: psycopg.Connection
+) -> None:
+    """#194: timeouts are transient infrastructure stalls, not model
+    failures. 24 timeouts + 80 successes (~23% fail rate, 0 hard fails)
+    must NOT trip the absolute-failure cap — previously this nuked our
+    best model (grok-4.1-fast) after a proxy-side stall burst.
+
+    fail_rate here is 23% (below the 50% rate guard) and failed_hard is
+    0 (below the abs cap), so the model should survive.
+    """
+    for i in range(104):
+        _insert_message(db_conn, f"m{i}")
+    for i in range(24):
+        _finished_attempt(db_conn, message_id=f"m{i}", model="model_A", outcome="timeout")
+    for i in range(24, 104):
+        _finished_attempt(db_conn, message_id=f"m{i}", model="model_A", outcome="compiled")
+    db_conn.commit()
+
+    kept, excluded = compile_all_module._healthy_pool(["model_A", "model_B"])
+    assert set(kept) == {"model_A", "model_B"}
+    assert excluded == []
 
 
 def test_healthy_pool_keeps_low_attempt_model(

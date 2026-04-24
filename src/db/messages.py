@@ -457,11 +457,21 @@ def model_health_stats(*, since_hours: int = 24) -> list[dict[str, Any]]:
     append-only ``compile_attempts`` table because ``messages.compile_model``
     is overwritten by ``COALESCE`` on retry and so loses failure history.
 
-    Returns a list of dicts: ``{compile_model, total, failed, fail_rate}``.
+    Returns a list of dicts:
+    ``{compile_model, total, failed, failed_hard, timeouts, fail_rate}``.
+
+    - ``failed`` — count of ``outcome IN ('failed', 'timeout')``. Kept
+      as the fail-rate numerator so transient timeouts still drag rate
+      down; a model timing out half the time is broken enough.
+    - ``failed_hard`` — count of ``outcome = 'failed'`` only. Used by
+      the ``_HEALTH_ABS_FAILURE_CAP`` guard. Separating timeouts here
+      prevents a burst of proxy stalls from nuking an otherwise-healthy
+      model (#194: 24 grok timeouts hit the old 10-cap).
+    - ``timeouts`` — count of ``outcome = 'timeout'``. Exposed so
+      operators can see "this model is slow, not broken" in logs.
+
     Only counts attempts where ``finished_at IS NOT NULL`` (excludes
-    in-flight rows that haven't resolved yet). ``timeout`` outcomes are
-    counted alongside ``failed`` — they're both "the model didn't
-    produce a usable compile".
+    in-flight rows that haven't resolved yet).
     """
     with connect() as conn:
         rows = conn.execute(
@@ -470,7 +480,9 @@ def model_health_stats(*, since_hours: int = 24) -> list[dict[str, Any]]:
                    count(*)::int AS total,
                    count(*) FILTER (
                      WHERE outcome IN ('failed', 'timeout')
-                   )::int AS failed
+                   )::int AS failed,
+                   count(*) FILTER (WHERE outcome = 'failed')::int AS failed_hard,
+                   count(*) FILTER (WHERE outcome = 'timeout')::int AS timeouts
               FROM compile_attempts
              WHERE compile_model IS NOT NULL
                AND finished_at IS NOT NULL
@@ -484,6 +496,8 @@ def model_health_stats(*, since_hours: int = 24) -> list[dict[str, Any]]:
             "compile_model": r["compile_model"],
             "total": r["total"],
             "failed": r["failed"],
+            "failed_hard": r["failed_hard"],
+            "timeouts": r["timeouts"],
             "fail_rate": (r["failed"] / r["total"]) if r["total"] else 0.0,
         }
         for r in rows

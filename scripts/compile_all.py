@@ -1474,8 +1474,13 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
 
     Two-window quarantine:
     - 24h window (persistent): drops models where
-      ``(fail_rate > 0.5 AND total >= 5) OR failed >= 10``. Catches models
-      that have drifted broken over the day.
+      ``(fail_rate > 0.5 AND total >= 5) OR failed_hard >= 10``.
+      Catches models that have drifted broken over the day.
+      ``failed_hard`` (real failures, excluding timeouts) gates the
+      absolute cap so a burst of proxy stalls doesn't nuke an otherwise
+      healthy model (#194: 24 grok timeouts had the cap excluding our
+      best performer). Timeouts still feed ``fail_rate``, so a model
+      that's consistently slow still gets caught by the rate guard.
     - 4h window (short): drops models where
       ``fail_rate > 0.80 AND total >= 5``. Catches "hot" breakage that
       hasn't accumulated enough 24h signal yet (e.g. LiteLLM proxy starts
@@ -1515,7 +1520,7 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
                 long["fail_rate"] > _HEALTH_FAIL_RATE_THRESHOLD
                 and long["total"] >= _HEALTH_MIN_ATTEMPTS
             )
-            or long["failed"] >= _HEALTH_ABS_FAILURE_CAP
+            or long["failed_hard"] >= _HEALTH_ABS_FAILURE_CAP
         )
         short_drop = (
             short is not None

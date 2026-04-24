@@ -80,16 +80,20 @@ class Settings(BaseSettings):
     # `llm_model` is a fallback for code paths that invoke
     # `run_compilation` without a model override (one-off scripts,
     # tests); it mirrors the first pool entry so behavior doesn't
-    # quietly diverge.
-    llm_model: str = "minimax/minimax-m2.7"
+    # quietly diverge. (#192 fix: kept pointing at minimax-m2.7 after
+    # the pool rewrite, meaning scripts/tests silently used a model
+    # that had been excluded for gate-loop behavior.)
+    llm_model: str = "x-ai/grok-4.1-fast"
 
     # Per-batch model A/B pool — comma-separated. Each batch picks one
     # uniformly at random and stamps the choice in
     # `messages.compile_model` so we can join model → outcome later.
     #
     # A coordinator-side auto-exclusion guard in compile_all.py drops
-    # any model with >50% failure over ≥5 attempts OR ≥10 absolute
-    # failures in the last 24h. That lets us re-enable historically
+    # any model with >50% fail_rate over ≥5 attempts OR ≥10 absolute
+    # hard failures (timeouts NOT counted toward the abs cap; they
+    # still drag fail_rate so a consistently-slow model is still
+    # caught) in the last 24h. That lets us re-enable historically
     # flaky models here without a manual post-mortem every cycle — if
     # the proxy still rejects them or they still loop recursively, the
     # guard drops them at the next run-start.
@@ -120,17 +124,25 @@ class Settings(BaseSettings):
     # - qwen/qwen3.5-122b-a10b (2026-04-23): 5-attempt one-off, 0
     #   compiled / 4 trivial-skips / 1 recursion-fail. Replaced by
     #   qwen3.6-plus (next entry).
-    # - qwen/qwen3.6-plus (2026-04-24): untested on this pipeline but
-    #   flagged by user as worth trying. `_healthy_pool` guard will
-    #   drop if it misbehaves. Added.
-    # - minimax/minimax-m2.7 + z-ai/glm-5 (2026-04-24): dropped from
-    #   pool after PR #225 gate-flip caused 31.6% + 24.6% recursion-
-    #   limit fail (vs 5.3% + 0% pre-merge). Dipstick confirmed: grok
-    #   succeeded 17/17 on same-email head-to-head. Out until gate-
-    #   loop fixes (idempotent check_my_work + people-wikilink
-    #   autofix) land + a smoke re-verifies <5% rec-fail per re-
-    #   enabled model.
-    llm_model_pool: str = "x-ai/grok-4.1-fast,moonshotai/kimi-k2.6,qwen/qwen3.6-plus"
+    # - qwen/qwen3.6-plus (2026-04-24): REMOVED — not advertised by
+    #   the LiteLLM proxy. `curl $LITELLM_BASE_URL/models` confirmed
+    #   today that the id has never existed upstream; every batch
+    #   pick was 404-ing. `_filter_pool_to_available_models` catches
+    #   it at run-start but keep it out of config so we stop rolling
+    #   that dice. Do NOT re-add without first verifying it appears
+    #   in the proxy `/models` listing.
+    # - z-ai/glm-5 + z-ai/glm-5.1 (re-added 2026-04-24): gate-loop
+    #   root causes landed via Wave 1 — #168 idempotent
+    #   check_my_work cache, #167 people-wikilink warning-not-
+    #   blocker, #169 scoped find_touched_pages — so the PR #225
+    #   regression signal should be gone. `_healthy_pool` will
+    #   requarantine within 5 attempts if not. glm-5.1 was 400-ing
+    #   via LiteLLM on 2026-04-15 but now shows up in the proxy
+    #   catalog; worth retrying. Both <$1/M input.
+    # - anthropic/claude-sonnet-4.5 (2026-04-24): rejected for the
+    #   pool because $3/M input blows the user's $1/M per-token
+    #   ceiling. Available on the proxy but cost-gated out.
+    llm_model_pool: str = "x-ai/grok-4.1-fast,moonshotai/kimi-k2.6,z-ai/glm-5.1,z-ai/glm-5"
 
     litellm_base_url: str | None = None
     openai_api_key: str | None = None
@@ -174,7 +186,13 @@ class Settings(BaseSettings):
     # mid-round hang) fails fast instead of exhausting `--batch-timeout`,
     # which tracks cumulative time across model retries and can't bound a
     # single hung round.
-    invoke_timeout_s: int = 150
+    #
+    # 2026-04-24: raised 150 -> 900 after #195. kimi-k2.6 on 5-thread
+    # batches routinely runs one ainvoke round for 4-6 minutes on its
+    # own; 150 s clipped 18 consecutive legitimate batches in the
+    # 2026-04-23 smoke. 900 s still catches true hangs (the
+    # batch-52-style 5h31m case) without false-killing real work.
+    invoke_timeout_s: int = 900
 
     @property
     def attachments_dir(self) -> Path:

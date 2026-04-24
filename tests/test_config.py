@@ -39,9 +39,16 @@ def test_discover_env_file_returns_none_without_local_or_shared_env(tmp_path: Pa
 
 
 def test_model_pool_default() -> None:
-    """Default pool: grok + kimi + qwen3.6-plus (post PR #225 gate-flip dipstick)."""
+    """Default pool after 2026-04-24 hotfix: grok + kimi + glm-5.1 + glm-5.
+
+    qwen3.6-plus was removed (fictitious model id — not advertised by
+    the LiteLLM proxy). glm-5 + glm-5.1 re-added after Wave 1 gate-loop
+    fixes (#167, #168, #169). All four are <$1/M input tokens (user's
+    cost ceiling).
+    """
     assert settings.model_pool == [
         "x-ai/grok-4.1-fast",
         "moonshotai/kimi-k2.6",
-        "qwen/qwen3.6-plus",
+        "z-ai/glm-5.1",
+        "z-ai/glm-5",
     ]

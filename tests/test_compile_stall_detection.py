@@ -317,9 +317,14 @@ async def test_graph_ainvoke_preserves_other_exceptions():
 
 def test_invoke_timeout_s_has_default():
     """settings.invoke_timeout_s must have a sane default — a single round
-    shouldn't need more than a few minutes, and uncapped is the current bug.
+    shouldn't need more than a handful of minutes, and uncapped is the
+    original bug.
+
+    Upper bound is 1800s (30 min): generous enough for multi-thread kimi
+    batches post-#195 (which need ~4-6 min per ainvoke) but still a
+    finite cap that fails fast on the batch-52-style 5h31m proxy hangs.
     """
     from src.config import settings
 
     assert isinstance(settings.invoke_timeout_s, int)
-    assert 30 <= settings.invoke_timeout_s <= 600
+    assert 30 <= settings.invoke_timeout_s <= 1800
