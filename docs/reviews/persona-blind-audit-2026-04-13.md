@@ -68,4 +68,5 @@ landed in the days that followed.
   `docs/reviews/codex-priority-review-20260413T090000Z.md`,
   `docs/reviews/codex-catalog-review-20260413T080000Z.md`,
   `docs/reviews/tool-audit-20260413T050000Z.md`,
-  `docs/archive/README.md`.
+  `docs/archive/README.md`,
+  `docs/proposal/research/01-reconciliation-report.md`.
