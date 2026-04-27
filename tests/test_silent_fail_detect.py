@@ -155,3 +155,52 @@ class TestRetryLoopIntegration:
         from scripts.compile_all import _is_model_unavailable_error
 
         assert _is_model_unavailable_error(ValueError("some bug")) is False
+
+    def test_is_model_unavailable_error_catches_html_502(self) -> None:
+        """2026-04-24 smoke: glm-5.1 returned 5x ``<title>502 Server
+        Error</title>`` HTML responses from the proxy. Each one took
+        ~570 s before failing; the batch was marked failed instead of
+        retrying with a healthy pool model. Make these route to retry.
+        """
+        from scripts.compile_all import _is_model_unavailable_error
+
+        html_502 = (
+            "<html><head>\n"
+            '<meta http-equiv="content-type" content="text/html;charset=utf-8">\n'
+            "<title>502 Server Error</title>\n</head>\n"
+            "<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Server Error</h1>\n"
+        )
+        assert _is_model_unavailable_error(Exception(html_502)) is True
+
+    def test_is_model_unavailable_error_catches_html_5xx_variants(self) -> None:
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert (
+            _is_model_unavailable_error(Exception("<title>503 Service Unavailable</title>")) is True
+        )
+        assert _is_model_unavailable_error(Exception("<title>504 Gateway Timeout</title>")) is True
+        # Cloudflare / nginx use ``502 Bad Gateway`` (distinct from
+        # Google Frontend's ``502 Server Error``).
+        assert _is_model_unavailable_error(Exception("<title>502 Bad Gateway</title>")) is True
+        # nginx 504 page uses hyphenated ``Gateway Time-out`` (not
+        # ``Timeout``). Found in stock nginx error pages — distinct
+        # from Cloudflare/Google Frontend's spelling.
+        assert _is_model_unavailable_error(Exception("<title>504 Gateway Time-out</title>")) is True
+
+    def test_is_model_unavailable_error_catches_structured_5xx(self) -> None:
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert _is_model_unavailable_error(Exception("Error code: 502")) is True
+        assert _is_model_unavailable_error(Exception("Error code: 503")) is True
+        assert _is_model_unavailable_error(Exception("Error code: 504")) is True
+
+    def test_is_model_unavailable_error_ignores_free_text_502(self) -> None:
+        """Same hedge as the 401 case: a wiki page that mentions "502" in
+        prose must not trigger pool retry.
+        """
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert (
+            _is_model_unavailable_error(Exception("the upstream returned a 502 once last week"))
+            is False
+        )

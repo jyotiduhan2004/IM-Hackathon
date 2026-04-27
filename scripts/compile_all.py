@@ -1546,7 +1546,7 @@ def _healthy_pool(pool: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
 
 def _is_model_unavailable_error(exc: BaseException) -> bool:
     """True if ``exc`` indicates the LiteLLM proxy refuses this model for
-    this team key. Covers five shapes:
+    this team key OR the upstream provider is transiently dead. Covers:
 
     - 401 ``team not allowed to access model`` — original LiteLLM shape
     - 400 ``Invalid model name`` — original LiteLLM shape
@@ -1557,6 +1557,12 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     - 403 ``Forbidden`` — bare forbidden (Bug K)
     - ``SilentModelFailError`` — HTTP 200 with empty payload (Bug J,
       docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md)
+    - 5xx HTML error pages from the proxy front-end. 2026-04-24 smoke:
+      glm-5.1 hit 5/29 ``<title>502 Server Error</title>`` HTML responses
+      (each at ~570 s) — these are upstream provider gateway failures
+      raised as opaque text bodies that don't follow the
+      ``Error code: NNN`` pattern. Treat as infra so the batch retries
+      with another pool model instead of burning the round.
 
     All are infrastructure failures, not agent failures; the batch
     should retry with a different pool model instead of being marked
@@ -1566,9 +1572,9 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
 
     False-positive hedge: ``Error code: 401`` / ``Error code: 403`` is
     LiteLLM's structured error prefix — it doesn't appear in normal
-    tool output or model text. Matching on the number alone would
-    false-positive on things like "HTTP 401 from upstream" in page
-    content.
+    tool output or model text. The HTML matchers anchor on the
+    ``<title>...</title>`` tag, which a wiki page body wouldn't carry
+    in an exception string.
     """
     from src.compile.compiler import SilentModelFailError
 
@@ -1577,7 +1583,22 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     msg = str(exc)
     if "team not allowed to access model" in msg or "Invalid model name" in msg:
         return True
-    return "Error code: 401" in msg or "Error code: 403" in msg
+    if "Error code: 401" in msg or "Error code: 403" in msg:
+        return True
+    # Structured 5xx (LiteLLM occasionally surfaces gateway errors this way)
+    if "Error code: 502" in msg or "Error code: 503" in msg or "Error code: 504" in msg:
+        return True
+    # HTML 5xx pages bubbled up as the exception body — Google Frontend /
+    # nginx / Cloudflare all use the same ``<title>NNN ...</title>`` shape.
+    # Note ``Gateway Time-out`` (with hyphen): nginx's stock 504 page uses
+    # the hyphenated form, distinct from Cloudflare/Google's ``Timeout``.
+    return (
+        "<title>502 Server Error</title>" in msg
+        or "<title>503 Service Unavailable</title>" in msg
+        or "<title>504 Gateway Timeout</title>" in msg
+        or "<title>504 Gateway Time-out</title>" in msg
+        or "<title>502 Bad Gateway</title>" in msg
+    )
 
 
 def _record_attempts_start(
@@ -2119,7 +2140,7 @@ def main(
                         if not eligible:
                             raise
                         click.echo(
-                            f"  model {batch_model} unavailable (LiteLLM 401/403/400) — "
+                            f"  model {batch_model} unavailable (LiteLLM 401/403/400/5xx) — "
                             f"dropping for this run; retrying batch with another"
                         )
                         _record_attempts_outcome(
