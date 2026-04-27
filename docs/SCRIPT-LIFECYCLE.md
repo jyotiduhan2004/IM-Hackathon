@@ -52,6 +52,7 @@ Ran once, served their purpose, should not need re-running. Each carries a `One-
 - `merge_suffix_dupes.py` — merged `foo-new.md` / `foo-v2.md` variants back into canonical `foo.md`.
 - `migrate_entity_slugs.py` — migrated display-name entity slugs to email-canonical slugs.
 - `migrate_entities_to_people.py` — renamed `wiki/entities/` → `wiki/people/`.
+- `repair_legacy_dup_slugs_2026_04_28.py` — superseded three confirmed legacy slug pairs (`alok-kumar2`, `vikram-varshney`, `samarth`) into their email-canonical / category-correct twins (STATUS.md F-013 backfill).
 
 ## Monthly garbage day
 

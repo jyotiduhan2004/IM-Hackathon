@@ -10,6 +10,17 @@ Detailed incident postmortems live under `docs/incidents/`.
 
 ## [Unreleased] — 2026-04-13
 
+### Added (2026-04-28)
+- `scripts/repair_legacy_dup_slugs_2026_04_28.py` — one-shot wrapper over
+  `apply_merge_candidate.py` that supersedes three confirmed legacy slug
+  pairs (`alok-kumar2`, `vikram-varshney`, `samarth`) into their
+  email-canonical / category-correct twins. Surfaced by
+  `docs/audits/STATUS.md` finding F-013. Idempotent; retire after
+  2026-05-28.
+- `docs/audits/STATUS.md` + `docs/audits/findings.jsonl` — living
+  audit-status tracker consolidating 91 findings across 25 canonical
+  audits (5 verification channels: code/wiki/email/trace/prevention).
+
 ### Changed
 - MkDocs viewer now uses an explicit `nav:` tree instead of filesystem
   auto-discovery. Top level is `Home` / `Topics` / `Products & Platforms`
