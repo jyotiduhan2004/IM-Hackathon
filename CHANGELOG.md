@@ -17,6 +17,12 @@ Detailed incident postmortems live under `docs/incidents/`.
   email-canonical / category-correct twins. Surfaced by
   `docs/audits/STATUS.md` finding F-013. Idempotent; retire after
   2026-05-28.
+- `scripts/repair_lens_dup_2026_04_28.py` — one-shot consolidation of
+  `Lens.IndiaMART.md` + `lens-indiamart-com.md` into canonical
+  `wiki/systems/indiamart-lens.md` (matches `tests/fixtures/new_joiner/
+  domains.json` `expected_slug: indiamart-lens`). Rewrites 24 inbound
+  wikilinks across 10 files. Surfaced by STATUS.md finding F-024.
+  Idempotent; retire after 2026-05-28.
 - `docs/audits/STATUS.md` + `docs/audits/findings.jsonl` — living
   audit-status tracker consolidating 91 findings across 25 canonical
   audits (5 verification channels: code/wiki/email/trace/prevention).
