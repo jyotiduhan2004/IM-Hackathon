@@ -54,6 +54,7 @@ Ran once, served their purpose, should not need re-running. Each carries a `One-
 - `migrate_entities_to_people.py` — renamed `wiki/entities/` → `wiki/people/`.
 - `repair_legacy_dup_slugs_2026_04_28.py` — superseded three confirmed legacy slug pairs (`alok-kumar2`, `vikram-varshney`, `samarth`) into their email-canonical / category-correct twins (STATUS.md F-013 backfill).
 - `repair_lens_dup_2026_04_28.py` — consolidated `Lens.IndiaMART.md` + `lens-indiamart-com.md` into canonical `wiki/systems/indiamart-lens.md` and rewrote 24 inbound wikilinks (STATUS.md F-024 backfill).
+- `repair_legacy_person_slugs_2026_04_28.py` — bulk-cleaned 107 legacy display-name person slugs (44 renames + 63 merges) into email-canonical form, rewriting ~299 inbound wikilinks. Wraps `apply_merge_candidate.py` for the merge cases. STATUS.md F-013 broader backfill.
 
 ## Monthly garbage day
 

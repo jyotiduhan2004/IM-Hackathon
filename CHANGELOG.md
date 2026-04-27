@@ -23,6 +23,13 @@ Detailed incident postmortems live under `docs/incidents/`.
   domains.json` `expected_slug: indiamart-lens`). Rewrites 24 inbound
   wikilinks across 10 files. Surfaced by STATUS.md finding F-024.
   Idempotent; retire after 2026-05-28.
+- `scripts/repair_legacy_person_slugs_2026_04_28.py` — one-shot bulk
+  cleanup of all remaining legacy display-name person slugs (107 total:
+  44 renames + 63 merges) into email-canonical `name-indiamart-com`
+  form. Wraps `apply_merge_candidate.py` for merge cases; renames are
+  FS-mv → DB-UPDATE → frontmatter-normalize per row. Rewrites ~299
+  inbound wikilinks across the wiki/ subtree. Idempotent. Companion
+  to STATUS.md finding F-013. Retire after 2026-05-28.
 - `docs/audits/STATUS.md` + `docs/audits/findings.jsonl` — living
   audit-status tracker consolidating 91 findings across 25 canonical
   audits (5 verification channels: code/wiki/email/trace/prevention).
