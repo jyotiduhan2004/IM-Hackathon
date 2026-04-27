@@ -6,19 +6,19 @@ This is the consolidated answer to "have the audit findings actually been fixed,
 
 The answer to "how do we make sure each finding never happens again" is the [Prevention scoreboard](#prevention-scoreboard) — every finding gets a regression-guard rating (Yes / Partial / None) pointing at a concrete validator / middleware / critique rule / prompt teaching / CI check.
 
-The machine-readable companion is [`findings.jsonl`](./findings.jsonl) — STATUS.md is rendered from it; append a new finding there to extend the tracker.
+The machine-readable companion is [`findings.jsonl`](./findings.jsonl) — it's the canonical source of truth; STATUS.md is the human-readable narrative built on top of it. Append a new finding to `findings.jsonl` and update STATUS.md to extend the tracker. (A render script is a follow-up; until it ships, the two must be kept in sync by hand — drift between them is a known risk and gets re-verified before each meaningful update.)
 
 ## TL;DR
 
 | | Count | % |
 |---|---|---|
 | Done | 40 | 44% |
-| Partial | 28 | 31% |
-| Open | 20 | 22% |
+| Partial | 26 | 29% |
+| Open | 22 | 24% |
 | Won't-do | 3 | 3% |
 | **Total** | **91** | **100%** |
 
-**Headline**: 0 of the 11 S0 (blocker) and 31 S1 (structural) findings are fully Open. Every S0/S1 either fully shipped or is Partial — meaning the **forward-looking** fix landed (new compiles use the new behavior) but **legacy debt** on the existing corpus remains. All 20 fully-Open findings are S2 (quality) or S3 (polish).
+**Headline**: 0 of the 11 S0 (blocker) and 31 S1 (structural) findings are fully Open. Every S0/S1 either fully shipped or is Partial — meaning the **forward-looking** fix landed (new compiles use the new behavior) but **legacy debt** on the existing corpus remains. All 22 fully-Open findings are S2 (quality, 16) or S3 (polish, 6).
 
 The dominant gap pattern: the compiler is fixed; the wiki/ corpus that was produced before the fix is not. **Forward-looking vs backfill** is the right axis to plan against.
 
@@ -30,7 +30,7 @@ The dominant gap pattern: the compiler is fixed; the wiki/ corpus that was produ
 | **S1** (structural / reader-facing wrongness) | 16 | 15 | 0 | 0 | 31 |
 | **S2** (quality / friction) | 15 | 7 | 16 | 3 | 41 |
 | **S3** (polish / nice-to-have) | 1 | 1 | 6 | 0 | 8 |
-| **Total** | **40** | **28** | **20** | **3** | **91** |
+| **Total** | **40** | **26** | **22** | **3** | **91** |
 
 ## Key insights
 
@@ -89,8 +89,8 @@ The 16 open S2 findings, roughly ranked by leverage × ease-of-fix. Numbers in `
 12. **[F-069] Body `## Related` + frontmatter `related:` duplication** — 11/16 V12-audit pages had both. Critique warning.
 13. **[F-084] qmd regression corpus not seeded as fixtures** — 77-query corpus exists at `docs/audits/qmd-spike-2026-04-23-queries.jsonl`, but `tests/fixtures/qmd_spike/` doesn't. Ranking-model bumps would regress silently.
 14. **[F-070] Email-slug → canonical-name wikilink migration** — 3,408 instances of `[[*-indiamart-com]]` in 296 topics. Explicitly deferred to Tier 3 by the V12 audit.
-15. **[F-077] Wikipedia-style random-walk navigation unevaluated** — V12's primary north-star metric ("can a new joiner navigate from a domain page to answer X in N hops?") has no implementation.
-16. **[F-080] Scorer-judge alignment pipeline** — proposal to run judge on scorer's top decile after each compile (~$9/run for 30 pages) not implemented.
+15. **[F-043] Reviewer escalation paths defined but not invoked on new-page write_file** — V12 audit confirmed 4/17 batches had 0 reviewer cycles, including both new V12-shaped pages. Reviewer wired but not firing on the new-page path.
+16. **[F-056] Backlinks ('Linked from' / 'pages that link here') break wiki-as-graph** — Person-page backlinks shipped (compiler.py:969 `_rebuild_person_backlinks`), but topic/system inverse-link generation not implemented. 0/50 sample topics have a `Linked from` section.
 
 ## Top open findings (S3)
 
@@ -98,7 +98,9 @@ The 6 open S3 findings, deferred:
 
 - **[F-049]** `compiled-but-touches=0` log row is ambiguous (cited_prior not surfaced) — log-UX disambiguation
 - **[F-076]** Scorer v2→v3 numeric delta mixes rubrics — re-run on pre-V12 snapshot deferred
+- **[F-077]** Wikipedia-style random-walk navigation unevaluated — V12's primary north-star metric has no implementation; Phase-2 eval-suite item
 - **[F-079]** V12-U3 footnote utility unmeasured (cited vs used) — instrumentation question
+- **[F-080]** Scorer-judge alignment pipeline — proposal to run judge on scorer's top decile after each compile (~$9/run for 30 pages) not implemented
 - **[F-091]** AgentMiddleware migration of legacy hand-rolled coordinator hooks (Phase 2 backlog)
 
 ## Partial findings — what would close them
@@ -107,7 +109,7 @@ The 28 Partial findings split into two clean clusters: **forward-looking fix shi
 
 - **[F-003]** Hallucination: forward-looking prompt + footnotes shipped; needs a substring-evidence validator that blocks fabricated quotes / list truncation. **Fix**: critique rule that checks every claim's footnote raw against substring presence.
 - **[F-010]** Schema misfit: prompt + critique + reviewer all shipped; legacy 326-topic backfill unrun. **Fix**: one-shot rewrite pass over legacy topics OR accept that they're frozen.
-- **[F-013]** Near-dups: detector + merge tooling shipped; manual-merge backfill unrun on Lens, samarth, vikram, sahil-sharma, alok-kumar. **Fix**: run `scripts/consolidate_duplicate_slug.py` for each + add Postgres UNIQUE constraint.
+- **[F-013]** Near-dups: detector + merge tooling shipped (`scripts/merge_suffix_dupes.py`, `scripts/apply_merge_candidate.py`); manual-merge backfill unrun on Lens, samarth, vikram, sahil-sharma, alok-kumar. (Note: `scripts/consolidate_duplicate_slug.py` from PR #154 was retired in PR #174 as a one-shot.) **Fix**: re-run merge tooling on these slugs + add Postgres UNIQUE constraint.
 - **[F-014]** Stub padding: auto-stub disabled (forward-looking ✓); legacy systems/ stubs (61/101 = 60%) not pruned. **Fix**: min-body validator with hard-fail OR one-shot prune.
 - **[F-015]** Humans in `systems/`: ~10 still there including `marketplace-launch.md` (134-inbound mailing list). **Fix**: re-run `scripts/audit_systems_entities.py` + add `@indiamart.com`-in-system-page validator.
 - **[F-017]** Sources frontmatter: ~60% migration to `source_threads` incomplete. **Fix**: one-shot migration to drain the rest, OR strict-no-sources as default.
@@ -230,7 +232,7 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 | F-027 | S1 | Partial | P | Coordinator-only tools still exposed in agent toolbox | tool-audit-2026-04-13 | Agent surface clean; @tool retained for scripts; update_wiki_index split not done |
 | F-040 | S1 | Partial | P | LiteLLM model allowlist + bad model variants fail batches without retry | cycle-6-summary | Retry classification shipped; outcome enum lacks infrastructure_error tag |
 | F-041 | S1 | Partial | Y | Validator backlog: legacy entities/index, legacy-sources-only, frontmatter housekeeping | cycle-5-summary | Backfill scripts shipped; legacy debt residual |
-| F-043 | S1 | Open | P | Reviewer escalation paths defined but not invoked on new-page write_file | cycle-10-smoke-30 | Reviewer wired but V12 confirms not invoked on new-page path |
+| F-043 | S2 | Open | P | Reviewer escalation paths defined but not invoked on new-page write_file | cycle-10-smoke-30 | Reviewer wired but V12 confirms not invoked on new-page path |
 | F-045 | S2 | Open | — | Event-log voice and named-attribution prose leaks into wiki pages | cycle-10-smoke-30 | No event-log voice detector; synthesis depth gap remains |
 | F-046 | S2 | Open | — | TL;DR adoption weak despite plumbing in place | cycle-10-smoke-30 | Prompt labels TL;DR Optional; no critique rule |
 | F-058 | S2 | Open | — | Bug/incident pages forced through design-doc gate | topic-archetypes | Validator/critique still applies design-doc gate; escape hatch missing |
@@ -286,9 +288,9 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 
 **How to keep this doc fresh**:
 1. When a new audit is filed, extract findings into `findings.jsonl` with the schema below.
-2. When a finding changes status (e.g. PR ships that addresses it), update the corresponding line in `findings.jsonl`.
-3. STATUS.md is rendered from `findings.jsonl`. (A render script is a follow-up — for now, keep both in sync by hand.)
-4. Quarterly: re-verify Open findings haven't drifted (e.g. a fix was reverted) and Partial findings haven't quietly become Open again.
+2. When a finding changes status (e.g. PR ships that addresses it), update the corresponding line in `findings.jsonl` AND the matching row + summary counts in STATUS.md.
+3. The two must be kept in sync by hand until a render script is built. (Keeping `findings.jsonl` as the source of truth and re-deriving the summary tables before each update is the safer path.)
+4. Quarterly: re-verify Open findings haven't drifted (a fix was reverted) and Partial findings haven't quietly become Open again. Re-run the 5-channel verification.
 
 **What to add**: when a new finding doesn't fit any audit, file it as a one-line entry under a new audit name (e.g. `ad-hoc-2026-05-DD`) — every finding has provenance.
 
