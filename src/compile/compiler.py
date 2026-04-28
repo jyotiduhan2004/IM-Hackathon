@@ -2465,6 +2465,7 @@ def create_compiler(
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
     from src.compile.middleware.path_autoheal import PathAutohealMiddleware
     from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
+    from src.compile.middleware.reconnaissance_paralysis import ReconnaissanceParalysisMiddleware
     from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
     from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
     from src.compile.reviewer import build_reviewer_subagent
@@ -2600,6 +2601,13 @@ def create_compiler(
             # proactive nudges to break the spiral. See
             # docs/audits/smoke-99a267f4-recursion-deep-dive-2026-04-28.md.
             EditStalenessMiddleware(),
+            # Smoke-02c9d536 audit (2026-04-28): kimi-k2.6 burned 575s
+            # of 900s budget on thread 19be9883c6d921a6 with 14 reads,
+            # 6 resolves, 0 edits / writes / log_insights. Sibling to
+            # EditStaleness — that one watches the edit storm; this one
+            # catches the failure to ever start the edit phase. Fires
+            # once per batch at the 8th read with zero commits.
+            ReconnaissanceParalysisMiddleware(),
         ],
         subagents=[cast(Any, reviewer_spec)],
     )

@@ -17,6 +17,8 @@ from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
 from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
 from src.compile.middleware.path_autoheal import PathAutohealMiddleware
 from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
+from src.compile.middleware.reconnaissance_paralysis import RECONNAISSANCE_NUDGE_MESSAGE
+from src.compile.middleware.reconnaissance_paralysis import ReconnaissanceParalysisMiddleware
 from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
 from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
 from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
@@ -27,6 +29,7 @@ __all__ = [
     "GATE_REJECT_PAT",
     "POST_WRITE_NUDGE_MESSAGE",
     "POST_WRITE_NUDGE_PAT",
+    "RECONNAISSANCE_NUDGE_MESSAGE",
     "TERMINAL_NUDGE_MESSAGE",
     "CheckMyWorkGateMiddleware",
     "ChronologicalScopeMiddleware",
@@ -37,6 +40,7 @@ __all__ = [
     "LegacyPageHintMiddleware",
     "PathAutohealMiddleware",
     "ReadFileTruncationHintMiddleware",
+    "ReconnaissanceParalysisMiddleware",
     "SameThreadTopicGuardMiddleware",
     "SiblingDraftCheckMiddleware",
     "TerminalDecisionGuardMiddleware",
