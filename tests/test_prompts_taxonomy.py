@@ -114,11 +114,14 @@ def test_workflow_prompt_under_budget() -> None:
     ~400 chars teaching the `insufficient_decision` terminal category
     + surfacing it in the tool reference; Wave-1-U6 added ~1.1k chars
     carving out the question-delta exception (director asks extend
-    the page, do not skip as already_captured). The ceiling is 44000
+    the page, do not skip as already_captured); the smoke-99a267f4
+    follow-up (2026-04-28) added ~1.5k chars for the symmetric
+    answer-delta exception (don't skip when the email is the answer
+    to an already-open question on the page). The ceiling is 45500
     chars — crossing it means a later edit re-introduced duplication
     or bloat. Raise only on a deliberate feature that genuinely needs
     more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 44000, (
+    assert len(COMPILER_SYSTEM_PROMPT) < 45500, (
         f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; Wave-1-U6 "
         "baseline was ~43.3k (v12 stack + Wave-1-U6 question-delta carve-out). "
         "If the growth is deliberate, raise this ceiling; otherwise it's "
@@ -1014,6 +1017,46 @@ def test_prompts_have_question_delta_exception() -> None:
     normalised = " ".join(block.split())
     assert 'do NOT call `log_insight("already_captured"' in normalised, (
         "question-delta block must explicitly forbid logging already_captured"
+    )
+
+
+def test_prompts_have_answer_delta_exception() -> None:
+    """Audit `smoke-99a267f4-2026-04-28` caught the symmetric miss:
+    grok skipped a Jan-30 GST follow-up as `already_captured` because
+    the topic page existed, even though the email was the ANSWER to an
+    open Jan-26 ask from a director ("await last week impact"). The
+    Question-delta exception covers question arrival; this carve-out
+    covers answer arrival. Both belong in the workflow block where the
+    agent sees them BEFORE committing to `already_captured`."""
+    block = _workflow_block()
+    # Section marker (kept distinct from "Question-delta exception" so
+    # the agent does not collapse the two cases together).
+    assert "Answer-delta exception" in block
+    # Trigger vocabulary the model can pattern-match against. Any one
+    # of these phrases is enough — they cover the three triggers
+    # (existing-section reference, same-thread reply, leadership
+    # commit verb).
+    lowered = block.lower()
+    assert any(
+        phrase in lowered
+        for phrase in (
+            "answer to an open question",
+            "this email is the\n  reply",
+            "leadership commit verb",
+        )
+    ), "answer-delta block must name at least one trigger vocabulary"
+    # The block must also reference the Open questions structure so
+    # the agent knows where to attach the answer (mirrors the
+    # Question-delta test's `"Open questions" in block` assertion).
+    assert "Open questions" in block, (
+        "answer-delta block must name `## Open questions` as the "
+        "structure to update with the resolved answer"
+    )
+    # The fix mechanic must call out the same forbidden path as the
+    # Question-delta exception so the model treats both as siblings.
+    normalised = " ".join(block.split())
+    assert 'do NOT call `log_insight("already_captured"' in normalised, (
+        "answer-delta block must explicitly forbid logging already_captured"
     )
 
 

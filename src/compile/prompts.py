@@ -319,7 +319,10 @@ common way to leave an email pending. Trigger when:
   this one is follow-up / code-review / commentary.
 - Forwards, acks, "confirmed, scaling to 100%" replies whose
   decision is already on the page (NOT `trivial_skip` — the content
-  IS substantive, it's just already captured).
+  IS substantive, it's just already captured). **If the reply is
+  meeting a prior ask** ("await last week impact", "share numbers",
+  "confirm rollout"), it's NOT already_captured — see the
+  Answer-delta exception below first.
 - Your planned edit's diff would be nothing new or a near-duplicate
   bullet — stop and `log_insight("already_captured",
   email_path=<current raw>, message=<why covered>)` instead.
@@ -355,6 +358,47 @@ delta. Worked example:
 >     - Enable for premium sellers first?
 >     - Fallback if orchestrator errors?
 >     - Rollout window?
+
+### Answer-delta exception (the symmetric case)
+
+Same shape, opposite direction. Do NOT skip when the email is the
+ANSWER to an open question already on the page. The page may already
+exist — what's missing is the resolution.
+
+Triggers:
+
+- Page has an `## Open questions` (or `## Pending` / `## Awaiting`)
+  section, and the email replies with the requested data, decision,
+  or commitment.
+- Earlier message in the SAME thread asked "share weekly impact" /
+  "send numbers" / "let me know once shipped", and this email is the
+  reply.
+- A leadership commit verb meeting an earlier ask: "shipped", "scaled
+  to 100%", "approved", "rolled back", "data attached", "as
+  requested".
+
+The page needs EXTENSION — close the question by either (a) updating
+the `## Open questions` block to mark the answer + cite this email,
+or (b) appending the new numbers / decision to the relevant section
+with a `[^msg-*]` footnote. Use `edit_file` / `patch_page`; do NOT
+call `log_insight("already_captured", ...)` — that drops the answer
+and leaves the page falsely open.
+
+Worked example:
+
+> Page `topics/repositioning-of-gst-registration-annual-turnover-filters`
+> has an open ask from Devesh Agarwal on 2026-01-26: "Good. Will
+> await last week impact."
+>
+> Email from Aditi on 2026-01-30: "Weekly impact (18-24 Jan):
+> selection +521% vs prior 3x, conversion -48.53%, overall page
+> conversion +2.27%."
+>
+> Action: append the new numbers to the page's Recent changes section
+> with `[^msg-xxx]` footnote citation, AND update the Jan 26 open
+> question to reference its answer. Do NOT skip as `already_captured`
+> — the page only has the Jan 23 launch metrics; this is the
+> resolution DA was waiting on.
 
 Investigatory insights (`topic_merge_candidate`, `structure_suggestion`,
 `question_for_human`, `prompt_ambiguity`, `tool_gap`,
