@@ -352,7 +352,13 @@ class TestGetThreadContextDualFormat:
         # Per-message stub keeps `raw_path` and excludes the body preview.
         assert len(result["messages_summary"]) == 2
         for entry in result["messages_summary"]:
-            assert set(entry.keys()) == {"message_id", "raw_path", "date", "from_addr"}
+            assert set(entry.keys()) == {
+                "message_id",
+                "raw_path",
+                "cite_key",
+                "date",
+                "from_addr",
+            }
             assert entry["raw_path"].endswith(".md")
             assert "first_200_chars" not in entry
             assert "compile_state" not in entry

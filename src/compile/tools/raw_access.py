@@ -42,6 +42,22 @@ def _cutoff_to_date(cutoff: str | None) -> str | None:
     return cutoff[:10]
 
 
+def _cite_key_from_raw_path(raw_path: str) -> str:
+    """Return the 8-char footnote target for a raw email path.
+
+    Mirrors the prompt rule (`raw_path.stem.rsplit("_", 1)[-1]`):
+    `raw/2026-01-08_subject_cda09a3d.md` → `cda09a3d`. Returns `""`
+    for empty / malformed inputs so the LLM can detect a missing
+    cite_key and fall back to the raw_path.
+    """
+    if not raw_path:
+        return ""
+    stem = Path(raw_path).stem
+    if "_" not in stem:
+        return ""
+    return stem.rsplit("_", 1)[-1]
+
+
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
 
 
@@ -107,8 +123,12 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
     candidate, without a follow-up `read_file`.
 
     Args:
-        query: Slug, title, or email. The tool auto-detects by shape and
-            normalises common leaks:
+        query: Slug, title, or email. Pass the bare slug
+            (``whatsapp-buyer-feedback``), not a path-prefixed form
+            (``topics/whatsapp-buyer-feedback`` or
+            ``system/whatsapp-buyer-feedback``). Prefixed inputs are
+            wikilink targets, not resolver inputs. The tool auto-detects
+            by shape and normalises common leaks:
               - `https://mesh-pg.intermesh.net/x` → `mesh-pg`
               - `mesh_pg` → `mesh-pg`
         limit: Max candidates to return on a miss (default 10, capped at 10).
@@ -345,13 +365,16 @@ def get_thread_context(
             scales linearly with thread size). Navigable shape
             `{thread_id, message_count, first_subject, latest_date,
             applied_cutoff_date, note_on_cutoff, truncated,
-            messages_summary: [{message_id, raw_path, date, from_addr}, ...]}`.
+            messages_summary: [{message_id, raw_path, cite_key, date, from_addr}, ...]}`.
             `raw_path` is the single most useful field — pass it to
-            `read_file` without re-querying. Per-message bodies and
-            compile_state are dropped to stay cheap. `messages_summary`
-            is capped at 20 entries regardless of `limit` (which
-            still governs DB fetch size for `message_count` /
-            `latest_date` accuracy).
+            `read_file` without re-querying. `cite_key` is the 8-char
+            hash suffix of the raw filename (`raw/..._cda09a3d.md` →
+            `cda09a3d`) — drop it straight into a footnote
+            (`[^msg-<cite_key>]`) instead of re-deriving it.
+            Per-message bodies and compile_state are dropped to stay
+            cheap. `messages_summary` is capped at 20 entries
+            regardless of `limit` (which still governs DB fetch size
+            for `message_count` / `latest_date` accuracy).
           - "detailed" (~206+ tokens for a 2-message thread; also
             scales linearly) — full shape with `messages` array:
             subject, raw_path, 200-char body preview, and compile_state
@@ -363,9 +386,11 @@ def get_thread_context(
         "first_subject": str, "latest_date": str | None,
         "applied_cutoff_date": str | None, "note_on_cutoff": str | None,
         "truncated": bool, "messages_summary": [{"message_id",
-        "raw_path", "date": str | None, "from_addr"}, ...]}``.
-        ``note_on_cutoff`` is None when no cutoff is applied; `date`
-        is None for rows with no date in the DB.
+        "raw_path", "cite_key", "date": str | None, "from_addr"}, ...]}``.
+        ``cite_key`` is the 8-char hash suffix of ``raw_path`` (or
+        ``""`` if the path is missing / malformed). ``note_on_cutoff``
+        is None when no cutoff is applied; `date` is None for rows
+        with no date in the DB.
         Detailed: ``{"thread_id": str, "messages": [{"message_id",
         "subject", "from_addr", "date": str | None, "raw_path",
         "first_200_chars", "compile_state"}, ...], "truncated": bool,
@@ -429,6 +454,8 @@ def get_thread_context(
             first_subject = str(rows[0]["subject"] or "") if rows else ""
             # `raw_path` is the field the agent needs next — passing it
             # to `read_file` avoids a DB lookup to find the raw file.
+            # `cite_key` is precomputed (see `_cite_key_from_raw_path`)
+            # so the LLM doesn't redo the `rsplit` per footnote.
             # Body preview + compile_state stay in detailed only. We
             # cap per-row stubs at `_CONCISE_MESSAGE_CAP` so very long
             # threads can't balloon the concise payload.
@@ -437,6 +464,7 @@ def get_thread_context(
                 {
                     "message_id": str(row["message_id"] or ""),
                     "raw_path": str(row["raw_path"] or ""),
+                    "cite_key": _cite_key_from_raw_path(str(row["raw_path"] or "")),
                     # `None` signals "no date in DB" — callers shouldn't
                     # need to distinguish `""` from `None`.
                     "date": row["date"].isoformat() if row["date"] else None,

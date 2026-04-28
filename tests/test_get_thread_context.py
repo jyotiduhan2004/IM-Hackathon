@@ -25,6 +25,7 @@ from unittest.mock import patch
 import pytest
 from src.compile.compiler import _current_batch_cutoff_date
 from src.compile.compiler import get_thread_context
+from src.compile.tools.raw_access import _cite_key_from_raw_path
 from src.compile.tools.raw_access import _cutoff_to_date
 
 
@@ -100,6 +101,23 @@ class TestCutoffToDate:
 
     def test_empty_string_returns_none(self) -> None:
         assert _cutoff_to_date("") is None
+
+
+class TestCiteKeyFromRawPath:
+    """Pure helper that precomputes the footnote target the agent
+    would otherwise derive via `raw_path.stem.rsplit("_", 1)[-1]`."""
+
+    def test_typical_raw_path(self) -> None:
+        assert _cite_key_from_raw_path("raw/2026-01-08_subject_cda09a3d.md") == "cda09a3d"
+
+    def test_absolute_path(self) -> None:
+        assert _cite_key_from_raw_path("/repo/raw/2026-01-08_subject_4f78488c.md") == "4f78488c"
+
+    def test_empty_returns_empty(self) -> None:
+        assert _cite_key_from_raw_path("") == ""
+
+    def test_no_underscore_returns_empty(self) -> None:
+        assert _cite_key_from_raw_path("raw/m1.md") == ""
 
 
 @pytest.fixture(autouse=True)
@@ -212,11 +230,22 @@ def test_get_thread_context_default_is_concise_aggregate(tmp_path: Path) -> None
     # v11-U2: per-message stub with `raw_path` for one-hop navigation.
     assert len(result["messages_summary"]) == 2
     first = result["messages_summary"][0]
-    assert set(first.keys()) == {"message_id", "raw_path", "date", "from_addr"}
+    assert set(first.keys()) == {
+        "message_id",
+        "raw_path",
+        "cite_key",
+        "date",
+        "from_addr",
+    }
     assert first["message_id"] == "msg-001"
     assert first["raw_path"] == raw1
     assert first["from_addr"] == "alice@indiamart.com"
     assert first["date"] == "2026-04-10T12:00:00+00:00"
+    # `cite_key` is the 8-char hash suffix of the raw filename. The
+    # test fixtures use synthetic `m1.md` / `m2.md` paths with no `_`
+    # separator, so the helper returns `""` — covered explicitly by
+    # the dedicated cite_key tests below.
+    assert first["cite_key"] == ""
     # Concise must NOT include per-message bodies / preview / compile_state.
     assert "messages" not in result
     assert "summary_lines" not in result

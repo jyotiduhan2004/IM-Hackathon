@@ -424,10 +424,13 @@ def check_my_work(
 ) -> dict[str, Any]:
     """Critique every wiki page that cites a given raw email.
 
-    WHEN: after you've written or edited wiki pages that cite a specific
-      raw email — critiques those pages for frontmatter completeness,
-      broken wikilinks, duplicate H2s, etc.
-    WHEN NOT: for a general wiki page sanity check (use validate_page_draft
+    WHEN to call:
+      AFTER you have called write_file / edit_file / patch_page in
+      the current batch.
+    WHEN NOT to call:
+      BEFORE any successful write — middleware will reject the call.
+      When the email outcome is log_insight (no-write) — skip cmw entirely.
+      For a general wiki page sanity check (use validate_page_draft
       on a specific slug instead); or if no page cites the raw yet (this
       tool has nothing to critique).
 
@@ -1756,10 +1759,16 @@ def log_insight(
 ) -> dict[str, Any]:
     """Record a structured meta-observation during compile.
 
-    Use this when you need to flag something for human review — uncertain
-    between page updates, weird thread structure, possible policy
-    supersession, missing tool. The coordinator surfaces the top few at
-    batch-end in the audit log.
+    WHEN to call: the email outcome is "no page write" (trivial,
+      already captured, or substantive-but-no-target) and the batch
+      needs a terminal decision recorded; OR you need to flag a
+      tool/prompt gap, supersession doubt, or merge candidate for
+      human review.
+    WHEN NOT to call: you've already written or edited a wiki page
+      for this email — log_insight is the no-write commitment, not
+      a parallel audit channel.
+
+    The coordinator surfaces the top few at batch-end in the audit log.
 
     Args:
         category: One of 'topic_merge_candidate', 'question_for_human',
@@ -1958,6 +1967,14 @@ class EntityRequest(BaseModel):
 @tool
 def create_entities(entities: list[EntityRequest]) -> dict[str, Any]:
     """Resolve or create people pages for the humans mentioned in this batch.
+
+    WHEN to call: a topic / system page in this batch wikilinks to a
+      person and you need their canonical slug (and a stub page if it
+      doesn't already exist).
+    WHEN NOT to call: speculative / proactive person pages with no
+      incoming wikilink, or to look up someone by email when you only
+      need the slug — `resolve_page("alice@indiamart.com")` is cheaper
+      and doesn't mint a stub.
 
     Always use this tool for people pages — do NOT invent slugs or
     `write_file` a new entity markdown directly. The tool derives the
@@ -2289,11 +2306,10 @@ def validate_page_draft(
 ) -> dict[str, Any]:
     """Sanity-check a draft BEFORE writing it.
 
-    WHEN TO USE: before `write_file` on a new page when you're not sure
-      it'll pass `check_my_work` — cheaper to fix now than to rebuild later.
-    WHEN NOT TO USE: don't call for edits to existing pages (use
-      `check_my_work` after the edit) or for trivial drafts where you're
-      certain the structure is right.
+    WHEN NOT to call: this tool is deprecated; do not call. The
+      sibling-draft / TL;DR / over-quoting checks now run as middleware
+      against the actual page write, so calling this proactively just
+      adds latency. Pending removal in a follow-up PR.
 
     Applies four cheap checks that catch the compiler's most frequent
     failure modes:

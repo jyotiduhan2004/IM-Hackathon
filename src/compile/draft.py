@@ -27,11 +27,11 @@ def write_draft_page(
 ) -> dict[str, Any]:
     """Write a draft page to wiki/_drafts/{slug}.md. Hidden from readers.
 
-    Use WHEN:
-    - You reference a [[wikilink]] but aren't confident the target deserves
-      its own topic or system page yet.
-    - You found a pattern (e.g. "all WhatsApp work") that could become a hub
-      but isn't ready to promote.
+    WHEN NOT to call: this tool is deprecated; do not call. Pending
+      removal in a follow-up PR — write directly to the canonical
+      `wiki/topics/<slug>.md` or `wiki/systems/<slug>.md` location
+      instead, or call `log_insight(category="insufficient_decision",
+      ...)` if you genuinely can't pick a target page.
 
     Args:
         slug: kebab-case identifier matching the wikilink target.
