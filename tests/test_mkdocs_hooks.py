@@ -476,3 +476,125 @@ def test_hook_no_domain_badge_when_fields_missing() -> None:
         "# Legacy\n\nBody.\n", page=_page("topics/legacy.md", meta), config={}, files=[]
     )
     assert "ns-domain" not in out
+
+
+# --- auto-rendered ## References (from inline [^msg-*] footnotes) ----------
+#
+# The agent now writes only inline `[^msg-xxxxxxxx]` markers in prose; the
+# hook builds the matching `## References` definition block by resolving each
+# hash against the raw/ filesystem index.
+
+
+@pytest.fixture
+def fake_raw_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Stand up a fake `raw/` directory with two emails and point the hook at it.
+
+    Resets the module-level cache so each test gets a fresh index.
+    """
+    import mkdocs_hooks
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "2026-01-08_launchim-bl-latency-regression_cda09a3d.md").write_text("body")
+    (raw_dir / "2026-01-08_launchim-nitin-missed-call-bug_19b9dc5e.md").write_text("body")
+    monkeypatch.setattr(mkdocs_hooks, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mkdocs_hooks, "_raw_index_cache", None)
+    return tmp_path
+
+
+def test_auto_renders_references_block_from_inline_footnotes(fake_raw_files: Path) -> None:
+    meta = {"title": "Topic", "page_type": "topic", "status": "active"}
+    body = "# Topic\n\nLatency regressed [^msg-cda09a3d]. Nitin flagged the bug [^msg-19b9dc5e].\n"
+    out = on_page_markdown(body, page=_page("topics/topic.md", meta), config={}, files=[])
+    assert "## References" in out
+    assert "[^msg-cda09a3d]: `raw/2026-01-08_launchim-bl-latency-regression_cda09a3d.md`" in out
+    assert "[^msg-19b9dc5e]: `raw/2026-01-08_launchim-nitin-missed-call-bug_19b9dc5e.md`" in out
+
+
+def test_no_references_block_when_no_inline_footnotes(fake_raw_files: Path) -> None:
+    meta = {"title": "Plain", "page_type": "topic", "status": "active"}
+    body = "# Plain\n\nNo footnotes here.\n"
+    out = on_page_markdown(body, page=_page("topics/plain.md", meta), config={}, files=[])
+    assert "## References" not in out
+
+
+def test_references_dedupes_repeated_footnotes(fake_raw_files: Path) -> None:
+    meta = {"title": "Repeat", "page_type": "topic", "status": "active"}
+    body = (
+        "# Repeat\n\n"
+        "First mention [^msg-cda09a3d]. Second mention [^msg-cda09a3d]. Third [^msg-cda09a3d].\n"
+    )
+    out = on_page_markdown(body, page=_page("topics/repeat.md", meta), config={}, files=[])
+    # Definition appears exactly once in References.
+    assert out.count("[^msg-cda09a3d]: `raw/") == 1
+
+
+def test_references_skipped_when_legacy_block_present(fake_raw_files: Path) -> None:
+    """Legacy pages with hand-authored `## References` keep theirs verbatim."""
+    meta = {"title": "Legacy", "page_type": "topic", "status": "active"}
+    body = (
+        "# Legacy\n\n"
+        "Latency regressed [^msg-cda09a3d].\n\n"
+        "## References\n\n"
+        "[^msg-cda09a3d]: `raw/legacy-hand-authored.md`\n"
+    )
+    out = on_page_markdown(body, page=_page("topics/legacy-refs.md", meta), config={}, files=[])
+    # Only the legacy definition appears — no auto-rendered duplicate.
+    assert out.count("[^msg-cda09a3d]:") == 1
+    assert "raw/legacy-hand-authored.md" in out
+
+
+def test_references_handles_unresolvable_footnote(
+    fake_raw_files: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Unknown hash — render a clear marker rather than dropping the citation silently."""
+    meta = {"title": "Ghost", "page_type": "topic", "status": "active"}
+    body = "# Ghost\n\nClaim [^msg-deadbeef].\n"
+    with caplog.at_level("WARNING"):
+        out = on_page_markdown(body, page=_page("topics/ghost.md", meta), config={}, files=[])
+    assert "## References" in out
+    assert "[^msg-deadbeef]: *(raw file not found" in out
+    assert any("[^msg-deadbeef]" in record.message for record in caplog.records)
+
+
+def test_strips_body_authored_sources_h2(
+    fake_raw_files: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Body-authored ``## Sources`` collides with the hook block — strip + warn."""
+    meta = {
+        "title": "Bad Heading",
+        "page_type": "topic",
+        "status": "active",
+        "sources": ["raw/something.md"],
+    }
+    body = (
+        "# Bad Heading\n\n"
+        "Body content.\n\n"
+        "## Sources\n\n"
+        "- agent wrote this manually\n"
+        "- which collides with the hook\n"
+    )
+    with caplog.at_level("WARNING"):
+        out = on_page_markdown(body, page=_page("topics/bad-heading.md", meta), config={}, files=[])
+    # Body-authored ## Sources stripped; warning emitted.
+    assert "agent wrote this manually" not in out
+    assert any("body-authored '## Sources'" in record.message for record in caplog.records)
+    # The hook's own Sources block (collapsible) still renders.
+    assert "📚 Sources" in out
+
+
+def test_strips_sources_h2_preserves_following_h2(fake_raw_files: Path) -> None:
+    """``## Related`` after ``## Sources`` must survive the strip."""
+    meta = {"title": "Mixed", "page_type": "topic", "status": "active"}
+    body = (
+        "# Mixed\n\n"
+        "Intro.\n\n"
+        "## Sources\n\n"
+        "- bogus body sources\n\n"
+        "## Related\n\n"
+        "- [[other-page]]\n"
+    )
+    out = on_page_markdown(body, page=_page("topics/mixed.md", meta), config={}, files=[])
+    assert "bogus body sources" not in out
+    assert "## Related" in out
+    assert "[[other-page]]" in out
