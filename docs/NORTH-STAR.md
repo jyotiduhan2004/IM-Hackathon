@@ -10,7 +10,7 @@
 
 **A compiled, curated Wikipedia for IndiaMART — not a directory of emails.**
 
-Pages are about *things* (products, systems, initiatives, decisions), not *events* (threads, emails). The wiki grows as new emails arrive; existing topic pages gain new sections; pages read like encyclopedia entries with progressive disclosure (TL;DR → body → sources).
+Pages are about *things* (products, systems, initiatives, decisions), not *events* (threads, emails). The wiki grows as new emails arrive; existing topic pages gain new sections; pages read like encyclopedia entries with progressive disclosure (lead paragraph → body → references).
 
 Audience from day 1: **everyone at IndiaMART**. The 6-month-new-joiner test is the acceptance bar — a joiner 6 months from now, reading the wiki for an hour, should map the IndiaMART ecosystem (products, systems, ownership, recent decisions) without prior context.
 
@@ -75,30 +75,64 @@ updated_at: 2026-04-15T...
 superseded_by: null
 ---
 
-## TL;DR
-One paragraph. What is this, current state in 2-3 sentences.
+Lead paragraph (≥2 sentences before the first H2): what this is, current state.
+The lead IS the summary — no separate `## TL;DR` section.
 
-## Background
-Synthesis across emails.
+## Why it matters
+Why this exists / who it affects.
 
 ## Current state
-What's happening now. Sub-initiatives as ## H3 sections if needed.
+What's happening now. Sub-initiatives as ### H3 sections if needed.
 
 ## Recent changes
 - 2026-04-12: scaled buyer-trust pilot 5% → 50% — see [[decision/...]]
 - 2026-04-05: launched photo-similarity in 3 categories
-(last 3-5 entries; older collapsed)
+Keep the last 3-5 entries inline; collapse older into `<details>` blocks under `Recent changes`.
 
-## Decisions
-- [[decision/deprecate-old-bidding]] (2026-03-20)
+## Open questions
+- What's still unresolved.
 
-## Sources
-<details><summary>Sources (23)</summary>
-(collapsed, rendered by mkdocs_hooks.py)
+## Related
+- [[decision/deprecate-old-bidding]]
+- [[system/lens]]
+
+## References
+<details><summary>References (23)</summary>
+(auto-rendered by mkdocs_hooks.py from inline footnotes)
 </details>
 ```
 
-Compiler aims for this template but may deviate when content warrants. Validator warns on missing required sections (TL;DR, Current state, Sources); does not block.
+Compiler aims for this template but may deviate when content warrants. The `## References` H2 is reserved for the auto-rendered footnote block; do not write a `## Sources` H2 by hand.
+
+### Universal H2 floor
+
+Topic, system, and policy pages share a common H2 floor: `## Why it matters` → `## Current state` (or `## Current policy` for policies) → `## Recent changes` → `## Open questions` → `## Related` → `## References`. Type-specific sections (e.g. `## Effective date`, `## Dependencies`) are optional flavor. The compile agent owns H3 structure within each H2 and may add sections its content needs.
+
+### Wikilinks and slug form
+
+Wikilinks use the form `[[page-type/slug]]` (e.g. `[[topic/seller-isq]]`, `[[system/lens]]`, `[[decision/cap-notif-frequency]]`). Slugs are kebab-case identifiers. For people, the slug is the kebab-case form of the email address (e.g. `aa-indiamart-com` for `aa@indiamart.com`) — identity is the email, not the display name.
+
+Each topic page links 3-8 adjacent concepts via `related:` frontmatter.
+
+### ISO 8601 dates everywhere
+
+Use ISO 8601 (`YYYY-MM-DD`) for dates in frontmatter, in `## Recent changes` bullets, and in body prose where the date is the focus. Full timestamps (`2026-04-15T07:00:00Z`) are reserved for machine-stamped fields like `last_compiled`.
+
+---
+
+## Terminal outcomes (every email gets one)
+
+The compile agent reaches exactly one terminal outcome per email:
+
+1. **Edit or create a content page** (topic / system / policy / decision) — the email contributed something synthesizable.
+2. **`log_insight("trivial_skip")`** — pure ack, calendar invite, one-liner, <50 substantive words.
+3. **`log_insight("already_captured")`** — the content is already on an existing page; nothing new to add.
+4. **`log_insight("insufficient_decision")`** — decision-shaped language but lacks the meaningful-change bar (no scale change, deprecation, policy shift).
+
+Two patterns extend an existing page rather than skip — both are flavors of outcome (1):
+
+- **Question-delta** — an existing page raises a question the email answers → resolve the bullet in `## Open questions` and update `## Current state` or `## Recent changes`.
+- **Answer-delta** — the email contradicts or refines an existing answer → update `## Current state` and append to `## Recent changes` with the date and source.
 
 ---
 
@@ -163,7 +197,7 @@ The wiki passes this test when it's doing its job.
 
 ## Phase ladder (end-state vision)
 
-- **Phase 1 (now)** — the structure above. Readers land on `home.md`, drill into any of the 8 domain hubs, find concept-level topic pages, see status badges, read progressive disclosure (TL;DR → body → sources).
+- **Phase 1 (now)** — the structure above. Readers land on `home.md`, drill into any of the 8 domain hubs, find concept-level topic pages, see status badges, read progressive disclosure (lead paragraph → body → references).
 - **Phase 2** — wiki updates in near-real-time (live ingestion). Multiple mailing lists feed a single wiki. Domain meta-agent proposes hub evolution. Topics can have sub-pages when they outgrow single-file. Reports / impact sections appear on topics. Semantic search available.
 - **Phase 3** — "Ask this wiki" interface returns cited answers. Manual edits are possible with conflict resolution. Inline citations for sensitive claims. Trust signals per page.
 
