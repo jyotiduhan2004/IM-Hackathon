@@ -7,10 +7,13 @@ state machine lives here:
                           │
                           ├──fail──>  failed  ──claim──>  claimed
                           │
-                          └──stale (>30m)──>  re-claimable
+                          └──stale (>12h)──>  re-claimable
 
 Stale-claim recovery: if a worker crashes mid-compile, the row stays
-'claimed'. The next claim cycle steals it back after stale_after_minutes.
+'claimed'. The coordinator calls `recover_stale_claims` once per run
+to flip stale rows back to pending — the dispatcher's list helpers
+(`list_uncompiled*`) only see pending/failed, so without this the
+row is invisible to subsequent runs.
 """
 
 from __future__ import annotations
@@ -177,6 +180,56 @@ def list_uncompiled_with_filters(
     params.extend([limit, offset])
     with connect() as conn:
         return conn.execute(sql, tuple(params)).fetchall()
+
+
+def recover_stale_claims_at_startup(echo_fn: Any = None) -> int:
+    """Coordinator-friendly wrapper: run recovery, log+echo, swallow psycopg errors.
+
+    Both `scripts/compile_all.py` and `scripts/compile_parallel.py` call this
+    once at run startup. Pass `echo_fn=click.echo` to surface the count to
+    stdout; structlog.info always logs it.
+    """
+    try:
+        recovered = recover_stale_claims(stale_after_minutes=12 * 60)
+    except psycopg.Error as exc:
+        logger.warning("stale_claim_recovery_failed", error=str(exc))
+        return 0
+    if recovered:
+        if echo_fn is not None:
+            echo_fn(f"Recovered {recovered} stale claim(s) → pending.")
+        logger.info("stale_claims_recovered", count=recovered)
+    return recovered
+
+
+def recover_stale_claims(*, stale_after_minutes: int = 12 * 60) -> int:
+    """Reset rows stuck in `claimed` for too long back to `pending`.
+
+    The dispatcher (`scripts/compile_all.py`) pulls work via
+    `list_uncompiled_by_thread` / `list_uncompiled` / `list_uncompiled_with_filters`,
+    all of which only see `compile_state IN ('pending', 'failed')`. A row that
+    landed in `claimed` because a worker crashed mid-batch is therefore
+    invisible to every subsequent run. The coordinator calls this once at
+    startup to flip those orphans back so the next claim cycle picks them up.
+
+    Default 12 hours = generous slack vs. the longest healthy batch (~15 min)
+    so we never race a still-running worker.
+
+    Returns the number of rows reset.
+    """
+    with connect() as conn, conn.transaction():
+        cur = conn.execute(
+            """
+            UPDATE messages
+               SET compile_state = 'pending',
+                   claimed_at = NULL,
+                   compile_run_id = NULL,
+                   last_error = COALESCE(last_error, 'auto-recovered: stale claim')
+             WHERE compile_state = 'claimed'
+               AND claimed_at < now() - make_interval(mins => %s)
+            """,
+            (stale_after_minutes,),
+        )
+        return cur.rowcount or 0
 
 
 def claim_next_message(

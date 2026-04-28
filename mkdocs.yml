@@ -83,7 +83,14 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.keys
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      # Render ```mermaid``` fences as Mermaid diagrams. Without this,
+      # ` ```mermaid pie ... ``` ` blocks render as plain code, not charts
+      # — which is why the compile-status pie was just text.
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.tasklist:

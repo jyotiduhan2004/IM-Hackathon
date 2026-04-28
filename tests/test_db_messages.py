@@ -246,6 +246,55 @@ def test_stale_claim_recovery(db_conn: psycopg.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# recover_stale_claims (the coordinator hook used by compile_all.py /
+# compile_parallel.py — ensures orphan `claimed` rows are visible to the
+# dispatcher's pending/failed-only list helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_recover_stale_claims_resets_old_claims(db_conn: psycopg.Connection) -> None:
+    """A `claimed` row older than the threshold flips back to pending."""
+    _insert(db_conn, message_id="m_stale", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    db_conn.commit()
+
+    claimed = repo.claim_next_message(uuid.uuid4())
+    assert claimed is not None and claimed["message_id"] == "m_stale"
+
+    # Backdate claimed_at to 13 hours ago — past the 12h default threshold.
+    db_conn.execute(
+        "UPDATE messages SET claimed_at = %s WHERE message_id = %s",
+        (datetime.now(timezone.utc) - timedelta(hours=13), "m_stale"),
+    )
+    db_conn.commit()
+
+    recovered = repo.recover_stale_claims()
+    assert recovered == 1
+
+    row = _fetch_one(db_conn, "m_stale")
+    assert row["compile_state"] == "pending"
+    assert row["claimed_at"] is None
+    assert row["compile_run_id"] is None
+    # Attempts are preserved — retry history isn't lost on recovery.
+    assert row["compile_attempts"] == 1
+
+
+def test_recover_stale_claims_leaves_fresh_claims_alone(db_conn: psycopg.Connection) -> None:
+    """A `claimed` row younger than the threshold is left in `claimed`."""
+    _insert(db_conn, message_id="m_fresh", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    db_conn.commit()
+
+    claimed = repo.claim_next_message(uuid.uuid4())
+    assert claimed is not None
+
+    # Default threshold is 12 hours; a just-claimed row is well under it.
+    recovered = repo.recover_stale_claims()
+    assert recovered == 0
+
+    row = _fetch_one(db_conn, "m_fresh")
+    assert row["compile_state"] == "claimed"
+
+
+# ---------------------------------------------------------------------------
 # count_by_state
 # ---------------------------------------------------------------------------
 

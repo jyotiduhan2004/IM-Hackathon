@@ -58,6 +58,7 @@ from src.db.messages import find_by_raw_path  # noqa: E402
 from src.db.messages import finish_message_compile  # noqa: E402
 from src.db.messages import mark_skipped  # noqa: E402
 from src.db.messages import model_health_stats  # noqa: E402
+from src.db.messages import recover_stale_claims_at_startup  # noqa: E402
 from src.db.tool_call_log import fallback_to_jsonl as tool_log_fallback_to_jsonl  # noqa: E402
 from src.db.tool_call_log import insert_many as tool_log_insert_many  # noqa: E402
 from src.db.tool_call_log import summarize as tool_log_summarize  # noqa: E402
@@ -1944,6 +1945,11 @@ def main(
     pool = _prepare_model_pool(
         pool, _fetch_available_models(), settings.litellm_base_url, resolved_model
     )
+
+    # Recover orphan claims from prior crashed runs (dispatcher's list helpers
+    # only see pending/failed; claims invisible without this flip).
+    if not dry_run:
+        recover_stale_claims_at_startup(echo_fn=click.echo)
 
     # Use the tool directly for listing, not through the agent.
     # When --limit is set, `list_uncompiled_by_thread` pulls all pending

@@ -560,13 +560,54 @@ def mark_as_compiled(file_path: str) -> dict[str, str | int]:
     }
 
 
-def _compile_progress_block() -> list[str]:
-    """Render a compile-progress section for wiki/index.md.
+def _stacked_bar(parts: list[tuple[int, str]], total_max: int, width: int = 20) -> str:
+    """Render a stacked ASCII bar. `parts` is [(count, glyph), ...] in stack order.
 
-    Pulls live state from Postgres: overall state counts + per-week email
-    volume (ingested vs compiled, bucketed by the email's send date). Fails
-    open with an empty list if the DB is unreachable so index generation
-    always succeeds.
+    Bar width is scaled relative to `total_max` (the busiest row in the chart)
+    so a week with 1/3 the volume of the busiest renders as a 1/3-length bar.
+    Less-busy rows produce a *shorter* bar (no trailing whitespace padding) —
+    deliberate, so the eye reads volume and progress simultaneously: a tiny
+    bar means "this week was small," a long bar with mostly `░` means "lots
+    to do." Last segment absorbs rounding slack so totals always tile cleanly.
+    """
+    if total_max <= 0:
+        return ""
+    # Scale each segment to its share of the busiest row.
+    cells: list[str] = []
+    used = 0
+    row_total = sum(c for c, _ in parts)
+    bar_width = round(width * row_total / total_max) or (1 if row_total else 0)
+    for i, (count, glyph) in enumerate(parts):
+        if i == len(parts) - 1:
+            # Last segment fills the remainder of the row's bar so rounding
+            # error doesn't leave a one-cell gap.
+            seg_width = bar_width - used
+        else:
+            seg_width = round(bar_width * count / row_total) if row_total else 0
+        seg_width = max(0, seg_width)
+        cells.append(glyph * seg_width)
+        used += seg_width
+    return "".join(cells)
+
+
+def _compile_progress_block() -> list[str]:
+    """Render a compile-progress section for `wiki/compile-status.md`.
+
+    Pulls live state from Postgres and renders three views:
+
+    1. Overall pie + headline counts.
+    2. Threads per week — a thread is "fully done" when every email is in a
+       terminal state (compiled or skipped), "in progress" when some are
+       terminal and some aren't, "not started" when none are.
+    3. Emails per week — broken out by state so trivially-skipped emails are
+       visibly part of "done" rather than missing from the coverage bar.
+
+    Bars are 3-tone stacked ASCII (`█` done · `▒` skipped/partial · `░`
+    remaining). Mermaid is used only for the pie, which now renders thanks
+    to the `pymdownx.superfences` mermaid fence wired up in `mkdocs.yml`.
+
+    Fails open with an empty list if the DB is unreachable so index
+    generation always succeeds.
     """
     try:
         from src.db import connect
@@ -575,20 +616,59 @@ def _compile_progress_block() -> list[str]:
 
     try:
         with connect() as conn:
-            state_rows = conn.execute(
-                "SELECT compile_state, count(*)::int AS n FROM messages GROUP BY 1"
-            ).fetchall()
-            weekly_rows = conn.execute(
-                """
-                SELECT date_trunc('week', date)::date AS week,
-                       count(*)::int AS total,
-                       count(*) FILTER (WHERE compile_state = 'compiled')::int AS compiled
-                  FROM messages
-                 WHERE date IS NOT NULL
-                 GROUP BY 1
-                 ORDER BY 1
-                """
-            ).fetchall()
+            # connect() pins row_factory=dict_row; cast so mypy-strict
+            # sees the real runtime shape (same shim as src/db/messages.py).
+            state_rows = cast(
+                "list[dict[str, Any]]",
+                conn.execute(
+                    "SELECT compile_state, count(*)::int AS n FROM messages GROUP BY 1"
+                ).fetchall(),
+            )
+            email_weekly_rows = cast(
+                "list[dict[str, Any]]",
+                conn.execute(
+                    """
+                    SELECT date_trunc('week', date)::date AS week,
+                           count(*)::int AS total,
+                           count(*) FILTER (WHERE compile_state = 'compiled')::int AS compiled,
+                           count(*) FILTER (WHERE compile_state = 'skipped')::int AS skipped,
+                           count(*) FILTER (WHERE compile_state = 'pending')::int AS pending,
+                           count(*) FILTER (WHERE compile_state = 'failed')::int AS failed,
+                           count(*) FILTER (WHERE compile_state = 'claimed')::int AS claimed
+                      FROM messages
+                     WHERE date IS NOT NULL
+                     GROUP BY 1
+                     ORDER BY 1
+                    """
+                ).fetchall(),
+            )
+            # Threads per week: bin each thread by its earliest message date,
+            # then classify by aggregate state across its members. Standalone
+            # messages (NULL thread_id) count as their own thread.
+            thread_weekly_rows = cast(
+                "list[dict[str, Any]]",
+                conn.execute(
+                    """
+                    WITH thread_state AS (
+                        SELECT COALESCE(thread_id, message_id) AS group_key,
+                               MIN(date) AS first_date,
+                               bool_and(compile_state IN ('compiled', 'skipped')) AS all_terminal,
+                               bool_or(compile_state IN ('compiled', 'skipped')) AS any_terminal
+                          FROM messages
+                         WHERE date IS NOT NULL
+                         GROUP BY COALESCE(thread_id, message_id)
+                    )
+                    SELECT date_trunc('week', first_date)::date AS week,
+                           count(*)::int AS total,
+                           count(*) FILTER (WHERE all_terminal)::int AS done,
+                           count(*) FILTER (WHERE any_terminal AND NOT all_terminal)::int AS partial,
+                           count(*) FILTER (WHERE NOT any_terminal)::int AS not_started
+                      FROM thread_state
+                     GROUP BY 1
+                     ORDER BY 1
+                    """
+                ).fetchall(),
+            )
     except Exception:  # noqa: BLE001 — DB is best-effort for index rendering
         return []
 
@@ -601,16 +681,21 @@ def _compile_progress_block() -> list[str]:
     failed = states.get("failed", 0)
     claimed = states.get("claimed", 0)
     skipped = states.get("skipped", 0)
-    pct = (100 * compiled / total) if total else 0.0
+    terminal = compiled + skipped
+    terminal_pct = (100 * terminal / total) if total else 0.0
 
     summary = f"{pending:,} pending, {failed:,} failed, {claimed:,} in-flight"
     if skipped:
-        summary += f", {skipped:,} skipped"
+        summary += f", {skipped:,} skipped (trivial-filter)"
 
     lines: list[str] = [
         "## Compile progress",
         "",
-        f"**{compiled:,} of {total:,} emails compiled** ({pct:.1f}%). {summary}.",
+        (
+            f"**{terminal:,} of {total:,} emails done** "
+            f"({terminal_pct:.1f}% — {compiled:,} compiled + {skipped:,} skipped). "
+            f"{summary}."
+        ),
         "",
         "```mermaid",
         "pie showData title Compile state",
@@ -625,22 +710,53 @@ def _compile_progress_block() -> list[str]:
         lines.append(f'    "skipped" : {skipped}')
     lines.extend(["```", ""])
 
-    if weekly_rows:
-        # Ascii bar chart: one bar per week, width scaled to the busiest week.
-        max_total = max(r["total"] for r in weekly_rows) or 1
+    # ── Threads per week ──────────────────────────────────────────────
+    if thread_weekly_rows:
+        max_total = max(r["total"] for r in thread_weekly_rows) or 1
+        lines.extend(
+            [
+                "### Threads per week (by earliest message)",
+                "",
+                "Bar legend: `█` fully done · `▒` partial · `░` not started.",
+                "",
+                "| Week starting | Threads | Done | Partial | Not started | Coverage |",
+                "|---|---:|---:|---:|---:|---|",
+            ]
+        )
+        for r in thread_weekly_rows:
+            bar = _stacked_bar(
+                [(r["done"], "█"), (r["partial"], "▒"), (r["not_started"], "░")],
+                max_total,
+            )
+            lines.append(
+                f"| {r['week']} | {r['total']} | {r['done']} | "
+                f"{r['partial']} | {r['not_started']} | `{bar}` |"
+            )
+        lines.append("")
+
+    # ── Emails per week ───────────────────────────────────────────────
+    if email_weekly_rows:
+        max_total = max(r["total"] for r in email_weekly_rows) or 1
         lines.extend(
             [
                 "### Emails per week (by send date)",
                 "",
-                "| Week starting | Ingested | Compiled | Coverage |",
-                "|---|---:|---:|---|",
+                "Bar legend: `█` compiled · `▒` skipped · `░` pending/failed/in-flight.",
+                "",
+                "| Week starting | Emails | Compiled | Skipped | Pending | Failed | Coverage |",
+                "|---|---:|---:|---:|---:|---:|---|",
             ]
         )
-        for r in weekly_rows:
-            bar_width = round(20 * r["total"] / max_total) or 1
-            compiled_width = round(20 * r["compiled"] / max_total)
-            bar = "█" * compiled_width + "░" * (bar_width - compiled_width)
-            lines.append(f"| {r['week']} | {r['total']} | {r['compiled']} | `{bar}` |")
+        for r in email_weekly_rows:
+            remaining = r["pending"] + r["failed"] + r["claimed"]
+            bar = _stacked_bar(
+                [(r["compiled"], "█"), (r["skipped"], "▒"), (remaining, "░")],
+                max_total,
+            )
+            lines.append(
+                f"| {r['week']} | {r['total']} | {r['compiled']} | "
+                f"{r['skipped']} | {r['pending']} | {r['failed']} | `{bar}` |"
+            )
         lines.append("")
 
     return lines

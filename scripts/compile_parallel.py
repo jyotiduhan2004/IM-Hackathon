@@ -164,6 +164,12 @@ def main(batch_size: int, concurrency: int, model: str | None, dry_run: bool) ->
     raw_dir = str(settings.raw_dir)
     wiki_dir = str(settings.wiki_dir)
 
+    # Same recovery hook as compile_all.py.
+    if not dry_run:
+        from src.db.messages import recover_stale_claims_at_startup
+
+        recover_stale_claims_at_startup(echo_fn=click.echo)
+
     uncompiled = list_uncompiled_emails.invoke({"raw_dir": raw_dir})
     total = len(uncompiled)
 
