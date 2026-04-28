@@ -1,6 +1,6 @@
 # Audit status — living tracker
 
-**Last verified**: 2026-04-28 · **Findings tracked**: 91 (across 30 source audits) · **Method**: see [Methodology](#methodology)
+**Last verified**: 2026-04-28 · **Findings tracked**: 94 (across 31 source audits) · **Method**: see [Methodology](#methodology)
 
 This is the consolidated answer to "have the audit findings actually been fixed, and what's left?". Source audits in `docs/audits/`, `docs/reviews/`, `docs/incidents/`, and `docs/archive/2026-04-15-pre-proposal/reviews/` get parsed into discrete findings, deduped across audits that flagged the same root issue, then verified against five independent channels.
 
@@ -12,13 +12,13 @@ The machine-readable companion is [`findings.jsonl`](./findings.jsonl) — it's 
 
 | | Count | % |
 |---|---|---|
-| Done | 40 | 44% |
-| Partial | 26 | 29% |
-| Open | 22 | 24% |
+| Done | 41 | 44% |
+| Partial | 25 | 27% |
+| Open | 25 | 27% |
 | Won't-do | 3 | 3% |
-| **Total** | **91** | **100%** |
+| **Total** | **94** | **100%** |
 
-**Headline**: 0 of the 11 S0 (blocker) and 31 S1 (structural) findings are fully Open. Every S0/S1 either fully shipped or is Partial — meaning the **forward-looking** fix landed (new compiles use the new behavior) but **legacy debt** on the existing corpus remains. All 22 fully-Open findings are S2 (quality, 16) or S3 (polish, 6).
+**Headline**: F-089 (Phase-1 DoD blocker) closed by PR #246 + deploy. All 11 S0 findings remain Done-or-Partial (no S0 fully Open). 1 S1 newly Open: F-093 (raw/ source-link 404 in deployed viewer — caught by 2026-04-28 persona deep audit). 24 of 25 fully-Open findings are S2 (18) or S3 (6) plus that one S1.
 
 The dominant gap pattern: the compiler is fixed; the wiki/ corpus that was produced before the fix is not. **Forward-looking vs backfill** is the right axis to plan against.
 
@@ -27,18 +27,18 @@ The dominant gap pattern: the compiler is fixed; the wiki/ corpus that was produ
 | Severity | Done | Partial | Open | Won't-do | Total |
 |---|---|---|---|---|---|
 | **S0** (blocker / data loss / corruption) | 8 | 3 | 0 | 0 | 11 |
-| **S1** (structural / reader-facing wrongness) | 16 | 15 | 0 | 0 | 31 |
-| **S2** (quality / friction) | 15 | 7 | 16 | 3 | 41 |
+| **S1** (structural / reader-facing wrongness) | 17 | 14 | 1 | 0 | 32 |
+| **S2** (quality / friction) | 15 | 7 | 18 | 3 | 43 |
 | **S3** (polish / nice-to-have) | 1 | 1 | 6 | 0 | 8 |
-| **Total** | **40** | **26** | **22** | **3** | **91** |
+| **Total** | **41** | **25** | **25** | **3** | **94** |
 
 ## Key insights
 
-1. **Heavy middleware investment paid off.** 12 middleware files in `src/compile/middleware/` (terminal-decision-guard, check-my-work-gate, chronological-scope, edit-payload-sanity, glob-narrowing, sibling-draft-check, same-thread-topic-guard, path-autoheal, entity-write-autoheal, read-file-truncation-hint, legacy-page-hint) plus the runtime critique pipeline cover most code-class findings. Of 91 findings, 48 (53%) have a concrete prevention guard.
-2. **The depth gap is real.** The V12 50-compile deep audit (2026-04-23) found that prompt updates lifted *structure* (new sections, footnotes, concept-style H2s) but did not lift *content depth* (ownership, rollout state, decisions, cross-linking). Scorer mean climbed +1.08 vs pre-V12, judge mean only +0.4. The remaining open S2 cluster (F-064 through F-074) is this depth gap.
-3. **Backfill is the unfinished half.** Forward-looking fixes shipped, but the existing 1035-page corpus carries the historical artifacts: 304 email-slug body wikilinks flagged at audit time (~3,400 wiki-wide today after corpus growth) across most topics (F-070), ~10 humans still in `systems/` (F-015), 5 specific dup-page pairs unconsolidated (F-013, fix in flight via #241 + #243), 924 pages with legacy `sources:` frontmatter (F-017), 525/588 people pages still stubs by design (F-014).
-4. **Prevention has gaps in the depth class.** 19 findings have *no* prevention guard. Of those, 12 are about page depth (owner / rollout / open-questions / scorer-vs-judge / persona-utility / nav-eval) and 7 are about platform housekeeping (qmd latency, qmd fixtures, cost ceiling, log-row UX). These are the next places a regression would land silently.
-5. **Wiki landing pages still placeholder.** `wiki/home.md`, `wiki/topics/index.md`, `wiki/systems/index.md` are coordinator-rendered but show "No pages yet" because the top-pages-per-domain data isn't wiring into the cards (F-089). Until this lands, Phase-1 DoD is not met.
+1. **Heavy middleware investment paid off.** 12 middleware files in `src/compile/middleware/` (terminal-decision-guard, check-my-work-gate, chronological-scope, edit-payload-sanity, glob-narrowing, sibling-draft-check, same-thread-topic-guard, path-autoheal, entity-write-autoheal, read-file-truncation-hint, legacy-page-hint) plus the runtime critique pipeline cover most code-class findings. Of 94 findings, 49 (52%) have a concrete prevention guard.
+2. **The depth gap is real.** The V12 50-compile deep audit (2026-04-23) found that prompt updates lifted *structure* (new sections, footnotes, concept-style H2s) but did not lift *content depth* (ownership, rollout state, decisions, cross-linking). Scorer mean climbed +1.08 vs pre-V12, judge mean only +0.4. The remaining open S2 cluster (F-064 through F-074, plus F-094 from the persona audit) is this depth gap.
+3. **Backfill is the unfinished half.** Forward-looking fixes shipped, but the existing 1035-page corpus carries the historical artifacts: 304 email-slug body wikilinks flagged at audit time (~3,400 wiki-wide today after corpus growth) across most topics (F-070), ~10 humans still in `systems/` (F-015), 5 specific dup-page pairs consolidated by #241+#243, 924 pages with legacy `sources:` frontmatter (F-017), 525/588 people pages still stubs by design (F-014).
+4. **Prevention has gaps in the depth class.** 22 findings have *no* prevention guard. Of those, 12 are about page depth (owner / rollout / open-questions / scorer-vs-judge / persona-utility / nav-eval), 7 are about platform housekeeping (qmd latency, qmd fixtures, cost ceiling, log-row UX), and 3 are the new persona-audit finds (F-092 wikilink leak, F-093 raw/ 404, F-094 search-substring). These are the next places a regression would land silently.
+5. **Wiki landing pages — Phase-1 DoD met.** F-089 closed by PR #246 (entities→people key drift, retired defunct `_write_home`, untracked auto-gen pages so checkouts can't restore stubs). Deployed to Cloud Run revision `email-kb-viewer-00013-nmn` and verified on 2026-04-28 by a 5-persona deep audit (2 PASS, 3 PARTIAL, 0 FAIL). The remaining PARTIALs are the depth-class gaps (#2 above), not the navigation/landing class.
 6. **All 11 S0 findings have at least partial fixes.** The original "data loss / corruption / silent crash" class is comprehensively addressed. The 3 S0 Partials (F-003 hallucination, F-010 schema misfit, F-011 pages-as-summary) are about *content quality*, not data integrity — the legacy debt is correctness in compiled prose, not lost or corrupted data.
 
 ## Prevention scoreboard
@@ -67,13 +67,13 @@ The "never happens again" question, answered per finding-class. Each row is a ca
 | qmd ranking regressions | No fixtures committed | **None** | (gap — fix is `tests/fixtures/qmd_spike/`) |
 | Bug-shape pages forced through design-doc gate | No escape hatch in validator | **None** | (gap) |
 
-**Prevention coverage**: 48 Yes (53%) · 24 Partial (26%) · 19 None (21%).
+**Prevention coverage**: 49 Yes (52%) · 23 Partial (24%) · 22 None (23%).
 
-The 19 "None" guards are the regression-risk register — fixes that landed without a check that catches the next instance, plus open findings whose fix would itself be a guard. These are listed below in [Findings without prevention guards](#findings-without-prevention-guards).
+The 22 "None" guards are the regression-risk register — fixes that landed without a check that catches the next instance, plus open findings whose fix would itself be a guard. These are listed below in [Findings without prevention guards](#findings-without-prevention-guards).
 
 ## Top open findings (S2)
 
-The 16 open S2 findings, roughly ranked by leverage × ease-of-fix. Numbers in `[F-NNN]` link into the [Findings table](#findings-table).
+The 18 open S2 findings, roughly ranked by leverage × ease-of-fix. Numbers in `[F-NNN]` link into the [Findings table](#findings-table).
 
 1. **[F-090] High-leverage Workstream-4 agent tools not shipped** — `wiki_find_similar_pages`, `wiki_classify_page`, `wiki_update_frontmatter`, `wiki_verify_quote`, `wiki_compact_entity_sources`, `find_people_involved`, `get_pages_for_source`, `get_references_for_page`, `find_related_pages`, `get_compile_health`, `get_recent_runs`. Each is a bite-sized agent tool that would cut several existing roundtrips. Highest near-term leverage on agent productivity.
 2. **[F-066] Owner / DRI / stage / target_date frontmatter** — 319/326 topics lack `owner:` frontmatter. Single biggest gap for PM-style status lookups; one prompt rule + one validator field shipped together.
@@ -91,6 +91,8 @@ The 16 open S2 findings, roughly ranked by leverage × ease-of-fix. Numbers in `
 14. **[F-070] Email-slug → canonical-name wikilink migration** — 304 instances flagged at audit time (~3,400 wiki-wide today). Explicitly deferred to Tier 3 by the V12 audit.
 15. **[F-043] Reviewer escalation paths defined but not invoked on new-page write_file** — V12 audit confirmed 4/17 batches had 0 reviewer cycles, including both new V12-shaped pages. Reviewer wired but not firing on the new-page path.
 16. **[F-056] Backlinks ('Linked from' / 'pages that link here') break wiki-as-graph** — Person-page backlinks shipped (compiler.py:969 `_rebuild_person_backlinks`), but topic/system inverse-link generation not implemented. 0/50 sample topics have a `Linked from` section.
+17. **[F-094] Search substring-matches 2-letter acronyms** — persona audit P5 confirmed `BL` returns 330 hits dominated by `Blacklist` topics rather than `BuyLead` context. Either pre-tokenize known acronyms (BL, BLNI, ISQ, MCAT, KYC) or restore an evidence-based glossary surface.
+18. **[F-092] Domain hub snippets leak unresolved [[wikilink]] syntax** — `/domains/` index renders previews ending with raw `[[topic...]]` instead of resolved title. First-paragraph extractor needs to resolve or strip wikilinks before truncation.
 
 ## Top open findings (S3)
 
@@ -105,7 +107,7 @@ The 6 open S3 findings, deferred:
 
 ## Partial findings — what would close them
 
-The 28 Partial findings split into two clean clusters: **forward-looking fix shipped, legacy debt remains** (most), and **layered fix shipped but a final guard is missing** (some). The actionable ones:
+The 25 Partial findings split into two clean clusters: **forward-looking fix shipped, legacy debt remains** (most), and **layered fix shipped but a final guard is missing** (some). The actionable ones:
 
 - **[F-003]** Hallucination: forward-looking prompt + footnotes shipped; needs a substring-evidence validator that blocks fabricated quotes / list truncation. **Fix**: critique rule that checks every claim's footnote raw against substring presence.
 - **[F-010]** Schema misfit: prompt + critique + reviewer all shipped; legacy 326-topic backfill unrun. **Fix**: one-shot rewrite pass over legacy topics OR accept that they're frozen.
@@ -119,11 +121,10 @@ The 28 Partial findings split into two clean clusters: **forward-looking fix shi
 - **[F-035]** Domain-prefix mismatch: validator catches it post-run; needs promotion into `check_my_work` as pre-write blocker.
 - **[F-042]** Anti-pattern legacy H2s on existing pages: forward-looking critique catches new ones, but legacy 87 pages with thread-subject H2s never cleaned up. **Fix**: agent-led H2 rewrite pass OR backfill script.
 - **[F-063]** Lazy-decision-page minting: prompt + warning shipped; no automatic stub materialization on inline `## Decision:` H2s. **Fix**: critique-action that mints the stub.
-- **[F-089]** Wiki landing pages: home.md/topics/index.md/systems/index.md still placeholder. **Fix**: wire top-pages-per-domain data into the rendering layer.
 
 ## Findings without prevention guards
 
-The 19 findings whose status is Open or Partial AND prevention is `None`. Adding a guard for each is the work to "make sure it never happens again":
+The 22 findings whose status is Open or Partial AND prevention is `None`. Adding a guard for each is the work to "make sure it never happens again":
 
 | F-ID | Sev | Status | Title | What guard would close it |
 |---|---|---|---|---|
@@ -146,6 +147,9 @@ The 19 findings whose status is Open or Partial AND prevention is `None`. Adding
 | F-081 | S1 | Partial | qmd p50 latency 12.34s — rerank unsplit | Per-stage Langfuse span attribute (rerank-latency) + alarm threshold |
 | F-084 | S2 | Open | qmd regression corpus not seeded as fixtures | Seed `tests/fixtures/qmd_spike/` from `docs/audits/qmd-spike-2026-04-23-queries.jsonl` |
 | F-090 | S2 | Open | High-leverage agent tools not shipped (Workstream-4) | One PR per tool — each ships a guard for its own use case |
+| F-092 | S2 | Open | Domain hub snippets leak unresolved [[wikilink]] syntax | Resolve or strip wikilinks in first-paragraph extractor before truncation |
+| F-093 | S1 | Open | raw/*.md source links 404 in deployed viewer | Trace `make publish` rsync target + viewer's path-mapping; fix whichever is wrong |
+| F-094 | S2 | Open | Search substring-matches 2-letter acronyms | Pre-tokenize acronyms OR restore LLM-generated glossary surface |
 
 ## Per-audit roll-up
 
@@ -157,12 +161,13 @@ How each source audit's findings have resolved. `D` = Done, `P` = Partial, `O` =
 | langfuse-trace-audit (2026-04-15) | 7 | 5 | 2 | 0 | 0 |
 | cycle-10-smoke-30 | 6 | 1 | 2 | 3 | 0 |
 | v12-north-star (2026-04-19) | 6 | 4 | 2 | 0 | 0 |
-| north-star-reconciliation | 6 | 1 | 1 | 2 | 2 |
+| north-star-reconciliation | 6 | 2 | 0 | 2 | 2 |
 | phase0-bootstrap-incident (2026-04-13) | 5 | 5 | 0 | 0 | 0 |
 | tool-audit (2026-04-13) | 5 | 3 | 2 | 0 | 0 |
 | cycle-9-summary | 4 | 3 | 1 | 0 | 0 |
 | qmd-phase0-spike (2026-04-23) | 4 | 1 | 1 | 1 | 1 |
 | audit-synthesis (5-persona blind, 2026-04-13) | 3 | 0 | 3 | 0 | 0 |
+| persona-deep-audit-deployed (2026-04-28) | 3 | 0 | 0 | 3 | 0 |
 | topic-archetypes (2026-04-18) | 3 | 1 | 1 | 1 | 0 |
 | error-classes-autopsy (2026-04-15) | 2 | 2 | 0 | 0 | 0 |
 | cycle-4-case-1 (SEO recursion) | 2 | 1 | 1 | 0 | 0 |
@@ -204,7 +209,7 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 | F-054 | S1 | Partial | P | New-joiner is not the primary-reader anchor in prompt | v12-north-star | The 'explaining IndiaMart to a new joiner over coffee' framing not present; mention is incidental in 5W block. No reader |
 | F-063 | S1 | Partial | P | Lazy-decision-page minting not happening on inline ## Decision: H2s | v12-50-compile-deep-audit | Warning + prompt rule shipped, but no automatic stub materialization or wikilink rewrite. The fix-shape (lazy materializ |
 | F-081 | S1 | Partial | — | qmd p50 latency 12.34s — ~330x slower than SQL; rerank-latency unsplit | qmd-phase0-spike | qmd integration shipped (PR #224) but rerank latency remains unsplit in observability span; no concrete latency-reductio |
-| F-089 | S1 | Partial | P | Wiki landing pages still placeholders | north-star-reconciliation | Coordinator hook exists and stale-count is fixed, but content rendering of top-pages-per-domain is broken/empty on home. |
+| F-093 | S1 | Open | — | raw/*.md source links 404 in deployed viewer | persona-deep-audit-deploy | Deployed Cloud Run viewer renders source-link footer as `(file missing)` — viewer routing or rsync gap. Wiki-as-evidence contract broken. |
 | F-012 | S1 | Done | Y | mark_as_compiled has no citation evidence requirement; trust boundary open | tool-audit-2026-04-13 | Trust boundary closed — agent cannot flip the bit; coordinator computes citation-derived flip. |
 | F-018 | S1 | Done | Y | Dual-write drift between raw markdown and Postgres queue | codex-priority-review-202 | Catalog is single source of truth; ingest writes both, but raw frontmatter is no longer mutated. |
 | F-019 | S1 | Done | P | Deep Agents virtual filesystem silently swallowed writes (0 wiki pages on d | phase0-bootstrap-incident | One-line config fix shipped; ongoing operation confirms writes hit disk. |
@@ -221,6 +226,7 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 | F-060 | S1 | Done | Y | Update-time Summary rewrite not enforced (additive-only V12 compiles) | v12-50-compile-deep-audit | Both warning (no current-state marker) and blocker (Recent-changes date > Summary date) tiers shipped. |
 | F-061 | S1 | Done | Y | Orphaned compile in batch 45 (kimi-k2.6) — silent failure mode | v12-50-compile-deep-audit | Middleware prevents normalized=0 silent exits; coordinator falls back to mark_skipped after 3 nudges. No deeper trace di |
 | F-062 | S1 | Done | Y | Open-question footnotes don't resolve to References definitions | v12-50-compile-deep-audit | Promoted from scorer heuristic to critique blocker. |
+| F-089 | S1 | Done | Y | Wiki landing pages still placeholders | north-star-reconciliation | Closed by PR #246 (entities→people key drift, _write_home retired, untracked auto-gen pages). 5-persona deep audit 2026-04-28 confirmed end-to-end navigation. |
 | F-043 | S2 | Open | P | Reviewer escalation paths (structure_mismatch / filing_cabinet) wired but n | cycle-10-smoke-30 | Reviewer defined and wired but V12 audit confirms not invoked on new-page write_file path — Tier 1 #1 of v12-50 audit, n |
 | F-045 | S2 | Open | — | Event-log voice and named-attribution prose leaks into wiki pages | cycle-10-smoke-30 | No event-log voice detector or prompt rule added; only thread-subject H2 anti-pattern (F-042) overlaps. Synthesis depth  |
 | F-046 | S2 | Open | — | TL;DR adoption weak despite plumbing in place | cycle-10-smoke-30 | Prompt still labels TL;DR 'Optional'; no critique rule, no validator, no explicit MUST. Plumbing exists but pull-through |
@@ -237,6 +243,8 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 | F-074 | S2 | Open | — | Cost ceiling 5-6x under full-queue requirement | v12-50-compile-deep-audit | Cost-ceiling vs full-queue gap unaddressed. No budget top-up; per-page cost optimization (model selection/prompt compres |
 | F-084 | S2 | Open | — | qmd regression corpus not yet committed as fixtures | qmd-phase0-spike | Spike corpus never seeded as fixtures; ranking-model bumps would regress silently. |
 | F-090 | S2 | Open | — | High-leverage agent tools not shipped (Workstream-4 backlog) | north-star-reconciliation | Only resolve_page (which subsumes some merge-detect intent) and get_thread_context shipped. The rest of the Workstream-4 |
+| F-092 | S2 | Open | — | Domain hub snippets leak unresolved [[wikilink]] syntax | persona-deep-audit-deploy | First-paragraph extractor in landing pipeline does not resolve [[X]] before truncation; visible at /domains/. |
+| F-094 | S2 | Open | — | Search substring-matches 2-letter acronyms (BL → blacklist) | persona-deep-audit-deploy | Default mkdocs search has no acronym tokenization. Compounds with missing glossary surface (intentionally removed 2026-04-24). |
 | F-027 | S2 | Partial | P | Coordinator-only tools still exposed in agent toolbox + redundant side-effe | tool-audit-2026-04-13 | Agent-visible surface clean; @tool wrappers retained on coordinator helpers (importable for scripts) but unbound from ag |
 | F-040 | S2 | Partial | P | Pool-health metric polluted by infrastructure failures | cycle-5-case-bug-j-minima | Infra-vs-agent classification handled at retry path, but compile_attempts.outcome enum still only has compiled/failed/ti |
 | F-041 | S2 | Partial | Y | Validator backlog: legacy entities/index, legacy-sources-only, frontmatter  | cycle-5-summary | Backfill scripts shipped; validator catches new violations but legacy debt residual on existing pages. |
@@ -335,7 +343,7 @@ Each finding was verified against five independent channels; status is the **wor
 - Wiki state metrics (stub rate by directory, near-dup spot-checks, persona-finding spot-checks)
 - BACKLOG.md and CHANGELOG.md state
 
-The dedupe pass consolidated 136 raw findings (extracted from 29 distinct primary audits across 30 source docs) into 91 unique findings. Largest merges:
+The dedupe pass consolidated 139 raw findings (extracted from 30 distinct primary audits across 31 source docs) into 94 unique findings. Largest merges:
 - F-003 (5-way hallucination/factcheck symptoms)
 - F-010 (5-way schema-drift / v9-U1 misfit, escalated to S0)
 - F-024 (5-way resolve_page weakness)
@@ -361,5 +369,6 @@ Canonical audits whose findings flow into this tracker. Listed by finding-count 
 - [`docs/audits/error-classes-2026-04-15-autopsy.md`](./error-classes-2026-04-15-autopsy.md) — 3 findings
 - [`docs/audits/cycle-10-deep-audit-2026-04-18.md`](./cycle-10-deep-audit-2026-04-18.md) — 3 findings
 - 5 individual persona audits (newbie, PM, IA, factcheck, journalist) at [`docs/archive/2026-04-15-pre-proposal/reviews/audit-persona-*.md`](../archive/2026-04-15-pre-proposal/reviews/) — 5 findings combined
+- [`docs/audits/persona-deep-audit-deployed-2026-04-28.md`](./persona-deep-audit-deployed-2026-04-28.md) — 3 findings (post-#246 5-persona audit on the live Cloud Run viewer)
 - Cycle 4–8 summaries and case studies — 9 findings combined
 - Codex catalog/priority reviews + knowledge-vs-index — 3 findings combined
