@@ -860,7 +860,7 @@ _SECTION_BLURBS = {
         "Durable products, platforms, tools, services, and mailing lists. "
         "If a page is mostly about **the thing itself**, it lives here."
     ),
-    "entities": (
+    "people": (
         "Contributors and owners named on the mailing list. Stub pages "
         "with no cited sources are hidden from this view."
     ),
@@ -882,7 +882,7 @@ _SECTION_BLURBS = {
 _SECTION_TITLES = {
     "topics": "Topics",
     "systems": "Products & Platforms",
-    "entities": "People",
+    "people": "People",
     "policies": "Policies",
     "domains": "Domains",
     "decisions": "Decisions",
@@ -924,7 +924,13 @@ def rebuild_landing_pages(wiki_dir: str = "wiki") -> str:
                 summary = _page_summary(md_file)
                 if summary is None:
                     continue
-                if category in ("entities", "systems") and summary["is_stub"]:
+                # Hide ghost system pages (auto-stub gate is closed but
+                # legacy ones remain). People pages are intentionally
+                # provenance-light — they're cited via incoming wikilinks
+                # from topics/systems, not via per-message `sources:` —
+                # so filtering them by the same stub rule would zero out
+                # the people index. Status filter handles superseded.
+                if category == "systems" and summary["is_stub"]:
                     continue
                 pages.append(summary)
         pages.sort(key=lambda p: (p["last_compiled"], p["title"]), reverse=True)
@@ -933,7 +939,11 @@ def rebuild_landing_pages(wiki_dir: str = "wiki") -> str:
     for category, pages in sections.items():
         _write_section_index(wiki_path, category, pages, now_iso)
 
-    _write_home(wiki_path, sections, now_iso)
+    # home.md retired 2026-04-24 — `_generate_home` (called later in
+    # `_regenerate_landing_surfaces`) owns the reader-facing front door
+    # at `wiki/index.md` with the 8-domain card layout. Keeping a
+    # `_write_home` call here would just write a file that the next
+    # step deletes.
     backlinks_count = _rebuild_person_backlinks(wiki_path)
 
     totals = ", ".join(f"{k}={len(v)}" for k, v in sections.items())
@@ -1125,55 +1135,6 @@ def _write_section_index(
     }
     _atomic_write_text(
         wiki_path / category / "index.md",
-        _render_with_frontmatter(fm, "\n".join(lines)),
-    )
-
-
-def _write_home(wiki_path: Path, sections: dict[str, list[dict[str, Any]]], now_iso: str) -> None:
-    """Write `home.md` as a summary + recent-activity rollup."""
-    counts = {k: len(v) for k, v in sections.items()}
-    all_pages = [{**p, "category": cat} for cat, pages in sections.items() for p in pages]
-    all_pages.sort(key=lambda p: (p["last_compiled"], p["title"]), reverse=True)
-    recent = all_pages[:15]
-
-    lines = [
-        "# Home",
-        "",
-        "Internal knowledge base compiled from our mailing lists.",
-        "",
-        "## What's here",
-        "",
-        f"- [Topics](topics/) — **{counts['topics']}** pages on rollouts, "
-        "decisions, incidents, and experiments.",
-        f"- [Products & Platforms](systems/) — **{counts['systems']}** pages on "
-        "durable tools, services, and mailing lists.",
-        f"- [Policies](policies/) — **{counts['policies']}** pages on current "
-        "rules, approval flows, and guidelines.",
-        f"- [People](entities/) — **{counts['entities']}** pages on "
-        "contributors and owners (stubs hidden).",
-        "- [Changes](log/) — chronological compile log.",
-        "- [About](about/) — how this wiki is built.",
-        "",
-        "## Most recently updated",
-        "",
-    ]
-    if recent:
-        for page in recent:
-            cat = page["category"]
-            status_suffix = "" if page["status"] == "current" else f" *({page['status']})*"
-            lines.append(f"- [[{page['slug']}]] — {page['title']}{status_suffix} · *{cat}*")
-    else:
-        lines.append("*No pages compiled yet.*")
-    lines.append("")
-
-    fm = {
-        "title": "Home",
-        "page_type": "index",
-        "status": "current",
-        "last_compiled": now_iso,
-    }
-    _atomic_write_text(
-        wiki_path / "home.md",
         _render_with_frontmatter(fm, "\n".join(lines)),
     )
 
