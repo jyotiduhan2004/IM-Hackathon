@@ -1563,6 +1563,7 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
       raised as opaque text bodies that don't follow the
       ``Error code: NNN`` pattern. Treat as infra so the batch retries
       with another pool model instead of burning the round.
+    - ``Request timed out.`` / ``OpenrouterException`` — provider wedge.
 
     All are infrastructure failures, not agent failures; the batch
     should retry with a different pool model instead of being marked
@@ -1588,6 +1589,8 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     # Structured 5xx (LiteLLM occasionally surfaces gateway errors this way)
     if "Error code: 502" in msg or "Error code: 503" in msg or "Error code: 504" in msg:
         return True
+    if "Request timed out." in msg or "OpenrouterException - Provider returned" in msg:
+        return True  # provider wedge / LiteLLM no-fallback (smoke 02c9d536)
     # HTML 5xx pages bubbled up as the exception body — Google Frontend /
     # nginx / Cloudflare all use the same ``<title>NNN ...</title>`` shape.
     # Note ``Gateway Time-out`` (with hyphen): nginx's stock 504 page uses
@@ -1849,11 +1852,12 @@ def _preview_dry_run(uncompiled: list[dict[str, str]], batch_size: int) -> None:
 @click.option(
     "--batch-timeout",
     type=click.IntRange(min=0),
-    default=900,
+    # 1800s gives one 900s ultimate-failure + one fallback-retry budget;
+    # see _make_chat_model docstring for the full invariant.
+    default=1800,
     help=(
-        "Per-batch wall-clock timeout in seconds (default 900 = 15 min, "
-        "matching scripts/compile_overnight.sh). Pass 0 to disable. "
-        "Guards interactive runs against a single hung batch "
+        "Per-batch wall-clock timeout in seconds (default 1800 = 30 min). "
+        "Pass 0 to disable. Guards against a single hung batch "
         "(slow OTel export, stuck LLM provider, rare deadlock) freezing "
         "the whole compile loop."
     ),

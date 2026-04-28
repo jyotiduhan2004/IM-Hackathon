@@ -192,7 +192,15 @@ class Settings(BaseSettings):
     # own; 150 s clipped 18 consecutive legitimate batches in the
     # 2026-04-23 smoke. 900 s still catches true hangs (the
     # batch-52-style 5h31m case) without false-killing real work.
-    invoke_timeout_s: int = 900
+    #
+    # 2026-04-28: raised 900 -> 960 after PR #249 bumped ChatOpenAI
+    # `timeout` 120 -> 300. SDK retries are 300 s x 3 = 900 s per
+    # ultimate failure; without margin, `asyncio.wait_for` races the
+    # SDK and usually wins, raising InvokeWallClockTimeout instead of
+    # the APITimeoutError that `_is_model_unavailable_error` matches
+    # on. 60 s margin lets SDK retries surface "Request timed out."
+    # cleanly so the batch routes to pool retry.
+    invoke_timeout_s: int = 960
 
     @property
     def attachments_dir(self) -> Path:

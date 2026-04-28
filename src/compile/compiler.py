@@ -2235,12 +2235,18 @@ def _make_chat_model(model_name: str) -> Any:
     string the proxy knows (e.g. "z-ai/glm-5", "anthropic/claude-opus-4-6"),
     regardless of whether langchain has a native provider for it.
 
-    timeout=120s prevents the "half-open TCP socket" stall we've hit
+    timeout=300s prevents the "half-open TCP socket" stall we hit
     twice on 2026-04-14 (laptop sleep / network blip → kernel keepalive
-    defaults to hours → Python blocks in recv() forever). With the
-    timeout the SDK raises, the batch fails loudly, and the next batch
-    continues. p95 completion today is ~30s so 2 min is a comfortable
-    ceiling that still catches the dead-socket case.
+    defaults to hours → Python blocks in recv() forever) AND
+    accommodates legitimately slow long-context rounds — kimi-k2.6 on
+    50k+ input tokens takes 5+ minutes to think, and the 2026-04-28
+    smoke audit (run 02c9d536) caught a string of "Request timed out"
+    failures that were really 120s x 3 SDK-retry attempts killing
+    productive deliberation. 300s x 3 SDK retries = 900s wall-clock
+    per ultimate-failure; the ``--batch-timeout`` default is now
+    1800s (raised in the same PR) so one ultimate-failure plus one
+    fallback retry on a different pool model still fits within a
+    single batch budget.
     """
     if settings.litellm_base_url:
         from langchain_openai import ChatOpenAI
@@ -2249,7 +2255,7 @@ def _make_chat_model(model_name: str) -> Any:
             model=model_name,
             base_url=settings.litellm_base_url,
             api_key=settings.openai_api_key or "dummy",
-            timeout=120,
+            timeout=300,
         )
 
     # Fallback: use langchain's provider inference. No timeout knob at this

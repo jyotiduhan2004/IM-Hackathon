@@ -204,3 +204,52 @@ class TestRetryLoopIntegration:
             _is_model_unavailable_error(Exception("the upstream returned a 502 once last week"))
             is False
         )
+
+    def test_is_model_unavailable_error_catches_request_timed_out(self) -> None:
+        """smoke 02c9d536 (2026-04-28): kimi-via-OpenRouter wedged
+        mid-loop, openai SDK raised ``Request timed out.`` after 360s.
+        The exception is ``openai.APITimeoutError`` whose ``str()`` is
+        the literal "Request timed out." string. Match it so the batch
+        retries with another pool model.
+        """
+        from scripts.compile_all import _is_model_unavailable_error
+
+        assert _is_model_unavailable_error(Exception("Request timed out.")) is True
+        # Common wrapping shape from langchain-openai exception chain.
+        assert (
+            _is_model_unavailable_error(Exception("openai.APITimeoutError: Request timed out."))
+            is True
+        )
+
+    def test_is_model_unavailable_error_catches_openrouter_exception(self) -> None:
+        """smoke 02c9d536 (2026-04-28): LiteLLM proxy returned a 400
+        with ``OpenrouterException - Provider returned error No
+        fallback model group found for original model_group=...``.
+        That's the upstream-provider-blipped-and-no-fallback shape.
+        Match the unique substring so the batch retries.
+        """
+        from scripts.compile_all import _is_model_unavailable_error
+
+        msg = (
+            "Error code: 400 - {'error': {'message': "
+            '"litellm.BadRequestError: OpenrouterException - '
+            "Provider returned error No fallback model group found "
+            'for original model_group=moonshotai/kimi-k2.6"}}'
+        )
+        assert _is_model_unavailable_error(Exception(msg)) is True
+
+    def test_is_model_unavailable_error_ignores_free_text_request_timed_out(self) -> None:
+        """False-positive hedge: a wiki page mentioning "request timed
+        out" in prose (without the trailing period) does not match.
+        The matcher anchors on the openai SDK's exact ``Request timed
+        out.`` literal — capital R and trailing period.
+        """
+        from scripts.compile_all import _is_model_unavailable_error
+
+        # Lowercase prose, no trailing period — does NOT match.
+        assert (
+            _is_model_unavailable_error(
+                Exception("the user reported that the request timed out yesterday")
+            )
+            is False
+        )
