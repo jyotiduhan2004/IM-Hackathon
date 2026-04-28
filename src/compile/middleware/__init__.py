@@ -21,6 +21,8 @@ from src.compile.middleware.reconnaissance_paralysis import RECONNAISSANCE_NUDGE
 from src.compile.middleware.reconnaissance_paralysis import ReconnaissanceParalysisMiddleware
 from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
 from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
+from src.compile.middleware.stuck_heartbeat import StuckHeartbeatMiddleware
+from src.compile.middleware.stuck_heartbeat import StuckHeartbeatState
 from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
 from src.compile.middleware.terminal_decision_guard import TerminalDecisionGuardMiddleware
 
@@ -43,5 +45,7 @@ __all__ = [
     "ReconnaissanceParalysisMiddleware",
     "SameThreadTopicGuardMiddleware",
     "SiblingDraftCheckMiddleware",
+    "StuckHeartbeatMiddleware",
+    "StuckHeartbeatState",
     "TerminalDecisionGuardMiddleware",
 ]

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import hashlib
 import re
 import tempfile
+import time
 from datetime import UTC
 from datetime import date
 from datetime import datetime
@@ -34,6 +36,7 @@ from src.compile.tools.raw_access import resolve_page as resolve_page
 from src.config import settings
 
 if TYPE_CHECKING:
+    from src.compile.middleware.stuck_heartbeat import StuckHeartbeatState
     from src.compile.tool_call_log import ToolCallLogHandler
 
 logger = structlog.get_logger(__name__)
@@ -106,6 +109,21 @@ class InvokeWallClockTimeout(Exception):  # noqa: N818 — public contract name
     round. Without the inner cap, a wedged proxy (grok-4.1-fast 2026-04-22:
     5h31m hang mid-round) exhausts the outer budget silently instead of
     surfacing as a timeout.
+    """
+
+
+class StuckLLMRoundError(Exception):
+    """Raised when no tool call has returned in `compile_stuck_after_s` seconds.
+
+    Distinct from `InvokeWallClockTimeout` (whole-round wall-clock cap):
+    this fires when the agent loop is genuinely idle on the model side
+    while productive deliberation looks the same to a wall-clock alone.
+    A 5-min heartbeat catches wedged provider connections at 5 min instead
+    of waiting out the full `invoke_timeout_s` budget (~16 min today).
+
+    The coordinator (`scripts/compile_all.py::_is_model_unavailable_error`)
+    treats this as `outcome='timeout'` and routes to pool retry — same path
+    as `SilentModelFailError` and other infrastructure failures.
     """
 
 
@@ -2430,6 +2448,7 @@ def create_compiler(
     raw_dir: str = "raw",
     wiki_dir: str = "wiki",
     view_root: Path | None = None,
+    extra_middlewares: list[Any] | None = None,
 ) -> Any:
     """Create a Deep Agents wiki compiler.
 
@@ -2540,6 +2559,68 @@ def create_compiler(
     from src.compile.middleware import CheckMyWorkGateMiddleware
     from src.compile.middleware import TerminalDecisionGuardMiddleware
 
+    middleware_list: list[Any] = [
+        PathAutohealMiddleware(),
+        ChronologicalScopeMiddleware(),
+        EditPayloadSanityMiddleware(),
+        EntityWriteAutohealMiddleware(),
+        LegacyPageHintMiddleware(),
+        SameThreadTopicGuardMiddleware(),
+        # Sibling-aware draft check (v11-U9): catches batch-local
+        # near-duplicates BEFORE they hit disk, complementing
+        # SameThreadTopicGuardMiddleware (which is a hard topic-only
+        # block) and the v9-U14 reviewer merge-candidate queue
+        # (which is a post-hoc catch). Conservative thresholds to
+        # avoid false positives that erode agent trust.
+        SiblingDraftCheckMiddleware(),
+        CheckMyWorkGateMiddleware(),
+        # V12 audit fix-C (2026-04-23): block batch exit without a
+        # terminal commitment. Batch 45 (kimi-k2.6) completed with
+        # `turns=6 tools=8 writes=0` and no log_insight — email
+        # stayed pending, got re-queued, agent paid same cost twice.
+        # This guard injects a nudge before END and loops the agent
+        # back to the model; after `_MAX_NUDGES` the coordinator's
+        # `mark_skipped("agent_exited_without_terminal_decision")`
+        # fallback kicks in.
+        TerminalDecisionGuardMiddleware(),
+        # Glob narrowed 2026-04-18 (v10-U5): 24.5% of glob calls were
+        # `**/<slug>.md` slug lookups timing out at 20s. Reject those
+        # with a pointer to resolve_page; legitimate enumeration
+        # patterns (wiki/topics/*.md) pass through. Reviewer subagent
+        # keeps glob — see src/compile/reviewer.py.
+        GlobNarrowingMiddleware(),
+        # v11-U3: every `read_file` ToolMessage gets a footer with
+        # `total_lines` (and a `next offset=` hint when truncated).
+        # Inherited deepagents tool defaults to limit=100 and gives
+        # zero signal that more content exists below — agent flies
+        # blind on 83% of compile traces. View-root binds at
+        # construction so we can map virtual paths to disk.
+        ReadFileTruncationHintMiddleware(view_root=view_root),
+        # Smoke-99a267f4 audit (2026-04-28): glm-5.1 burned 12 of 30
+        # turns recovering from edit_file `String not found` errors
+        # — agent's `old_string` was built from a stale mental model
+        # after 5 sequential edits without a re-read. Reactive +
+        # proactive nudges to break the spiral. See
+        # docs/audits/smoke-99a267f4-recursion-deep-dive-2026-04-28.md.
+        EditStalenessMiddleware(),
+        # Smoke-02c9d536 audit (2026-04-28): kimi-k2.6 burned 575s
+        # of 900s budget on thread 19be9883c6d921a6 with 14 reads,
+        # 6 resolves, 0 edits / writes / log_insights. Sibling to
+        # EditStaleness — that one watches the edit storm; this one
+        # catches the failure to ever start the edit phase. Fires
+        # once per batch at the 8th read with zero commits.
+        ReconnaissanceParalysisMiddleware(),
+    ]
+    if extra_middlewares:
+        # Caller-supplied middlewares are PREPENDED so they wrap the
+        # full standard stack (outermost). The heartbeat middleware
+        # specifically MUST be outermost — inner middlewares (e.g.
+        # `GlobNarrowingMiddleware`) can short-circuit without calling
+        # `handler`, which would skip an inner heartbeat's `mark()` and
+        # let `last_tool_return_at` go stale on every short-circuited
+        # tool call. Codex review on PR #253.
+        middleware_list = list(extra_middlewares) + middleware_list
+
     return create_deep_agent(
         model=model,
         tools=[
@@ -2557,58 +2638,7 @@ def create_compiler(
         system_prompt=system_prompt,
         backend=backend,
         permissions=permissions,
-        middleware=[
-            PathAutohealMiddleware(),
-            ChronologicalScopeMiddleware(),
-            EditPayloadSanityMiddleware(),
-            EntityWriteAutohealMiddleware(),
-            LegacyPageHintMiddleware(),
-            SameThreadTopicGuardMiddleware(),
-            # Sibling-aware draft check (v11-U9): catches batch-local
-            # near-duplicates BEFORE they hit disk, complementing
-            # SameThreadTopicGuardMiddleware (which is a hard topic-only
-            # block) and the v9-U14 reviewer merge-candidate queue
-            # (which is a post-hoc catch). Conservative thresholds to
-            # avoid false positives that erode agent trust.
-            SiblingDraftCheckMiddleware(),
-            CheckMyWorkGateMiddleware(),
-            # V12 audit fix-C (2026-04-23): block batch exit without a
-            # terminal commitment. Batch 45 (kimi-k2.6) completed with
-            # `turns=6 tools=8 writes=0` and no log_insight — email
-            # stayed pending, got re-queued, agent paid same cost twice.
-            # This guard injects a nudge before END and loops the agent
-            # back to the model; after `_MAX_NUDGES` the coordinator's
-            # `mark_skipped("agent_exited_without_terminal_decision")`
-            # fallback kicks in.
-            TerminalDecisionGuardMiddleware(),
-            # Glob narrowed 2026-04-18 (v10-U5): 24.5% of glob calls were
-            # `**/<slug>.md` slug lookups timing out at 20s. Reject those
-            # with a pointer to resolve_page; legitimate enumeration
-            # patterns (wiki/topics/*.md) pass through. Reviewer subagent
-            # keeps glob — see src/compile/reviewer.py.
-            GlobNarrowingMiddleware(),
-            # v11-U3: every `read_file` ToolMessage gets a footer with
-            # `total_lines` (and a `next offset=` hint when truncated).
-            # Inherited deepagents tool defaults to limit=100 and gives
-            # zero signal that more content exists below — agent flies
-            # blind on 83% of compile traces. View-root binds at
-            # construction so we can map virtual paths to disk.
-            ReadFileTruncationHintMiddleware(view_root=view_root),
-            # Smoke-99a267f4 audit (2026-04-28): glm-5.1 burned 12 of 30
-            # turns recovering from edit_file `String not found` errors
-            # — agent's `old_string` was built from a stale mental model
-            # after 5 sequential edits without a re-read. Reactive +
-            # proactive nudges to break the spiral. See
-            # docs/audits/smoke-99a267f4-recursion-deep-dive-2026-04-28.md.
-            EditStalenessMiddleware(),
-            # Smoke-02c9d536 audit (2026-04-28): kimi-k2.6 burned 575s
-            # of 900s budget on thread 19be9883c6d921a6 with 14 reads,
-            # 6 resolves, 0 edits / writes / log_insights. Sibling to
-            # EditStaleness — that one watches the edit storm; this one
-            # catches the failure to ever start the edit phase. Fires
-            # once per batch at the 8th read with zero commits.
-            ReconnaissanceParalysisMiddleware(),
-        ],
+        middleware=middleware_list,
         subagents=[cast(Any, reviewer_spec)],
     )
 
@@ -2819,11 +2849,22 @@ def run_compilation(
             batch_raw_paths=len(effective_raw_paths),
         )
 
+        # Per-batch heartbeat state. The middleware stamps
+        # `last_tool_return_at` on every tool-call return; the watcher
+        # task in `_ainvoke_with_timeout` reads it to detect a wedged
+        # LLM round (no tool returns for `compile_stuck_after_s`s while
+        # the agent task is still running).
+        from src.compile.middleware.stuck_heartbeat import StuckHeartbeatMiddleware
+        from src.compile.middleware.stuck_heartbeat import StuckHeartbeatState
+
+        heartbeat_state = StuckHeartbeatState()
+
         agent = create_compiler(
             model_name=model_name,
             raw_dir=raw_dir,
             wiki_dir=wiki_dir,
             view_root=view_root,
+            extra_middlewares=[StuckHeartbeatMiddleware(heartbeat_state)],
         )
 
         callbacks = []
@@ -2890,9 +2931,20 @@ def run_compilation(
             # Wrap the single agent round in `asyncio.wait_for` — the outer
             # `--batch-timeout` tracks cumulative wall-clock across model
             # retries and can't bound a single hung round (2026-04-22
-            # grok-4.1-fast: 5h31m mid-round hang).
+            # grok-4.1-fast: 5h31m mid-round hang). The paired
+            # `heartbeat_state` lets `_ainvoke_with_timeout` fire faster
+            # (`compile_stuck_after_s`) when the agent goes idle on the
+            # model side specifically, distinguishing "wedged round" from
+            # "slow but productive deliberation".
             result = asyncio.run(
-                _ainvoke_with_timeout(agent, instruction, config, settings.invoke_timeout_s)
+                _ainvoke_with_timeout(
+                    agent,
+                    instruction,
+                    config,
+                    settings.invoke_timeout_s,
+                    heartbeat_state=heartbeat_state,
+                    stuck_after_s=settings.compile_stuck_after_s,
+                )
             )
             _check_silent_fail(result, model=model_name)
             return result
@@ -2911,28 +2963,109 @@ async def _ainvoke_with_timeout(
     instruction: str,
     config: dict[str, Any],
     timeout_s: int,
+    *,
+    heartbeat_state: StuckHeartbeatState | None = None,
+    stuck_after_s: int | None = None,
 ) -> dict[str, Any]:
-    """Call `agent.ainvoke(...)` capped by `timeout_s` seconds.
+    """Call `agent.ainvoke(...)` capped by two timeouts.
 
-    Raises `InvokeWallClockTimeout` on expiry — callers pattern-match on
-    that to distinguish "wedged LLM round" from other `TimeoutError`s.
+    - `timeout_s` — whole-round wall-clock cap. Expiry raises
+      `InvokeWallClockTimeout`.
+    - `heartbeat_state` + `stuck_after_s` — tool-return heartbeat. If
+      no tool call has returned in `stuck_after_s` seconds while the
+      agent task is still running, raise `StuckLLMRoundError`. Pass
+      both to enable; pass neither to keep the single-cap behavior
+      tests rely on.
+
+    `_is_model_unavailable_error` matches both exception types so
+    wedged-round cases route to pool retry uniformly.
     """
-    try:
-        return cast(
-            dict[str, Any],
-            await asyncio.wait_for(
-                agent.ainvoke(
-                    {"messages": [{"role": "user", "content": instruction}]},
-                    config=config,
-                ),
-                timeout=timeout_s,
-            ),
+    agent_task = asyncio.create_task(
+        agent.ainvoke(
+            {"messages": [{"role": "user", "content": instruction}]},
+            config=config,
         )
-    except TimeoutError as exc:
-        logger.error("invoke_wall_clock_timeout", timeout_s=timeout_s)
-        raise InvokeWallClockTimeout(
-            f"agent.ainvoke exceeded {timeout_s}s wall-clock limit"
-        ) from exc
+    )
+    watcher_task: asyncio.Task[None] | None = None
+    if heartbeat_state is not None and stuck_after_s is not None and stuck_after_s > 0:
+        watcher_task = asyncio.create_task(
+            _stuck_heartbeat_watcher(agent_task, heartbeat_state, stuck_after_s)
+        )
+
+    try:
+        try:
+            return cast(
+                dict[str, Any],
+                await asyncio.wait_for(asyncio.shield(agent_task), timeout=timeout_s),
+            )
+        except TimeoutError as exc:
+            agent_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await agent_task
+            logger.error("invoke_wall_clock_timeout", timeout_s=timeout_s)
+            raise InvokeWallClockTimeout(
+                f"agent.ainvoke exceeded {timeout_s}s wall-clock limit"
+            ) from exc
+        except asyncio.CancelledError:
+            # The shield only blocks outside cancels from killing the
+            # agent task — when the watcher cancels it directly, the
+            # shielded await still completes with CancelledError. Wait
+            # for the watcher to surface its StuckLLMRoundError before
+            # deciding whether this is a stuck-round cancellation or a
+            # genuine outside cancel.
+            if watcher_task is not None:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await watcher_task
+                if watcher_task.done() and not watcher_task.cancelled():
+                    watcher_exc = watcher_task.exception()
+                    if isinstance(watcher_exc, StuckLLMRoundError):
+                        raise watcher_exc from None
+            raise
+    finally:
+        if watcher_task is not None and not watcher_task.done():
+            watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher_task
+        # Consume agent_task cancellation in all exit paths (stuck-round
+        # via watcher, external cancel through the shield wrapper) so the
+        # event loop doesn't warn "Task destroyed but pending". The
+        # TimeoutError branch already does this inline; finally handles
+        # the rest. Claude review on PR #253.
+        if not agent_task.done():
+            agent_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await agent_task
+
+
+async def _stuck_heartbeat_watcher(
+    agent_task: asyncio.Task[Any],
+    heartbeat_state: StuckHeartbeatState,
+    stuck_after_s: int,
+) -> None:
+    """Cancel `agent_task` if the heartbeat goes stale.
+
+    Polls at `min(30, stuck_after_s/5)` second intervals — fine-grained
+    enough to fire near the configured threshold without making the
+    watcher itself a source of overhead.
+    """
+    poll_interval = min(30.0, max(1.0, stuck_after_s / 5.0))
+    while not agent_task.done():
+        await asyncio.sleep(poll_interval)
+        if agent_task.done():
+            return
+        # Skip until first tool call returns: a slow first round (no tool
+        # returns yet) is the outer wall-clock's job, not the heartbeat's.
+        if heartbeat_state.last_tool_return_at is None:
+            continue
+        idle_for = time.monotonic() - heartbeat_state.last_tool_return_at
+        if idle_for > stuck_after_s:
+            logger.error(
+                "stuck_llm_round_detected",
+                idle_for_s=round(idle_for, 1),
+                stuck_after_s=stuck_after_s,
+            )
+            agent_task.cancel()
+            raise StuckLLMRoundError(f"agent stuck — no tool-call return in {stuck_after_s}s")
 
 
 class SilentModelFailError(RuntimeError):

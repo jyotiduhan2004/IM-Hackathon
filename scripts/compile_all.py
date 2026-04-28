@@ -1558,6 +1558,8 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     - 403 ``Forbidden`` — bare forbidden (Bug K)
     - ``SilentModelFailError`` — HTTP 200 with empty payload (Bug J,
       docs/audits/cycle-5-case-bug-j-minimax-silent-fail.md)
+    - ``StuckLLMRoundError`` / ``InvokeWallClockTimeout`` — heartbeat or
+      wall-clock fired; pool retry gives next model a fresh chance.
     - 5xx HTML error pages from the proxy front-end. 2026-04-24 smoke:
       glm-5.1 hit 5/29 ``<title>502 Server Error</title>`` HTML responses
       (each at ~570 s) — these are upstream provider gateway failures
@@ -1578,9 +1580,11 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     ``<title>...</title>`` tag, which a wiki page body wouldn't carry
     in an exception string.
     """
+    from src.compile.compiler import InvokeWallClockTimeout
     from src.compile.compiler import SilentModelFailError
+    from src.compile.compiler import StuckLLMRoundError
 
-    if isinstance(exc, SilentModelFailError):
+    if isinstance(exc, SilentModelFailError | StuckLLMRoundError | InvokeWallClockTimeout):
         return True
     msg = str(exc)
     if "team not allowed to access model" in msg or "Invalid model name" in msg:

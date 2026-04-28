@@ -202,6 +202,20 @@ class Settings(BaseSettings):
     # cleanly so the batch routes to pool retry.
     invoke_timeout_s: int = 960
 
+    # Heartbeat for the per-tool-call return timestamp. The
+    # `invoke_timeout_s` cap above lumps two failure shapes into one
+    # 16-min wait: (1) wedged LLM round (provider stops responding),
+    # (2) slow but productive deliberation (kimi on 50k input takes
+    # 4-6 min per round). Wall-clock alone can't tell them apart.
+    #
+    # `compile_stuck_after_s` adds a second signal: if no tool call
+    # has returned in this many seconds AND the agent task is still
+    # running, treat it as a wedge and raise `StuckLLMRoundError`.
+    # The coordinator routes that to pool retry the same way it does
+    # `SilentModelFailError`. 300s = 5 min is generous for slow
+    # providers but cuts the worst-case wait from 16 min to 5 min.
+    compile_stuck_after_s: int = 300
+
     @property
     def attachments_dir(self) -> Path:
         return self.raw_dir / "attachments"
