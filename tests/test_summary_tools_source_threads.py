@@ -129,7 +129,11 @@ class TestGetPageSummaryTldr:
         )
         assert result["tldr"] == "One sentence summary."
 
-    def test_no_tldr_returns_none_field(self, tmp_path: Path) -> None:
+    def test_no_tldr_falls_back_to_lead_paragraph(self, tmp_path: Path) -> None:
+        # 2026-04-28 prompt-review (Q7.2): "lead paragraph IS the
+        # summary" — pages without `## TL;DR` get the lead paragraph
+        # as `tldr` so the prompt PR can drop the heading template
+        # without breaking agent recall.
         body = "Just a lead paragraph.\n\n## Current state\n\nBody.\n"
         _write(
             tmp_path / "topics" / "no-tldr.md",
@@ -141,7 +145,42 @@ class TestGetPageSummaryTldr:
                 {"slug": "no-tldr", "wiki_dir": str(tmp_path), "response_format": fmt}
             )
             assert "tldr" in result, f"{fmt} response must include tldr key"
-            assert result["tldr"] is None, f"{fmt} should report tldr=None"
+            assert result["tldr"] == "Just a lead paragraph.", (
+                f"{fmt} should fall back to lead paragraph"
+            )
+
+    def test_empty_body_returns_none_tldr(self, tmp_path: Path) -> None:
+        # Edge: page with frontmatter only and no body — neither
+        # `## TL;DR` nor a lead paragraph exists, so `tldr` is None.
+        _write(
+            tmp_path / "topics" / "empty-body.md",
+            {"title": "Empty Body", "page_type": "topic", "status": "active"},
+            body="",
+        )
+        for fmt in ("concise", "detailed"):
+            result = get_page_summary.invoke(
+                {"slug": "empty-body", "wiki_dir": str(tmp_path), "response_format": fmt}
+            )
+            assert result["tldr"] is None, f"{fmt} should report tldr=None on empty body"
+
+    def test_tldr_prefers_explicit_section_over_lead_paragraph(self, tmp_path: Path) -> None:
+        # When both exist, explicit `## TL;DR` wins — the fallback
+        # only fires when no TL;DR section is present.
+        body = (
+            "Lead paragraph that should NOT be the tldr.\n\n"
+            "## TL;DR\n\n"
+            "The explicit summary wins.\n\n"
+            "## Current state\n\nBody.\n"
+        )
+        _write(
+            tmp_path / "topics" / "with-both.md",
+            {"title": "With Both", "page_type": "topic", "status": "active"},
+            body=body,
+        )
+        result = get_page_summary.invoke(
+            {"slug": "with-both", "wiki_dir": str(tmp_path), "response_format": "concise"}
+        )
+        assert result["tldr"] == "The explicit summary wins."
 
     def test_tldr_variant_no_semicolon(self, tmp_path: Path) -> None:
         # `## TLDR` (no semicolon) is a valid heading variant.

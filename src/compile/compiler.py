@@ -2080,18 +2080,23 @@ _TLDR_MAX_CHARS = 400
 
 
 def _extract_tldr(body: str) -> str | None:
-    """Return the content of the page's `## TL;DR` (or `## TLDR`) H2.
+    """Return a one-glance summary for the page.
 
-    Case-insensitive match on `TL;DR` / `TLDR`. Content is everything
-    between that heading and the next `##` heading (or end of file),
-    stripped. Returns None if no such section exists. Used by
-    `get_page_summary` so agents can surface durable lead prose without
-    re-reading the page.
+    Prefers the explicit `## TL;DR` (or `## TLDR`) H2 when present —
+    case-insensitive — collecting everything between that heading and
+    the next `##` (or EOF). Falls back to the lead paragraph (the prose
+    between frontmatter end and the first H2) when no TL;DR section
+    exists, per the 2026-04-28 prompt-review decision (Q7.2): "lead
+    paragraph IS the summary". The runtime decouples the wiki authoring
+    convention from the tool's return shape — pages no longer need a
+    `## TL;DR` heading, but legacy pages that have one keep working.
+
+    Returns None only when the page has neither a TL;DR section nor a
+    lead paragraph (empty body).
 
     Capped at `_TLDR_MAX_CHARS` chars with an ellipsis suffix when
-    longer — a runaway TL;DR section (e.g. agent wrote a whole essay
-    under the heading) must not blow the concise token budget. Full
-    content stays accessible via `read_file`.
+    longer — a runaway summary must not blow the concise token budget.
+    Full content stays accessible via `read_file`.
     """
     in_tldr = False
     collected: list[str] = []
@@ -2108,12 +2113,15 @@ def _extract_tldr(body: str) -> str | None:
             continue
         if in_tldr:
             collected.append(line)
-    # When we never entered the TL;DR block `collected` stays empty, so
-    # `text == ""` and the `if not text` guard returns None — no
-    # separate `if not in_tldr: return None` is needed.
     text = "\n".join(collected).strip()
     if not text:
-        return None
+        # No `## TL;DR` H2 — fall back to the lead paragraph. The
+        # 400-char cap mirrors the explicit-TL;DR branch so callers
+        # see a single bounded contract regardless of source.
+        text = _first_paragraph_capped(body, cap=_TLDR_MAX_CHARS)
+        if not text:
+            return None
+        return text
     if len(text) > _TLDR_MAX_CHARS:
         # Leave room for the ellipsis marker. Preserve trailing
         # whitespace before the truncation point — `rstrip()` + `…`
@@ -2144,12 +2152,13 @@ def get_page_summary(
         slug: kebab-case page identifier (without `.md`).
         wiki_dir: Root wiki directory. Default "wiki".
         response_format:
-          - "concise" (default, ~150 tokens when TL;DR present; ~70
-            when absent) — `{found, slug, title, first_paragraph, tldr}`.
-            Cheapest "what is this about?" probe. `tldr` is the content
-            of any `## TL;DR` (or `## TLDR`) section (capped at 400
-            chars with an ellipsis), or None if absent — pages that
-            author one let future calls skip the re-read.
+          - "concise" (default, ~150 tokens) — `{found, slug, title,
+            first_paragraph, tldr}`. Cheapest "what is this about?"
+            probe. `tldr` prefers any `## TL;DR` (or `## TLDR`) section
+            (capped at 400 chars with an ellipsis); when absent, falls
+            back to the lead paragraph (the 2026-04-28 prompt-review
+            convention: "lead paragraph IS the summary"). None only
+            when the page body is empty.
           - "detailed" (~206 tokens) — adds `page_type, status,
             headings, source_count, source_thread_count, is_cited,
             last_compiled`. Use when you also need the citation /
