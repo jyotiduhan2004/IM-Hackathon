@@ -2337,6 +2337,7 @@ def create_compiler(
 
     from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
     from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
+    from src.compile.middleware.edit_staleness import EditStalenessMiddleware
     from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
     from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
     from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
@@ -2470,6 +2471,13 @@ def create_compiler(
             # blind on 83% of compile traces. View-root binds at
             # construction so we can map virtual paths to disk.
             ReadFileTruncationHintMiddleware(view_root=view_root),
+            # Smoke-99a267f4 audit (2026-04-28): glm-5.1 burned 12 of 30
+            # turns recovering from edit_file `String not found` errors
+            # — agent's `old_string` was built from a stale mental model
+            # after 5 sequential edits without a re-read. Reactive +
+            # proactive nudges to break the spiral. See
+            # docs/audits/smoke-99a267f4-recursion-deep-dive-2026-04-28.md.
+            EditStalenessMiddleware(),
         ],
         subagents=[cast(Any, reviewer_spec)],
     )

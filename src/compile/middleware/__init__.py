@@ -11,6 +11,7 @@ from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_PAT
 from src.compile.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
 from src.compile.middleware.chronological_scope import ChronologicalScopeMiddleware
 from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
+from src.compile.middleware.edit_staleness import EditStalenessMiddleware
 from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
 from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
 from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
@@ -30,6 +31,7 @@ __all__ = [
     "CheckMyWorkGateMiddleware",
     "ChronologicalScopeMiddleware",
     "EditPayloadSanityMiddleware",
+    "EditStalenessMiddleware",
     "EntityWriteAutohealMiddleware",
     "GlobNarrowingMiddleware",
     "LegacyPageHintMiddleware",
