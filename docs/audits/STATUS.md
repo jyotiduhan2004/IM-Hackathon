@@ -36,7 +36,7 @@ The dominant gap pattern: the compiler is fixed; the wiki/ corpus that was produ
 
 1. **Heavy middleware investment paid off.** 12 middleware files in `src/compile/middleware/` (terminal-decision-guard, check-my-work-gate, chronological-scope, edit-payload-sanity, glob-narrowing, sibling-draft-check, same-thread-topic-guard, path-autoheal, entity-write-autoheal, read-file-truncation-hint, legacy-page-hint) plus the runtime critique pipeline cover most code-class findings. Of 91 findings, 48 (53%) have a concrete prevention guard.
 2. **The depth gap is real.** The V12 50-compile deep audit (2026-04-23) found that prompt updates lifted *structure* (new sections, footnotes, concept-style H2s) but did not lift *content depth* (ownership, rollout state, decisions, cross-linking). Scorer mean climbed +1.08 vs pre-V12, judge mean only +0.4. The remaining open S2 cluster (F-064 through F-074) is this depth gap.
-3. **Backfill is the unfinished half.** Forward-looking fixes shipped, but the existing 1035-page corpus carries the historical artifacts: 3,408 email-slug wikilinks across 296 topics (F-070), ~10 humans still in `systems/` (F-015), 5 specific dup-page pairs unconsolidated (F-013), 924 pages with legacy `sources:` frontmatter (F-017), 587/588 people pages still stubs by design (F-014).
+3. **Backfill is the unfinished half.** Forward-looking fixes shipped, but the existing 1035-page corpus carries the historical artifacts: 304 email-slug body wikilinks flagged at audit time (~3,400 wiki-wide today after corpus growth) across most topics (F-070), ~10 humans still in `systems/` (F-015), 5 specific dup-page pairs unconsolidated (F-013, fix in flight via #241 + #243), 924 pages with legacy `sources:` frontmatter (F-017), 525/588 people pages still stubs by design (F-014).
 4. **Prevention has gaps in the depth class.** 19 findings have *no* prevention guard. Of those, 12 are about page depth (owner / rollout / open-questions / scorer-vs-judge / persona-utility / nav-eval) and 7 are about platform housekeeping (qmd latency, qmd fixtures, cost ceiling, log-row UX). These are the next places a regression would land silently.
 5. **Wiki landing pages still placeholder.** `wiki/home.md`, `wiki/topics/index.md`, `wiki/systems/index.md` are coordinator-rendered but show "No pages yet" because the top-pages-per-domain data isn't wiring into the cards (F-089). Until this lands, Phase-1 DoD is not met.
 6. **All 11 S0 findings have at least partial fixes.** The original "data loss / corruption / silent crash" class is comprehensively addressed. The 3 S0 Partials (F-003 hallucination, F-010 schema misfit, F-011 pages-as-summary) are about *content quality*, not data integrity — the legacy debt is correctness in compiled prose, not lost or corrupted data.
@@ -88,7 +88,7 @@ The 16 open S2 findings, roughly ranked by leverage × ease-of-fix. Numbers in `
 11. **[F-046] TL;DR adoption weak** — prompt labels TL;DR as "Optional"; flip to MUST.
 12. **[F-069] Body `## Related` + frontmatter `related:` duplication** — 11/16 V12-audit pages had both. Critique warning.
 13. **[F-084] qmd regression corpus not seeded as fixtures** — 77-query corpus exists at `docs/audits/qmd-spike-2026-04-23-queries.jsonl`, but `tests/fixtures/qmd_spike/` doesn't. Ranking-model bumps would regress silently.
-14. **[F-070] Email-slug → canonical-name wikilink migration** — 3,408 instances of `[[*-indiamart-com]]` in 296 topics. Explicitly deferred to Tier 3 by the V12 audit.
+14. **[F-070] Email-slug → canonical-name wikilink migration** — 304 instances flagged at audit time (~3,400 wiki-wide today). Explicitly deferred to Tier 3 by the V12 audit.
 15. **[F-043] Reviewer escalation paths defined but not invoked on new-page write_file** — V12 audit confirmed 4/17 batches had 0 reviewer cycles, including both new V12-shaped pages. Reviewer wired but not firing on the new-page path.
 16. **[F-056] Backlinks ('Linked from' / 'pages that link here') break wiki-as-graph** — Person-page backlinks shipped (compiler.py:969 `_rebuild_person_backlinks`), but topic/system inverse-link generation not implemented. 0/50 sample topics have a `Linked from` section.
 
@@ -109,7 +109,7 @@ The 28 Partial findings split into two clean clusters: **forward-looking fix shi
 
 - **[F-003]** Hallucination: forward-looking prompt + footnotes shipped; needs a substring-evidence validator that blocks fabricated quotes / list truncation. **Fix**: critique rule that checks every claim's footnote raw against substring presence.
 - **[F-010]** Schema misfit: prompt + critique + reviewer all shipped; legacy 326-topic backfill unrun. **Fix**: one-shot rewrite pass over legacy topics OR accept that they're frozen.
-- **[F-013]** Near-dups: detector + merge tooling shipped (`scripts/merge_suffix_dupes.py`, `scripts/apply_merge_candidate.py`); manual-merge backfill unrun on Lens, samarth, vikram, sahil-sharma, alok-kumar. (Note: `scripts/consolidate_duplicate_slug.py` from PR #154 was retired in PR #174 as a one-shot.) **Fix**: re-run merge tooling on these slugs + add Postgres UNIQUE constraint.
+- **[F-013]** Near-dups: detector + merge tooling shipped (`scripts/merge_suffix_dupes.py`, `scripts/apply_merge_candidate.py`). Backfill in flight: PR #241 consolidates 4 named pairs (alok-kumar2, vikram-varshney, samarth, Lens); PR #243 sweeps the remaining 107 legacy person slugs (44 renames + 63 merges). Note that `alok-kumar` (alok.kumar@) and `sahil-sharma` (sahil.sharma@) are *separate people* from `alok-kumar2` / `sahil-sharma2`, not dup pairs — they're handled by PR #243's rename path. (`scripts/consolidate_duplicate_slug.py` from PR #154 was retired in PR #174 as a one-shot.) **Fix**: PR #241 + PR #243 land; then add Postgres UNIQUE constraint as the regression guard.
 - **[F-014]** Stub padding: auto-stub disabled (forward-looking ✓); legacy systems/ stubs (61/101 = 60%) not pruned. **Fix**: min-body validator with hard-fail OR one-shot prune.
 - **[F-015]** Humans in `systems/`: ~10 still there including `marketplace-launch.md` (134-inbound mailing list). **Fix**: re-run `scripts/audit_systems_entities.py` + add `@indiamart.com`-in-system-page validator.
 - **[F-017]** Sources frontmatter: ~60% migration to `source_threads` incomplete. **Fix**: one-shot migration to drain the rest, OR strict-no-sources as default.
@@ -169,7 +169,7 @@ How each source audit's findings have resolved. `D` = Done, `P` = Partial, `O` =
 | audit-persona-newbie | 2 | 1 | 1 | 0 | 0 |
 | cycle-4-summary | 2 | 2 | 0 | 0 | 0 |
 
-The remaining 14 audits each contributed 1 finding apiece (cycle-5-summary, cycle-6-summary, cycle-7-summary, cycle-8-summary, deep-audit-10-pages, codex-catalog-review, codex-priority-review, knowledge-vs-index, prompt-caching, audit-persona-{factcheck, ia, pm}, cycle-10-deep-audit, cycle-5-case-bug-j, cycle-4-case-2, cycle-8-case-studies). All resolved or in flight.
+The remaining 14 audits each contributed 1 finding apiece: cycle-5-summary, cycle-7-summary, cycle-8-summary, cycle-10-deep-audit, deep-audit-10-pages, cycle-4-case-2-orphan-skip-insights, cycle-5-case-bug-j-minimax-silent-fail, cycle-8-case-studies-2026-04-17, codex-catalog-review-2026-04-13, codex-priority-review-2026-04-13, knowledge-vs-index-2026-04-13, audit-persona-factcheck-2026-04-13, audit-persona-ia-2026-04-13, audit-persona-pm-2026-04-13. All resolved or in flight.
 
 **Read-out**: V12 deep audit dominates open work — that's expected; it's the most recent + most rigorous audit. Phase-0 bootstrap and error-class autopsy are clean (5/5 and 2/2 Done) — early infra issues fully resolved. Cycle 4–9 summaries are mostly Done (each 1 audit, mostly closed) — the cycle-by-cycle bug catalog is largely a fix-and-forget history.
 
@@ -179,97 +179,97 @@ The full per-finding view, sorted severity desc → status (Open first within ea
 
 | ID | Sev | Status | Prev | Title | Source audit | Gap |
 |---|---|---|---|---|---|---|
-| F-003 | S0 | Partial | P | Hallucination, fabricated quotes, date drift, truncated lists, silent normalization | audit-persona-factcheck-2026-04-13 | Forward-looking prompt + footnotes shipped; lacks substring-evidence validator |
-| F-010 | S0 | Partial | Y | Validator enforces v9-U1 8-H2 schema that 0/303 organic topic pages match | cycle-9-summary | Forward-looking shipped; legacy 326-topic backfill unrun |
-| F-011 | S0 | Partial | Y | Pages-as-summary framing produces filing-cabinets, not concept pages | cycle-4-case-1-seo-rework | Forward-looking concept-vs-thread reframe shipped; legacy debt drained but residual |
-| F-001 | S0 | Done | Y | Boolean is_compiled queue cannot survive crashes | codex-catalog-review-2026-04-13 | State machine fully shipped (PR #132 + state-machine + FOR UPDATE SKIP LOCKED) |
-| F-002 | S0 | Done | Y | YAML frontmatter corruption from edit_file destroys pages and goes undetected | phase0-bootstrap-incident | Strict YAML loader + payload-sanity middleware + critique fallback all in place |
-| F-004 | S0 | Done | Y | Compile stalls on bloated entity pages (>20KB context blow-up) | phase0-bootstrap-incident | Sources moved out of frontmatter; entity pages bounded |
-| F-005 | S0 | Done | Y | Worktree view-root mismatch crashes compile silently | error-classes-2026-04-15-autopsy | Coordinator preflight in place |
-| F-006 | S0 | Done | P | find_new_sources psycopg3 placeholder crash on subject_contains | error-classes-2026-04-15-autopsy | Fix is in code; no specific test guarding the wildcard binding shape |
-| F-007 | S0 | Done | Y | LiteLLM 200-empty / 401 / 403 / 5xx silent failures | cycle-5-case-bug-j-minimax-silent-fail | All four error shapes now caught and classified |
-| F-008 | S0 | Done | Y | log_insight orphan skips drop email_path | cycle-4-case-2-orphan-skip-insights | Tool contract enforces email_path with autoheal fallback |
-| F-009 | S0 | Done | Y | Bug H — chronological scope leak via greedy thread reading | cycle-4-case-1-seo-rework | Cutoff enforced via middleware; prompt + test guards in place |
-| F-013 | S1 | Partial | P | Near-duplicate / cross-category slug collisions slip past detector and validator | audit-synthesis-2026-04-13 | Detector + merge tooling shipped; manual-merge backfill not run |
-| F-014 | S1 | Partial | Y | Auto-stub and stub padding launder structural gaps as content | audit-synthesis-2026-04-13 | Auto-stub disabled; legacy systems/ stubs (61/101) not pruned |
-| F-015 | S1 | Partial | P | Category mislabeling: humans in systems/, products in entities/ | audit-synthesis-2026-04-13 | ~10 humans/mailing lists still in systems/. Missing classify_page_category tool |
-| F-016 | S1 | Partial | — | Source coverage gaps — pages stale relative to newer same-thread raws | audit-persona-newbie-2026-04-13 | No general staleness detector; specific symptom (whatsapp9696) fixed |
-| F-017 | S1 | Partial | P | Sources frontmatter bloat couples knowledge to provenance — direction unresolved | knowledge-vs-index-2026-04-13 | ~60% migration incomplete. No SQLite-catalog rendering layer |
-| F-023 | S1 | Partial | Y | Compiler prompt teaches dropped page types and entity-first workflow | langfuse-trace-audit-2026-04-15 | Prompt fully cleaned; 2 empty legacy dirs not deleted |
-| F-024 | S1 | Partial | Y | resolve_page under-recalls and ranks alphabetically | qmd-phase0-spike | qmd shipped; legacy duplicates not consolidated |
-| F-030 | S1 | Partial | Y | edit_file accepts oversized payloads and corrupts prose | tool-audit-2026-04-13 | Forward-fixed via middleware; legacy corruption not yet repaired |
-| F-031 | S1 | Partial | P | Same-thread duplicate / sibling near-duplicate topic pages slip past in-batch dedupe | cycle-8-case-studies-20260417 | Two layers shipped but V12 confirms thresholds too loose |
-| F-035 | S1 | Partial | P | Domain-prefix mismatch ships to disk and validator has false negatives | cycle-10-smoke-30 | Validator catches post-run; not yet a check_my_work blocker |
-| F-042 | S1 | Partial | Y | Anti-pattern thread-leakage H2s and bad-list legacy H2s never cleaned up | cycle-4-case-1-seo-rework | Forward critique warns mid-batch; legacy backfill not implemented |
-| F-054 | S1 | Partial | P | New-joiner is not the primary-reader anchor in prompt | v12-north-star | Single-mention only; no reader-anchor section in critique |
-| F-063 | S1 | Partial | P | Lazy-decision-page minting not happening on inline ## Decision: H2s | v12-50-compile-deep-audit | Warning + prompt rule shipped; no automatic stub materialization |
-| F-081 | S1 | Partial | — | qmd p50 latency 12.34s — rerank-latency unsplit | qmd-phase0-spike | qmd integration shipped; rerank latency unsplit in observability |
-| F-089 | S1 | Partial | P | Wiki landing pages still placeholders | north-star-reconciliation | Coordinator hook exists, content rendering broken/empty |
-| F-012 | S1 | Done | Y | mark_as_compiled / coordinator-only tools in agent toolbox (citation-evidence trust) | tool-audit-2026-04-13 | Trust boundary closed; coordinator owns flips with citation evidence |
-| F-018 | S1 | Done | Y | Dual-write drift between raw markdown and Postgres queue | codex-priority-review-2026-04-13 | Catalog is single source of truth; raw frontmatter no longer mutated |
-| F-019 | S1 | Done | P | Deep Agents virtual filesystem silently swallowed writes | phase0-bootstrap-incident | One-line config fix shipped |
-| F-020 | S1 | Done | Y | create_entities forces model to restate coordinator-known raw_paths | langfuse-trace-audit-2026-04-15 | Coordinator injects raw_paths via ContextVar |
-| F-021 | S1 | Done | Y | Filesystem scoping too loose — agent uses absolute and foreign-worktree paths | langfuse-trace-audit-2026-04-15 | Forward-fixed via autoheal middleware + slug-only resolve_page |
-| F-022 | S1 | Done | Y | log_insight unused / leading-slash / orphan-path issues | langfuse-trace-audit-2026-04-15 | Heavily prompted; terminal-decision middleware accepts log_insight |
-| F-025 | S1 | Done | Y | Agent bypasses entity tooling and writes entity pages directly | langfuse-trace-audit-2026-04-15 | Hint-only middleware + prompt forbids write_file for entities |
-| F-026 | S1 | Done | Y | create_entity overused vs write_draft_page underused | langfuse-trace-audit-2026-04-15 | Prompt reframed concept-first |
-| F-029 | S1 | Done | Y | TPM rate limits cause mid-edit page corruption | phase0-bootstrap-incident | Tracing wired and used by V12 audit |
-| F-032 | S1 | Done | Y | Per-message terminality miss on low-signal follow-ups | cycle-7-summary | Prompt aggressive about already_captured; terminal-decision middleware |
-| F-033 | S1 | Done | Y | Bug E — reviewer blocks on broken person-wikilinks | cycle-4-summary | Prompt teaches recovery; reviewer demotes person-slug to warning |
-| F-034 | S1 | Done | Y | Orphaned compile / silent batch exit (kimi batch 45) | v12-50-compile-deep-audit | Runtime-enforced via terminal_decision_guard |
-| F-036 | S1 | Done | Y | Glob timeouts on **/<slug>.md fuzzy lookups | cycle-9-summary | Slug-shaped glob patterns blocked at middleware |
-| F-038 | S1 | Done | Y | Observability scripts lag runtime architecture | cycle-8-summary-20260417 | Audit script aligned to current tool surface |
-| F-044 | S1 | Done | Y | Pages lack lead paragraph (Wikipedia-style 2-sentence opener) | cycle-10-smoke-30 | Validator warning + prompt teaching shipped |
-| F-050 | S1 | Done | Y | Update-time Summary rewrite not enforced | v12-50-compile-deep-audit | Both warning + blocker tiers shipped |
-| F-051 | S1 | Done | P | Strikethrough and deletion violate no-vanishing rule | v12-north-star | Prompt teaching shipped; corpus shows compliance is high |
-| F-052 | S1 | Done | Y | 5W+IndiaMart hidden-curriculum questions absent from prompt | v12-north-star | Prompt teaching shipped at v12-U2; behavioral lift visible |
-| F-053 | S1 | Done | Y | Per-section sourcing enables filing-cabinet failure mode | v12-north-star | Footnote teaching + def-completeness check both shipped |
-| F-059 | S1 | Done | Y | Reviewer-gate middleware not firing on new-page write_file | v12-50-compile-deep-audit | Middleware now requires check_my_work after every content write |
-| F-060 | S1 | Done | Y | Recurring anti-pattern H2s caught only by scorer | v12-50-compile-deep-audit | Both warning and blocker tiers shipped |
-| F-061 | S1 | Done | Y | Sibling-draft-check middleware not catching slug churn | v12-50-compile-deep-audit | Middleware prevents normalized=0 silent exits |
-| F-062 | S1 | Done | Y | Open-question footnotes don't resolve to References definitions | v12-50-compile-deep-audit | Promoted from scorer heuristic to critique blocker |
-| F-071 | S1 | Done | Y | Title Case wikilinks broke 210+ cross-references | phase0-bootstrap-incident | Lint normalizes drift; prompt + draft tool enforce kebab-case |
-| F-027 | S1 | Partial | P | Coordinator-only tools still exposed in agent toolbox | tool-audit-2026-04-13 | Agent surface clean; @tool retained for scripts; update_wiki_index split not done |
-| F-040 | S1 | Partial | P | LiteLLM model allowlist + bad model variants fail batches without retry | cycle-6-summary | Retry classification shipped; outcome enum lacks infrastructure_error tag |
-| F-041 | S1 | Partial | Y | Validator backlog: legacy entities/index, legacy-sources-only, frontmatter housekeeping | cycle-5-summary | Backfill scripts shipped; legacy debt residual |
-| F-043 | S2 | Open | P | Reviewer escalation paths defined but not invoked on new-page write_file | cycle-10-smoke-30 | Reviewer wired but V12 confirms not invoked on new-page path |
-| F-045 | S2 | Open | — | Event-log voice and named-attribution prose leaks into wiki pages | cycle-10-smoke-30 | No event-log voice detector; synthesis depth gap remains |
-| F-046 | S2 | Open | — | TL;DR adoption weak despite plumbing in place | cycle-10-smoke-30 | Prompt labels TL;DR Optional; no critique rule |
-| F-058 | S2 | Open | — | Bug/incident pages forced through design-doc gate | topic-archetypes | Validator/critique still applies design-doc gate; escape hatch missing |
-| F-064 | S2 | Open | — | Scorer-judge correlation re-inverted on extremes | v12-50-compile-deep-audit | Path-forward not implemented; architecture unchanged |
-| F-065 | S2 | Open | — | V12 surface-vs-depth gap — content floor flat | v12-50-compile-deep-audit | Structure raised; depth markers untouched |
-| F-066 | S2 | Open | — | Owner / DRI / PM frontmatter and content fields missing | v12-50-compile-deep-audit | PM-fields gap unaddressed |
-| F-067 | S2 | Open | P | No current rollout / deployment state on pages | v12-50-compile-deep-audit | Scorer rewards rollout-state language but no critique block requiring it |
-| F-068 | S2 | Open | — | Open questions lack target dates/timelines | v12-50-compile-deep-audit | Persona feedback acknowledged; no prompt/critique change |
-| F-069 | S2 | Open | — | Dup `## Related` body section + frontmatter related: on 11/16 pages | v12-50-compile-deep-audit | No critique warning for body+frontmatter Related dup |
-| F-070 | S2 | Open | P | Email-slug wikilinks instead of canonical-name slugs (3408 instances) | v12-50-compile-deep-audit | Migration explicitly deferred to Tier 3 |
-| F-073 | S2 | Open | — | z-ai/glm-5 tool-call outlier (25.8 avg) without quality justification | v12-50-compile-deep-audit | Pool reorganized for health; outlier cost not addressed |
-| F-074 | S2 | Open | — | Cost ceiling 5-6x under full-queue requirement | v12-50-compile-deep-audit | No budget top-up; per-page cost optimization not shipped |
-| F-080 | S3 | Open | — | Scorer-judge alignment path: judge as primary signal | v12-50-compile-deep-audit | Judge runs ad-hoc; no automated judge-on-top-decile |
-| F-084 | S2 | Open | — | qmd regression corpus not yet committed as fixtures | qmd-phase0-spike | Spike corpus never seeded; ranking-model bumps would regress silently |
-| F-090 | S2 | Open | — | High-leverage agent tools not shipped (Workstream-4 backlog) | north-star-reconciliation | Only resolve_page + get_thread_context shipped; rest backlog |
-| F-077 | S3 | Open | — | Wikipedia-style random-walk navigation unevaluated | v12-50-compile-deep-audit | Phase-2 eval-suite item; not built |
-| F-079 | S3 | Open | — | V12-U3 footnote utility unmeasured (cited vs used) | v12-50-compile-deep-audit | Judge persona rubric does not score footnote utility |
-| F-076 | S3 | Open | — | Scorer v2->v3 numeric delta mixes rubrics — direction solid, magnitude approximate | v12-50-compile-deep-audit | Pre-V12 snapshot rescoring deferred |
-| F-049 | S3 | Open | — | compiled-but-touches=0 log row is ambiguous (cited_prior not surfaced) | cycle-10-deep-audit | Coordinator records touches_inserted but not cited_prior |
-| F-091 | S3 | Open | P | AgentMiddleware migration deferred — callback-only telemetry | north-star-reconciliation | Phase-2; new middleware uses pattern, legacy hooks unmigrated |
-| F-082 | S2 | Won't-do | P | qmd weak on bare numbers / code identifiers / timestamps | qmd-phase0-spike | Decision: keep grep complementary. No code fix expected |
-| F-085 | S2 | Won't-do | Y | navigation_role frontmatter specified but not enforced | north-star-reconciliation | Decision: cut. Documented rejection in NORTH-STAR |
-| F-088 | S2 | Won't-do | Y | Ownership-history / opinion-change sections unenforced | north-star-reconciliation | Decision: demote. NORTH-STAR explicitly rejects forced sections |
-| F-028 | S2 | Done | Y | list_wiki_pages too thin, forcing extra read_file roundtrips | tool-audit-2026-04-13 | Dual-format response per Anthropic best practice |
-| F-037 | S2 | Done | Y | Reviewer emits merge_candidates but no merge tool exists | cycle-9-summary | Coordinator-driven queue + manual apply script + integrity fix |
-| F-039 | S2 | Done | Y | Scorecard effective-rate denominator underflow (160% bug) | cycle-9-summary | Scorecard caps denominator and skips when count is None |
-| F-047 | S2 | Done | Y | MD024 duplicate-H2 leakage past in-batch critique | cycle-10-smoke-30 | Pre-write blocker via duplicate-h2 critique |
-| F-048 | S2 | Done | P | Legacy ## Sources body section + missing source_threads citations | deep-audit-10-pages | Validator surfaces legacy-sources-only as warning; strict via flag |
-| F-055 | S2 | Done | P | Trivial-skip filter is length-based, missing concept-value signal | v12-north-star | Filter exists as backfill; not wired into live ingest path |
-| F-057 | S2 | Done | Y | Reviewer flags coherent alternative shapes as non-compliant | topic-archetypes | Reviewer rule loosened to accept any coherent alternative shape |
-| F-072 | S2 | Done | P | Scorer summary_currency heuristic doesn't catch weak summaries | v12-50-compile-deep-audit | Token list expanded but heuristic still fires on bad-token presence only |
-| F-078 | S2 | Done | Y | Model pool quality differentiation underpowered | v12-50-compile-deep-audit | Head-to-head A/B script shipped post-audit |
-| F-083 | S2 | Done | Y | Snippet field not surfaced in resolve_page response | qmd-phase0-spike | Snippet now passed through resolve_page envelope when semantic fires |
-| F-086 | S2 | Done | Y | Domain hubs unspecified — directory vs frontmatter conflict | north-star-reconciliation | Directory-route chosen; hub generator coordinator-owned |
-| F-087 | S2 | Done | Y | Glossary pages mentioned in 4 docs, zero in corpus | audit-persona-newbie-2026-04-13 | Glossary delivered; 100+ acronyms |
-| F-075 | S2 | Partial | P | 3 pages have 0 inline footnotes despite V12-U3 teaching | v12-50-compile-deep-audit | Lint catches missing definitions but does NOT enforce minimum N footnotes |
-| F-056 | S2 | Open | P | Backlinks ('Linked from' / 'pages that link here') break wiki-as-graph | v12-north-star | Person-page backlinks shipped; topic/system not implemented |
+| F-003 | S0 | Partial | P | Hallucination, fabricated quotes, date drift, truncated lists, and silent n | audit-persona-factcheck-2 | Forward-looking prompt + footnotes shipped; lacks a hard substring-evidence validator that would block fabricated quotes |
+| F-010 | S0 | Partial | Y | Validator enforces v9-U1 8-H2 schema that 0/303 organic topic pages match;  | cycle-9-summary | Forward-looking shipped (prompt + critique + reviewer); legacy 326-page topic backfill is unrun. validate_wiki is warn-o |
+| F-011 | S0 | Partial | Y | Pages-as-summary framing produces filing-cabinets, not concept pages (dated | cycle-4-case-1-seo-rework | Forward-looking concept-vs-thread reframe shipped; majority of legacy debt drained but a handful of pages still hold dat |
+| F-001 | S0 | Done | Y | Boolean is_compiled queue cannot survive crashes | codex-catalog-review-2026 | State machine fully shipped with claim/finish + stale-claim recovery. |
+| F-002 | S0 | Done | Y | YAML frontmatter corruption from edit_file destroys pages and goes undetect | phase0-bootstrap-incident | Strict YAML loader + payload-sanity middleware + critique fallback all in place. |
+| F-004 | S0 | Done | Y | Compile stalls / context blow-up on bloated entity pages with massive front | phase0-bootstrap-incident | Forward-looking + backfill complete. No active circuit breaker on page size but the data shape change removed the trigge |
+| F-005 | S0 | Done | Y | Worktree view-root mismatch crashes compile silently with no preflight | error-classes-2026-04-15- | Coordinator preflight in place with operator-visible click.ClickException. |
+| F-006 | S0 | Done | P | find_new_sources psycopg3 placeholder crash on subject_contains | error-classes-2026-04-15- | Fix is in code; no specific test guarding the wildcard binding shape but pattern is now correct. |
+| F-007 | S0 | Done | Y | LiteLLM transport failures (silent 200-empty, 401/403, 429, bad-model-allow | phase0-bootstrap-incident | All four error shapes now caught and classified. |
+| F-008 | S0 | Done | Y | log_insight orphan skips drop email_path so coordinator can't materialize t | cycle-4-case-2-orphan-ski | Tool contract now enforces email_path for skip categories with autoheal fallback. |
+| F-009 | S0 | Done | Y | Chronological scope leak via greedy thread reading contaminates pages with  | cycle-4-case-1-seo-rework | Cutoff enforced via middleware that rejects future-dated raw reads; prompt + test guards in place. |
+| F-013 | S1 | Partial | P | Near-duplicate / cross-category slug collisions slip past detector and vali | audit-synthesis-2026-04-1 | Detector + merge tooling shipped; manual-merge backfill not run on existing pairs. No globally unique slug Postgres UNIQ |
+| F-014 | S1 | Partial | Y | Auto-stub and stub padding launder structural gaps as content (skeletal pag | audit-synthesis-2026-04-1 | Forward-looking auto-stub disabled (Done). Legacy systems/ stubs (61/101) not pruned — need a min-body validator with ha |
+| F-015 | S1 | Partial | P | Category mislabeling: humans in systems/, products in entities/ | audit-synthesis-2026-04-1 | Migration tool exists but ~10 humans/mailing lists still in systems/. Missing classify_page_category tool / strict valid |
+| F-016 | S1 | Partial | — | Source coverage gaps — pages stale relative to newer same-thread raws | audit-persona-newbie-2026 | Specific symptom (whatsapp9696) fixed but no general staleness detector. Pages can drift again silently when new emails  |
+| F-017 | S1 | Partial | P | Sources frontmatter bloat couples knowledge to provenance — direction unres | knowledge-vs-index-2026-0 | Forward-looking direction chosen (source_threads). Backfill still ~60% incomplete. No SQLite-catalog rendering layer; so |
+| F-023 | S1 | Partial | Y | Compiler prompt teaches dropped page types and entity-first workflow | langfuse-trace-audit-2026 | Prompt fully cleaned; 2 empty legacy dirs (wiki/conflicts, wiki/timelines) not yet deleted from disk. |
+| F-024 | S1 | Partial | Y | resolve_page under-recalls and ranks alphabetically; people queries route w | langfuse-trace-audit-2026 | Forward-looking fixes shipped; legacy duplicates (Lens, samarth, vikram, sahil, alok-kumar*) not yet consolidated. scrip |
+| F-030 | S1 | Partial | Y | edit_file accepts oversized payloads and corrupts prose on incremental comp | tool-audit-2026-04-13 | Forward-fixed via middleware; legacy corruption not yet repaired (no backfill script applied to corrupted pages). |
+| F-031 | S1 | Partial | P | Same-thread duplicate / sibling near-duplicate topic pages slip past in-bat | cycle-8-case-studies-2026 | Two layers of middleware shipped but V12 confirms sibling_draft_check thresholds too loose; legacy duplicates remain on  |
+| F-035 | S1 | Partial | P | Domain-prefix mismatch ships to disk and validator has false negatives | cycle-10-smoke-30 | Validator catches it post-run (50+ minutes after pages land); finding asks for promotion into check_my_work as a blocker |
+| F-042 | S1 | Partial | Y | Anti-pattern thread-leakage H2s and bad-list legacy H2s never cleaned up | topic-archetypes | Forward-looking critique warns mid-batch, but additive-cleanup pass on legacy pages not implemented; agent still doesn't |
+| F-054 | S1 | Partial | P | New-joiner is not the primary-reader anchor in prompt | v12-north-star | The 'explaining IndiaMart to a new joiner over coffee' framing not present; mention is incidental in 5W block. No reader |
+| F-063 | S1 | Partial | P | Lazy-decision-page minting not happening on inline ## Decision: H2s | v12-50-compile-deep-audit | Warning + prompt rule shipped, but no automatic stub materialization or wikilink rewrite. The fix-shape (lazy materializ |
+| F-081 | S1 | Partial | — | qmd p50 latency 12.34s — ~330x slower than SQL; rerank-latency unsplit | qmd-phase0-spike | qmd integration shipped (PR #224) but rerank latency remains unsplit in observability span; no concrete latency-reductio |
+| F-089 | S1 | Partial | P | Wiki landing pages still placeholders | north-star-reconciliation | Coordinator hook exists and stale-count is fixed, but content rendering of top-pages-per-domain is broken/empty on home. |
+| F-012 | S1 | Done | Y | mark_as_compiled has no citation evidence requirement; trust boundary open | tool-audit-2026-04-13 | Trust boundary closed — agent cannot flip the bit; coordinator computes citation-derived flip. |
+| F-018 | S1 | Done | Y | Dual-write drift between raw markdown and Postgres queue | codex-priority-review-202 | Catalog is single source of truth; ingest writes both, but raw frontmatter is no longer mutated. |
+| F-019 | S1 | Done | P | Deep Agents virtual filesystem silently swallowed writes (0 wiki pages on d | phase0-bootstrap-incident | One-line config fix shipped; ongoing operation confirms writes hit disk. |
+| F-020 | S1 | Done | Y | create_entities forces model to restate coordinator-known raw_paths | langfuse-trace-audit-2026 | Coordinator injects raw_paths; tool errors actionably if missing. |
+| F-021 | S1 | Done | Y | Filesystem scoping too loose — agent uses absolute and foreign-worktree pat | langfuse-trace-audit-2026 | Forward-fixed via autoheal middleware + slug-only resolve_page returns. |
+| F-022 | S1 | Done | Y | log_insight reflection channel unused and poorly self-healed | langfuse-trace-audit-2026 | Prompt heavily references log_insight; terminal-decision middleware accepts log_insight commitments. |
+| F-032 | S1 | Done | Y | Per-message terminality miss on low-signal follow-ups | cycle-7-summary | Prompt aggressive about already_captured; terminal-decision middleware enforces commitment per email. |
+| F-033 | S1 | Done | Y | Reviewer blocks on broken person-wikilinks; agent retries+gives up | cycle-4-summary | Two-layer fix: prompt teaches recovery via create_entities; reviewer demotes person-slug breaks to warning. |
+| F-050 | S1 | Done | Y | Summary section semantics undefined — current-truth vs lineage | v12-north-star | Prompt + critique both shipped; behavior gap on existing pages still surfaced by V12 audit but mechanism is in place. |
+| F-051 | S1 | Done | P | Strikethrough and deletion violate no-vanishing rule | v12-north-star | Prompt teaching shipped; no automated critique rule for ~~ in body, but corpus shows compliance is high (1 occurrence). |
+| F-052 | S1 | Done | Y | 5W+IndiaMart hidden-curriculum questions absent from prompt | v12-north-star | Prompt teaching shipped at v12-U2; behavioral lift visible but content-depth gap (judge feedback) remains. |
+| F-053 | S1 | Done | Y | Per-section sourcing enables filing-cabinet failure mode | v12-north-star | Footnote teaching + def-completeness check both shipped; no claim-level footnote-required rule (e.g. footnote_missing_on |
+| F-059 | S1 | Done | Y | Reviewer-gate middleware not firing on new-page write_file | v12-50-compile-deep-audit | Middleware now requires check_my_work after every successful content write including new-page write_file. |
+| F-060 | S1 | Done | Y | Update-time Summary rewrite not enforced (additive-only V12 compiles) | v12-50-compile-deep-audit | Both warning (no current-state marker) and blocker (Recent-changes date > Summary date) tiers shipped. |
+| F-061 | S1 | Done | Y | Orphaned compile in batch 45 (kimi-k2.6) — silent failure mode | v12-50-compile-deep-audit | Middleware prevents normalized=0 silent exits; coordinator falls back to mark_skipped after 3 nudges. No deeper trace di |
+| F-062 | S1 | Done | Y | Open-question footnotes don't resolve to References definitions | v12-50-compile-deep-audit | Promoted from scorer heuristic to critique blocker. |
+| F-043 | S2 | Open | P | Reviewer escalation paths (structure_mismatch / filing_cabinet) wired but n | cycle-10-smoke-30 | Reviewer defined and wired but V12 audit confirms not invoked on new-page write_file path — Tier 1 #1 of v12-50 audit, n |
+| F-045 | S2 | Open | — | Event-log voice and named-attribution prose leaks into wiki pages | cycle-10-smoke-30 | No event-log voice detector or prompt rule added; only thread-subject H2 anti-pattern (F-042) overlaps. Synthesis depth  |
+| F-046 | S2 | Open | — | TL;DR adoption weak despite plumbing in place | cycle-10-smoke-30 | Prompt still labels TL;DR 'Optional'; no critique rule, no validator, no explicit MUST. Plumbing exists but pull-through |
+| F-056 | S2 | Open | P | No backlinks / orphans / graph-isolated topics break wiki-as-graph navigati | audit-persona-ia-2026-04- | Person-page 'Appears in' backlinks shipped, but topic/system graph-coherence Linked from footer NOT implemented. Coordin |
+| F-058 | S2 | Open | — | Bug/incident pages forced through design-doc gate | topic-archetypes | Validator/critique still applies design-doc gate to bug-shape pages. Escape hatch (body<50 lines AND Bug details + Impac |
+| F-064 | S2 | Open | — | Scorer-judge correlation re-inverted on extremes; structure detector not de | v12-50-compile-deep-audit | Path-forward (judge primary, scorer pre-filter) not implemented. Scorer was recalibrated (PR #216, #221) but architectur |
+| F-065 | S2 | Open | — | V12 surface-vs-depth gap — structure adopted, content floor flat | v12-50-compile-deep-audit | Structure ceiling raised by V12 prompt updates; content-floor depth (ownership/rollout/decisions/cross-links) untouched. |
+| F-066 | S2 | Open | — | Owner / DRI / PM frontmatter and content fields missing | audit-persona-pm-2026-04- | PM-fields gap unaddressed. Prompt/validator/critique do not request or enforce owner/stage/target_date frontmatter. |
+| F-067 | S2 | Open | P | No current rollout / deployment state on pages | v12-50-compile-deep-audit | Scorer rewards rollout-state language but no critique block requiring a current rollout/deployment-state section or mark |
+| F-068 | S2 | Open | — | Open questions lack target dates/timelines | v12-50-compile-deep-audit | Persona feedback acknowledged, but no prompt/critique change to require target dates on open questions. |
+| F-069 | S2 | Open | — | Dup ## Related body section + frontmatter related: on 11/16 pages | v12-50-compile-deep-audit | No critique warning for body+frontmatter Related duplication. Audit-time symptom (11/16) may have shifted naturally; war |
+| F-070 | S2 | Open | P | Email-slug wikilinks instead of canonical-name slugs (304 instances) | v12-50-compile-deep-audit | Migration to canonical-name slugs explicitly deferred to Tier 3 in audit; auto-stub keeps graph healthy but readability/ |
+| F-073 | S2 | Open | — | z-ai/glm-5 tool-call outlier (25.8 avg) without quality justification | v12-50-compile-deep-audit | Pool was reorganized for health (PR #231, #237) but z-ai/glm-5 outlier tool-call cost not addressed via cap or downweigh |
+| F-074 | S2 | Open | — | Cost ceiling 5-6x under full-queue requirement | v12-50-compile-deep-audit | Cost-ceiling vs full-queue gap unaddressed. No budget top-up; per-page cost optimization (model selection/prompt compres |
+| F-084 | S2 | Open | — | qmd regression corpus not yet committed as fixtures | qmd-phase0-spike | Spike corpus never seeded as fixtures; ranking-model bumps would regress silently. |
+| F-090 | S2 | Open | — | High-leverage agent tools not shipped (Workstream-4 backlog) | north-star-reconciliation | Only resolve_page (which subsumes some merge-detect intent) and get_thread_context shipped. The rest of the Workstream-4 |
+| F-027 | S2 | Partial | P | Coordinator-only tools still exposed in agent toolbox + redundant side-effe | tool-audit-2026-04-13 | Agent-visible surface clean; @tool wrappers retained on coordinator helpers (importable for scripts) but unbound from ag |
+| F-040 | S2 | Partial | P | Pool-health metric polluted by infrastructure failures | cycle-5-case-bug-j-minima | Infra-vs-agent classification handled at retry path, but compile_attempts.outcome enum still only has compiled/failed/ti |
+| F-041 | S2 | Partial | Y | Validator backlog: legacy entities/index, legacy-sources-only, frontmatter  | cycle-5-summary | Backfill scripts shipped; validator catches new violations but legacy debt residual on existing pages. |
+| F-047 | S2 | Partial | Y | Markdown duplicate-H2 (MD024) leaks past in-batch critique | cycle-10-smoke-30 | Pre-write blocker exists in check_my_work via duplicate-h2 critique; render-time backlinks regeneration NOT implemented  |
+| F-055 | S2 | Partial | P | Trivial-skip filter is length-based, missing concept-value signal; not yet  | v12-north-star | Filter exists as a backfill script (post-ingest), not wired into the live ingest path (gmail.py/parser.py have no import |
+| F-072 | S2 | Partial | P | Scorer summary_currency heuristic doesn't catch weak summaries | v12-50-compile-deep-audit | Token list expanded but heuristic still fires only on bad-token presence; absence of metrics/dates/ownership in short su |
+| F-075 | S2 | Partial | P | 3 pages have 0 inline footnotes despite V12-U3 teaching | v12-50-compile-deep-audit | Lint catches missing definitions but does NOT enforce minimum N footnotes per page — partial adoption (zero-footnote pag |
+| F-025 | S2 | Done | Y | Agent bypasses entity tooling and writes entity pages directly | langfuse-trace-audit-2026 | Hint-only middleware (not block). Prompt states 'NEVER invent entity slugs'. Acceptable since prevention is layered. |
+| F-026 | S2 | Done | Y | create_entity overused vs write_draft_page underused (271 vs 1) — entity-fi | langfuse-trace-audit-2026 | Prompt reframed concept-first; create_entities is for resolution not auto-expansion. |
+| F-028 | S2 | Done | Y | list_wiki_pages too thin — flat filename list, no metadata, no response_for | tool-audit-2026-04-13 | Dual-format response per Anthropic best practice; metadata exposed per CLAUDE.md tool-design rules. |
+| F-029 | S2 | Done | Y | No Langfuse tracing or per-tool observability by default; trace taxonomy fr | tool-audit-2026-04-13 | Tracing wired and used by V12 audit. trace-name taxonomy uses run_name kwargs (compiler.py:2746). |
+| F-034 | S2 | Done | Y | Agent waffles, no terminal decision per email | cycle-4-summary | Runtime-enforced after V12 audit; no longer relies solely on prompt adherence. |
+| F-036 | S2 | Done | Y | Glob timeouts on **/<slug>.md fuzzy lookups (24.5% rate) | cycle-9-summary | Slug-shaped glob patterns blocked at middleware; reviewer subagent retains glob for grep-heavy review. |
+| F-037 | S2 | Done | Y | Reviewer emits merge_candidates but no merge tool exists | cycle-9-summary | Coordinator-driven queue; manual apply script; integrity fix in PR #234. |
+| F-038 | S2 | Done | Y | Observability scripts lag runtime architecture | cycle-8-summary-20260417 | Audit script aligned to current tool surface; V12 re-used it cleanly. |
+| F-039 | S2 | Done | Y | Scorecard effective-rate denominator underflow (160% bug) | cycle-9-summary | Fix shipped in v9-U2; scorecard caps denominator and skips when count is None. |
+| F-044 | S2 | Done | Y | Pages lack lead paragraph (Wikipedia-style 2-sentence opener) | cycle-10-smoke-30 | Validator warning + prompt teaching both shipped; warning-only by design to avoid blocking legacy pages. |
+| F-057 | S2 | Done | Y | Reviewer flags coherent alternative shapes as non-compliant (target wrong,  | topic-archetypes | Reviewer rule loosened to accept any coherent alternative shape. Forward-looking fix shipped. |
+| F-071 | S2 | Done | Y | Title Case wikilinks broke 210+ cross-references | phase0-bootstrap-incident | Lint normalizes drift; prompt + draft tool enforce kebab-case at write time. Both layers shipped. |
+| F-083 | S2 | Done | Y | Snippet field not surfaced in resolve_page response | qmd-phase0-spike | Snippet now passed through resolve_page envelope when semantic retriever fires. |
+| F-086 | S2 | Done | Y | Domain hubs unspecified — directory vs frontmatter conflict | north-star-reconciliation | Directory-route chosen over flag; hub generator coordinator-owned (matches CLAUDE.md doctrine). Hubs auto-regenerate per |
+| F-087 | S2 | Done | Y | Glossary missing — referenced in 4 docs, zero pages in corpus | audit-persona-newbie-2026 | Glossary delivered. Some entries have noisy expansions (e.g. 'AI' = 'GenUI Agent') — content quality is follow-up but pa |
+| F-082 | S2 | Won't-do | P | qmd weak on bare numbers / code identifiers / timestamps; keep grep complem | qmd-phase0-spike | Decision-class finding: keep grep complementary. No code fix expected; documented stance. |
+| F-085 | S2 | Won't-do | Y | navigation_role frontmatter specified but not enforced | north-star-reconciliation | Decision: cut. Documented rejection in NORTH-STAR; no validator code needed. |
+| F-088 | S2 | Won't-do | Y | Ownership-history / opinion-change sections unenforced | north-star-reconciliation | Decision: demote. NORTH-STAR explicitly rejects forced Ownership/opinion-change sections. Aligned with concept-page refr |
+| F-049 | S3 | Open | — | compiled-but-touches=0 log row is ambiguous (cited_prior not surfaced) | cycle-10-deep-audit | Coordinator records touches_inserted but not a cited_prior flag in batch summary. No PR explicitly addresses log-row UX  |
+| F-076 | S3 | Open | — | Scorer v2->v3 numeric delta mixes rubrics — direction solid, magnitude appr | v12-50-compile-deep-audit | Pre-V12 snapshot at .snapshots/pre-compile-20260423T102909Z/ exists; rescoring with v3 was deferred and remains outstand |
+| F-077 | S3 | Open | — | Wikipedia-style random-walk navigation unevaluated | v12-50-compile-deep-audit | Phase-2 eval-suite item; not built. Random-walk navigation north-star metric remains unmeasured. |
+| F-079 | S3 | Open | — | V12-U3 footnote utility unmeasured (cited vs used) | v12-50-compile-deep-audit | Judge persona rubric does not currently score footnote utility specifically; instrument or accept as won't-measure. |
+| F-080 | S3 | Open | — | Scorer-judge alignment path: judge as primary signal | v12-50-compile-deep-audit | Judge runs ad-hoc per-audit but no automated judge-on-top-decile after each compile; deferred. |
+| F-091 | S3 | Open | P | AgentMiddleware migration deferred — callback-only telemetry | north-star-reconciliation | New middleware uses LangChain AgentMiddleware pattern but the legacy hand-rolled batch hooks were never migrated. BACKLO |
+| F-048 | S3 | Partial | P | Legacy ## Sources body section + missing source_threads citations | deep-audit-10-pages | Validator surfaces legacy-sources-only as warning; strict mode exists but not the default. No explicit 'strip Sources H2 |
+| F-078 | S3 | Done | Y | Model pool quality differentiation underpowered | v12-50-compile-deep-audit | Head-to-head A/B script shipped post-audit; full evaluation runs are operational follow-up not gating. |
 
 ## Tracking + improvement loop
 
@@ -335,7 +335,7 @@ Each finding was verified against five independent channels; status is the **wor
 - Wiki state metrics (stub rate by directory, near-dup spot-checks, persona-finding spot-checks)
 - BACKLOG.md and CHANGELOG.md state
 
-The dedupe pass consolidated 136 raw findings (extracted from 25 canonical audits across 30 source docs) into 91 unique findings. Largest merges:
+The dedupe pass consolidated 136 raw findings (extracted from 29 distinct primary audits across 30 source docs) into 91 unique findings. Largest merges:
 - F-003 (5-way hallucination/factcheck symptoms)
 - F-010 (5-way schema-drift / v9-U1 misfit, escalated to S0)
 - F-024 (5-way resolve_page weakness)
