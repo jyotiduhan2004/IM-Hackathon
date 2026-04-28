@@ -2657,7 +2657,7 @@ def run_compilation(
     model_name: str | None = None,
     raw_dir: str = "raw",
     wiki_dir: str = "wiki",
-    recursion_limit: int = 150,
+    recursion_limit: int = 250,
     cache_stats: Any | None = None,
     tool_log: ToolCallLogHandler | None = None,
     run_name: str | None = None,
@@ -2667,10 +2667,18 @@ def run_compilation(
 ) -> dict[str, Any]:
     """Run a compilation pass. Returns the agent's final state.
 
-    recursion_limit of 150 accommodates ~3-10 emails per batch. Each email
-    typically takes 10-20 agent steps (read, classify, read existing pages,
-    write/edit pages, stamp timestamps, mark compiled). Bump higher if batches
-    hit the limit.
+    recursion_limit of 250 accommodates ~5 emails per batch with 2-page
+    multi-system writes + reviewer subagents. LangGraph counts every node
+    visit (model + ToolNode + each `after_model` middleware) as a super-
+    step, not a parent turn. Today there are 3 active middlewares
+    (TodoListMiddleware, CheckMyWorkGateMiddleware, terminal_decision_guard)
+    so each parent turn costs ~5 super-steps; reviewer subagents share the
+    parent's budget. Smoke run `99a267f4` (2026-04-28) trace audit found
+    legitimate 5-email batches with two reviewer rounds + one stale-date
+    re-loop costing ~180-220 super-steps even when the work itself was
+    clean. Lifting to 250 (was 150) gives headroom without rewarding
+    pathological loops — the existing `_check_my_work_cache` per-write-
+    epoch dedupe still catches genuine spirals.
 
     Pass a `CacheStatsCallback` as `cache_stats` to capture per-batch prompt-
     caching metrics (hit rate, cached tokens, total tokens). See

@@ -1836,10 +1836,14 @@ def _preview_dry_run(uncompiled: list[dict[str, str]], batch_size: int) -> None:
 @click.option(
     "--recursion-limit",
     type=int,
-    default=150,
+    default=250,
     help=(
-        "Max agent steps per batch. Lower it (e.g. 60) to fail fast on "
-        "pathological threads instead of burning budget up to 150 steps."
+        "Max LangGraph super-steps per batch (each parent turn costs ~5 "
+        "super-steps: model + ToolNode + 3 after_model middlewares). "
+        "Default 250 (was 150) per smoke-99a267f4 audit — covers legitimate "
+        "5-email batches with multi-page writes + reviewer subagents that "
+        "share the parent budget. Lower it (e.g. 60) to fail fast on "
+        "pathological threads."
     ),
 )
 @click.option(
