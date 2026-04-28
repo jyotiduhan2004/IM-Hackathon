@@ -1775,6 +1775,38 @@ def _prepare_model_pool(
     return pool
 
 
+def _refresh_pool_for_batch(
+    initial_pool: list[str],
+    unauthorized: set[str],
+    announced_quarantines: set[tuple[str, str]],
+    batch_idx: int,
+) -> list[str]:
+    """Re-filter run-start pool against fresh ``compile_attempts`` (#194).
+
+    Filter from ``initial_pool`` (not previously filtered ``pool``) so
+    quarantined models can recover mid-run. ``unauthorized`` carries 401/403
+    prunes. ``announced_quarantines`` dedupes the log line per (model, reason).
+    """
+    eligible = [m for m in initial_pool if m not in unauthorized]
+    if not eligible:
+        return []
+    pool, excluded = _healthy_pool(eligible)
+    # _healthy_pool fails open (returns full input + exclusion records) when
+    # filtering would empty the pool. Don't announce a model that's still in
+    # the returned set — that's a false alarm. Claude review on PR #252.
+    returned_set = set(pool)
+    for r in excluded:
+        if r["compile_model"] in returned_set:
+            continue
+        key = (r["compile_model"], r.get("reason", "quarantined"))
+        if key in announced_quarantines:
+            continue
+        announced_quarantines.add(key)
+        logger.info("mid_run_quarantine", model=key[0], reason=key[1], batch_idx=batch_idx, fail_rate=r.get("fail_rate"), total=r.get("total"), failed=r.get("failed"))
+        click.echo(f"  mid-run auto-exclusion: {key[0]} [{key[1]}] ({r.get('failed')}/{r.get('total')} failed) — batch {batch_idx}")
+    return pool
+
+
 def _preview_dry_run(uncompiled: list[dict[str, str]], batch_size: int) -> None:
     """Log what the batch loop WOULD do, without invoking the agent."""
     total = len(uncompiled)
@@ -1945,6 +1977,12 @@ def main(
     pool = _prepare_model_pool(
         pool, _fetch_available_models(), settings.litellm_base_url, resolved_model
     )
+    # Snapshot for per-batch _healthy_pool re-call (#194). 401/403 prunes
+    # carry cross-batch in `unauthorized`; quarantine log dedupes per (model,
+    # reason).
+    initial_pool: list[str] = list(pool)
+    unauthorized: set[str] = set()
+    announced_quarantines: set[tuple[str, str]] = set()
 
     # Recover orphan claims from prior crashed runs (dispatcher's list helpers
     # only see pending/failed; claims invisible without this flip).
@@ -2075,6 +2113,13 @@ def main(
                 f"Files to compile:\n{batch_files}"
             )
 
+            # Re-filter pool per batch so mid-run fail-rate crossings quarantine
+            # on the next batch (#194); run-start alone missed kimi-k2.6 burning
+            # 60/106 attempts in run 02c9d536.
+            if initial_pool:
+                pool = _refresh_pool_for_batch(
+                    initial_pool, unauthorized, announced_quarantines, batch_idx
+                )
             batch_model = random.choice(pool) if pool else resolved_model
             click.echo(
                 f"\n=== Batch {batch_idx}/{len(groups)} "
@@ -2164,9 +2209,9 @@ def main(
                             error=str(exc)[:500],
                         )
                         _flush_tool_calls(run_id, tool_cb)
-                        # Propagate the prune to subsequent batches too:
-                        # if this team key can't access the model now, no
-                        # other batch in this run will either.
+                        # 401/403 won't recover this run; subtract from the
+                        # per-batch _healthy_pool re-filter too (initial_pool).
+                        unauthorized.add(batch_model)
                         pool[:] = eligible
                         batch_model = random.choice(eligible)
                         cache_cb = BatchStatsCallback(model=batch_model)
