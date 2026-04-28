@@ -202,12 +202,16 @@ def test_mkdocs_excludes_drafts_from_build(tmp_path: Path) -> None:
     assert not (site / "_drafts").exists(), "_drafts directory present in build"
 
 
-def test_prompt_explains_when_to_write_a_draft() -> None:
-    """Tier A wholesale-rewrote the prompt — the standalone `## When to
-    write a draft` heading is gone, but the off-ramp guidance still needs
-    to be there. Assert the tool name, a "draft" cue in the workflow, and
-    one of the few-shot examples that demonstrates the idiom."""
-    assert "write_draft_page" in COMPILER_SYSTEM_PROMPT
-    assert "_drafts" in COMPILER_SYSTEM_PROMPT
-    # Few-shot example #4 is the canonical "draft when uncertain" demo.
-    assert "Draft when uncertain" in COMPILER_SYSTEM_PROMPT
+def test_prompt_does_not_mention_write_draft_page() -> None:
+    """PR1 dedupe + capability sweep: `write_draft_page` had 0 calls in
+    100+ traces; its prompt mentions (workflow step, Example 4 demo)
+    were removed in PR1 per Q10.4 in
+    docs/audits/prompt-review-decisions-2026-04-28.md. The tool's
+    Python code remains registered (full deletion deferred to Phase 2
+    after PR2 confirms zero regressions in fresh traces) but the
+    prompt no longer steers the agent toward it.
+
+    This is the inverse of the original assertion — the off-ramp
+    guidance was intentionally cut, not lost in a refactor."""
+    assert "write_draft_page" not in COMPILER_SYSTEM_PROMPT
+    assert "Draft when uncertain" not in COMPILER_SYSTEM_PROMPT

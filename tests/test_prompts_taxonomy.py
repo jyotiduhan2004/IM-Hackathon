@@ -93,8 +93,10 @@ def test_decision_guidance_lives_in_workflow() -> None:
     assert "do not close the loop" in lowered or "do not satisfy" in lowered
     # Waffle anti-pattern named.
     assert "waffle" in lowered
-    # message_touched_pages bookkeeping carve-out.
-    assert "message_touched_pages" in block
+    # The "leave evidence" carve-out is still present (per CC-A, the
+    # internal `message_touched_pages` catalog name was rephrased to
+    # passive automatic framing; the rule itself stays).
+    assert "leave evidence" in lowered
 
 
 def test_workflow_prompt_under_budget() -> None:
@@ -286,11 +288,13 @@ def test_no_per_message_raw_paths_in_frontmatter_template() -> None:
 
 def test_already_captured_outcome_taught() -> None:
     """Phase A U3: `already_captured` is a no-op outcome distinct from
-    `trivial_skip`. The decision tree must name the catalog so the agent
-    understands why forcing an edit "for evidence" is wrong."""
+    `trivial_skip`. The decision tree must teach why forcing an edit
+    "for evidence" is wrong (PR1 CC-A dropped the internal
+    `message_touched_pages` catalog name; the rule itself stays in
+    passive-automatic framing)."""
     assert "already_captured" in COMPILER_SYSTEM_PROMPT
     assert "trivial_skip" in COMPILER_SYSTEM_PROMPT
-    assert "message_touched_pages" in COMPILER_SYSTEM_PROMPT
+    assert "leave evidence" in COMPILER_SYSTEM_PROMPT.lower()
 
 
 def test_already_captured_trigger_conditions_spelled_out() -> None:
@@ -483,10 +487,18 @@ def test_wikilink_recovery_example_present() -> None:
     """Cycle 4 Bug E: the few-shots must model the recovery flow end-to-
     end (write_file → reviewer blocks → create_entities → retry review).
     Without a worked example the guidance is abstract and the model
-    defaults to its priors (bail)."""
-    assert "Example 9" in COMPILER_SYSTEM_PROMPT
-    start = COMPILER_SYSTEM_PROMPT.find("### Example 9")
-    end = COMPILER_SYSTEM_PROMPT.find("</few_shots>", start)
+    defaults to its priors (bail).
+
+    PR1 renumbered the few-shots after dropping the deprecated
+    `write_draft_page` example — the broken-wikilink recovery is now
+    Example 8 (was Example 9). Find by title rather than number so a
+    future renumber doesn't silently regress."""
+    title = "### Example 8 — Blocked by broken wikilink"
+    assert title in COMPILER_SYSTEM_PROMPT
+    start = COMPILER_SYSTEM_PROMPT.find(title)
+    end = COMPILER_SYSTEM_PROMPT.find("### Example 9", start)
+    if end == -1:
+        end = COMPILER_SYSTEM_PROMPT.find("</few_shots>", start)
     example = COMPILER_SYSTEM_PROMPT[start:end]
     # The worked flow must show the block, the recovery, and the retry.
     assert "broken-wikilink" in example or "broken wikilink" in example
@@ -695,9 +707,14 @@ def test_concept_vs_thread_section_present() -> None:
     teaching the reframe — page is a CONCEPT, emails are EVIDENCE.
     Without this section the agent falls back to email-summarization
     priors and the Summary line reads like a thread intro. The section
-    must name both the concept/evidence split and the anti-pattern
-    (thread-subject H2s, strikethrough) concretely — abstract rules
-    without examples don't survive first contact with real batches."""
+    must name both the concept/evidence split and the thread-subject
+    H2 anti-pattern concretely — abstract rules without examples don't
+    survive first contact with real batches.
+
+    PR1 dedupe removed the in-section "Never use strikethrough"
+    bullet (it was a duplicate of the canonical teaching in
+    `<revision_style>`); the strikethrough ban is now asserted by
+    `test_revision_style_bans_strikethrough_literally` only."""
     assert "<concept_vs_thread>" in COMPILER_SYSTEM_PROMPT
     assert "</concept_vs_thread>" in COMPILER_SYSTEM_PROMPT
     start = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
@@ -707,24 +724,21 @@ def test_concept_vs_thread_section_present() -> None:
     assert "CONCEPT" in block and "EVIDENCE" in block
     # Anti-pattern named by example so the model recognizes it.
     assert "Launch Announcement" in block or "Final Decision" in block
-    # Collapsible-archive preference (not strikethrough) is called out.
-    lowered = block.lower()
-    assert "strikethrough" in lowered
-    assert "<details>" in block or "collapsible" in lowered
     # Worked good/bad example grounds the rule.
     assert "GOOD" in block and "BAD" in block
 
 
-def test_concept_vs_thread_precedes_workflow() -> None:
-    """v12-U1: `<concept_vs_thread>` must load before `<workflow>` so
-    the reframe primes the agent before it reads the per-step workflow
-    ladder. Section order matters for how the model weights guidance."""
+def test_concept_vs_thread_follows_workflow() -> None:
+    """PR1 (Q0.2 mechanics-first reorg): `<workflow>` now loads BEFORE
+    the philosophy block. The agent reads role + tools + decision
+    contract first, then the CONCEPT/EVIDENCE reframe. Section order
+    matters for how the model weights guidance — this test guards the
+    new direction."""
     concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
     workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
     assert concept_idx != -1 and workflow_idx != -1
-    assert concept_idx < workflow_idx, (
-        "<concept_vs_thread> must precede <workflow> so the CONCEPT vs "
-        "EVIDENCE reframe is loaded before the workflow steps"
+    assert workflow_idx < concept_idx, (
+        "<workflow> must precede <concept_vs_thread> in the mechanics-first ordering picked in Q0.2"
     )
 
 
@@ -782,10 +796,14 @@ def test_per_batch_instruction_drops_old_framing() -> None:
 def test_expert_questions_section_present() -> None:
     """v12-U2: the prompt must carry an `<expert_questions>` section
     teaching the 5W coverage checklist (WHAT / WHY / HOW / WHO / WHEN
-    / WHERE) plus IndiaMart-flavored per-domain add-ons. Without this
-    section the agent summarises evidence but doesn't check whether
-    the page would answer the questions an expert PM or new-joiner
-    asks on first read."""
+    / WHERE). Without this section the agent summarises evidence but
+    doesn't check whether the page would answer the questions an expert
+    PM or new-joiner asks on first read.
+
+    PR1 dedupe removed the per-domain "Flavor varies by domain" sub-
+    list — it was a duplicate of the canonical 8-domain inventory in
+    `<domain_frontmatter>`. Domain coverage is now asserted by
+    `test_domain_frontmatter_block_present` only."""
     assert "<expert_questions>" in COMPILER_SYSTEM_PROMPT
     assert "</expert_questions>" in COMPILER_SYSTEM_PROMPT
     start = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
@@ -795,27 +813,21 @@ def test_expert_questions_section_present() -> None:
     assert "5W" in block
     for w in ("WHAT", "WHY", "HOW", "WHO", "WHEN", "WHERE"):
         assert w in block, f"expert_questions block must name {w}"
-    # Domain-flavor add-ons named so the agent knows the floor is 5W
-    # and the ceiling varies by domain.
-    for domain_flavor in ("Platform-reliability", "Growth / Monetization", "Trust / Safety"):
-        assert domain_flavor in block, (
-            f"expert_questions block must name domain flavor {domain_flavor!r}"
-        )
 
 
-def test_expert_questions_between_concept_and_workflow() -> None:
-    """v12-U2: `<expert_questions>` must load AFTER `<concept_vs_thread>`
-    (so the concept reframe primes the question checklist) and BEFORE
-    `<workflow>` (so the agent has the questions in hand before it
-    walks the per-step ladder). Section order matters for how the
-    model weights guidance."""
+def test_expert_questions_follows_concept_vs_thread() -> None:
+    """PR1 (Q0.2 mechanics-first reorg): the philosophy chain
+    `<concept_vs_thread>` → `<expert_questions>` now lives AFTER
+    `<workflow>` rather than priming it. The pair-ordering inside the
+    philosophy chain is preserved — concept reframe still primes the
+    5W checklist."""
     concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
     expert_idx = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
     workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
     assert concept_idx != -1 and expert_idx != -1 and workflow_idx != -1
-    assert concept_idx < expert_idx < workflow_idx, (
-        "<expert_questions> must appear after <concept_vs_thread> and "
-        "before <workflow> so the 5W checklist primes the workflow"
+    assert workflow_idx < concept_idx < expert_idx, (
+        "<workflow> must precede the philosophy chain "
+        "<concept_vs_thread> → <expert_questions> per Q0.2"
     )
 
 
@@ -911,21 +923,18 @@ def test_revision_style_section_present() -> None:
     assert "GOOD" in block and "BAD" in block
 
 
-def test_revision_style_between_concept_and_workflow() -> None:
-    """v12-U4: `<revision_style>` must load AFTER `<concept_vs_thread>`
-    (so the concept/evidence reframe primes the agent first) and
-    BEFORE `<workflow>` (so the revision discipline is loaded before
-    the per-batch step ladder runs). Claude review on PR #219 caught
-    that the original test only checked the lower bound, matching the
-    two-bound pattern used by `test_expert_questions_between_concept_and_workflow`."""
+def test_revision_style_follows_concept_vs_thread() -> None:
+    """PR1 (Q0.2 mechanics-first reorg): `<workflow>` precedes the
+    philosophy chain. `<revision_style>` loads AFTER
+    `<concept_vs_thread>` so the concept/evidence reframe primes the
+    revision discipline; the whole chain follows `<workflow>`."""
     concept_idx = COMPILER_SYSTEM_PROMPT.find("<concept_vs_thread>")
     revision_idx = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
     workflow_idx = COMPILER_SYSTEM_PROMPT.find("<workflow>")
     assert concept_idx != -1 and revision_idx != -1 and workflow_idx != -1
-    assert concept_idx < revision_idx < workflow_idx, (
-        "<revision_style> must load after <concept_vs_thread> and "
-        "before <workflow> so the CONCEPT/EVIDENCE reframe primes it "
-        "and the revision discipline is loaded before the per-batch steps"
+    assert workflow_idx < concept_idx < revision_idx, (
+        "<workflow> must precede <concept_vs_thread> → "
+        "<revision_style> per Q0.2 mechanics-first ordering"
     )
 
 
