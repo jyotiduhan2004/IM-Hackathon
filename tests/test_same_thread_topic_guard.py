@@ -25,10 +25,10 @@ import psycopg
 import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from src.compile.compiler import _current_batch_thread_id
-from src.compile.compiler import _current_batch_topic_slugs_written
-from src.compile.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
-from src.compile.middleware.same_thread_topic_guard import _extract_topic_slug
+from src.agent.middleware.same_thread_topic_guard import SameThreadTopicGuardMiddleware
+from src.agent.middleware.same_thread_topic_guard import _extract_topic_slug
+from src.agent.run_state import _current_batch_thread_id
+from src.agent.run_state import _current_batch_topic_slugs_written
 
 _THREAD_ID = "T-thread-abc"
 _EXISTING_SLUG = "seller-bl-api-optimization"

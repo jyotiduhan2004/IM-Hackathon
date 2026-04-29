@@ -144,7 +144,7 @@ def test_run_compilation_aborts_when_batch_raw_file_missing(
     mount). We must fail fast with a FileNotFoundError BEFORE the agent
     burns an LLM call.
     """
-    from src.compile import compiler as compiler_mod
+    from src.agent import compiler_agent as compiler_mod
 
     raw_dir = tmp_path / "raw"
     wiki_dir = tmp_path / "wiki"
@@ -181,7 +181,7 @@ def test_run_compilation_does_not_trip_on_empty_raw_paths(
     free-form queries from operator scripts). The guard must fire only
     when the caller explicitly asked for specific raw paths.
     """
-    from src.compile import compiler as compiler_mod
+    from src.agent import compiler_agent as compiler_mod
 
     raw_dir = tmp_path / "raw"
     wiki_dir = tmp_path / "wiki"
@@ -224,7 +224,7 @@ def test_run_compilation_aborts_when_view_root_missing_expected_paths(
     ``_build_compile_view`` to return an unrelated tempdir while the
     batch raw_paths live elsewhere.
     """
-    from src.compile import compiler as compiler_mod
+    from src.agent import compiler_agent as compiler_mod
 
     raw_dir = tmp_path / "real-raw"
     wiki_dir = tmp_path / "real-wiki"
@@ -260,7 +260,7 @@ def test_run_compilation_injects_mount_metadata_into_trace(
     infra-vs-synthesis distinction. Verifies defaults are emitted even
     when the caller provides a small ``trace_metadata`` dict.
     """
-    from src.compile import compiler as compiler_mod
+    from src.agent import compiler_agent as compiler_mod
 
     raw_dir = tmp_path / "raw"
     wiki_dir = tmp_path / "wiki"

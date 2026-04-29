@@ -87,13 +87,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.entities import email_to_slug  # noqa: E402
-from src.compile.entities import is_external_email  # noqa: E402
-from src.compile.entities import is_valid_email  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
+from src.wiki.entities import email_to_slug  # noqa: E402
+from src.wiki.entities import is_external_email  # noqa: E402
+from src.wiki.entities import is_valid_email  # noqa: E402
 
 WIKI = REPO_ROOT / "wiki"
 PEOPLE = WIKI / "people"

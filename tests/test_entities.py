@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from src.compile import entities as entities_module
-from src.compile.entities import create_entity_page
-from src.compile.entities import create_entity_pages
-from src.compile.entities import email_to_slug
-from src.compile.entities import find_entity_by_email
-from src.compile.entities import is_external_email
-from src.compile.entities import is_valid_email
+from src.wiki import entities as entities_module
+from src.wiki.entities import create_entity_page
+from src.wiki.entities import create_entity_pages
+from src.wiki.entities import email_to_slug
+from src.wiki.entities import find_entity_by_email
+from src.wiki.entities import is_external_email
+from src.wiki.entities import is_valid_email
 
 
 # By default, assume emails have NO participants catalog entries — that's
@@ -451,7 +451,7 @@ class TestCreateEntityPagesBatch:
         import importlib
 
         import psycopg
-        from src.compile import entities as entities_module
+        from src.wiki import entities as entities_module
 
         def boom(_email: str) -> dict[str, int]:
             raise psycopg.OperationalError("connection lost")

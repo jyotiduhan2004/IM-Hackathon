@@ -230,7 +230,7 @@ def _slugify(text: str) -> str:
 # the slug is derived from the canonical email address.
 #
 # Broken wikilinks are still surfaced — see `check_broken_wikilinks` (here)
-# and the reviewer's `broken_wikilink` rule (src/compile/reviewer.py). The
+# and the reviewer's `broken_wikilink` rule (src/agent/reviewer.py). The
 # agent can respond by calling `create_entities()` with the proper email,
 # rewriting the wikilink, or dropping it.
 

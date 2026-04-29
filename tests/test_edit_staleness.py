@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.edit_staleness import EditStalenessMiddleware
-from src.compile.middleware.edit_staleness import _is_staleness_error
+from src.agent.middleware.edit_staleness import EditStalenessMiddleware
+from src.agent.middleware.edit_staleness import _is_staleness_error
 
 # ---------------------------------------------------------------------------
 # Pure helpers

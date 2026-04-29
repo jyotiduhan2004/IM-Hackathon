@@ -1,4 +1,4 @@
-"""Merge `foo-new.md` / `foo-v2.md` variants back into canonical `foo.md`.
+r"""Merge `foo-new.md` / `foo-v2.md` variants back into canonical `foo.md`.
 
 Heuristic: the richer body (more sources + longer content) wins. Frontmatter
 fields are union-merged. Wikilinks in other pages get rewritten from
@@ -166,9 +166,7 @@ def main(dry_run: bool) -> None:
                 )
                 variant_path.unlink()
 
-            rewrites = _rewrite_wikilinks(
-                wiki_dir, variant_path.stem, base_stem, dry_run=dry_run
-            )
+            rewrites = _rewrite_wikilinks(wiki_dir, variant_path.stem, base_stem, dry_run=dry_run)
             click.echo(f"    rewrote {rewrites} incoming wikilinks")
             merged += 1
 

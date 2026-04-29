@@ -244,7 +244,7 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS compile_model TEXT;
 -- BatchStatsCallback only aggregates tool-call COUNT. This table records one
 -- row per tool invocation so we can answer "which tool is slowest / most
 -- error-prone / called most often" per run. Written from
--- `src/compile/tool_call_log.py` after every batch; JSONL fallback under
+-- `src/observability/tool_call_log.py` after every batch; JSONL fallback under
 -- `docs/audits/` when the DB is unreachable.
 -- ---------------------------------------------------------------------------
 
@@ -272,7 +272,7 @@ CREATE INDEX IF NOT EXISTS compile_tool_calls_tool_started_idx
 -- compile_insights — structured meta-observations emitted by the agent
 -- during a compile run. The agent has no other channel to say "this is
 -- ambiguous" or "two pages look like they should merge"; this table is
--- that channel. See `src/compile/compiler.py::log_insight`.
+-- that channel. See `src/agent/tools/insights.py::log_insight`.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS compile_insights (

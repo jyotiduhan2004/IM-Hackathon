@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from src.compile import compiler as compiler_mod
+from src.agent import compiler_agent as compiler_mod
 
 
 def test_get_langfuse_handler_enables_trace_updates(monkeypatch: Any) -> None:

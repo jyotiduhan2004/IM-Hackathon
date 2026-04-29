@@ -513,7 +513,7 @@ def _first_paragraph(body: str) -> str:
 def _slug_only(target: str) -> str:
     """Strip any ``page-type/`` prefix from a wikilink target.
 
-    Mirrors ``src.compile.critique`` / ``compiler`` / ``legacy_page_hint`` —
+    Mirrors ``src.agent.critique`` / ``compiler`` / ``legacy_page_hint`` —
     they all reach for ``rsplit("/", 1)[-1]`` on wikilink slugs.
     """
     return target.rsplit("/", 1)[-1]

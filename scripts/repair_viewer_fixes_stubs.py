@@ -6,7 +6,7 @@ Problem (found in the post-sweep audit):
   "Aditya Chaudhary01" with the numeric email-prefix bleeding into the
   display name).
 - `is_external` was missing, breaking the canonical schema in
-  `src/compile/entities.py::_stub_markdown`.
+  `src/wiki/entities.py::_stub_markdown`.
 - DB `wiki_pages` row wasn't upserted, so the catalog doesn't know these
   pages exist.
 
@@ -47,7 +47,7 @@ MISCATEGORIZED_PERSON_SYSTEMS = ("alok-kumar2", "deepak-yadav01")
 
 
 def slug_to_email(slug: str) -> str:
-    """Best-effort inverse of `src/compile/entities.py::email_to_slug`.
+    """Best-effort inverse of `src/wiki/entities.py::email_to_slug`.
 
     `abhinay-kumar1-indiamart-com` → `abhinay.kumar1@indiamart.com`.
     Plain slugs (no `-indiamart-com` suffix) are assumed internal — we
@@ -71,7 +71,7 @@ def slug_to_email(slug: str) -> str:
 
 
 def canonical_stub_markdown(slug: str, *, now_iso: str) -> str:
-    """Render the stub content, matching `src/compile/entities.py::_stub_markdown`
+    """Render the stub content, matching `src/wiki/entities.py::_stub_markdown`
     plus the timestamp/updater fields the coordinator stamps post-compile.
     """
     email = slug_to_email(slug)
@@ -87,9 +87,7 @@ def canonical_stub_markdown(slug: str, *, now_iso: str) -> str:
         "updated_by": "viewer-fixes-stub-sweep",
         "update_count": 1,
     }
-    yaml_block = yaml.safe_dump(
-        fm, sort_keys=False, allow_unicode=True, width=120
-    ).rstrip()
+    yaml_block = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=120).rstrip()
     body = (
         f"Email: {email}\n"
         "\n"

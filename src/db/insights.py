@@ -1,6 +1,6 @@
 """Repository for compile_insights — agent meta-observations.
 
-One row per call to `src/compile/compiler.py::log_insight`. Gives the agent
+One row per call to `src/agent/tools/insights.py::log_insight`. Gives the agent
 a channel to flag ambiguity, supersession doubts, structural suggestions,
 etc. for later human review. `scripts/compile_all.py` surfaces the
 top-N at batch-end in `wiki/log.md`.

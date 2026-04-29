@@ -6,8 +6,8 @@ from typing import cast
 
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
-from src.compile.middleware.entity_write_autoheal import _is_entity_write
+from src.agent.middleware.entity_write_autoheal import EntityWriteAutohealMiddleware
+from src.agent.middleware.entity_write_autoheal import _is_entity_write
 
 # ---------------------------------------------------------------------------
 # _is_entity_write — pure detection

@@ -1,14 +1,14 @@
-"""Tests for src.compile.critique — pre-mark_as_compiled quality gate."""
+"""Tests for src.agent.critique — pre-mark_as_compiled quality gate."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from src.compile.critique import CritiqueResult
-from src.compile.critique import critique_pages
-from src.compile.critique import find_touched_pages
-from src.compile.critique import write_audit
+from src.agent.critique import CritiqueResult
+from src.agent.critique import critique_pages
+from src.agent.critique import find_touched_pages
+from src.agent.critique import write_audit
 
 
 def _write_page(path: Path, title: str, sources: list[str], body: str) -> None:
@@ -128,7 +128,7 @@ def test_write_audit_creates_iso_dated_file(tmp_path: Path) -> None:
 
 
 def test_write_audit_includes_blockers_and_ack(tmp_path: Path) -> None:
-    from src.compile.critique import Issue
+    from src.agent.critique import Issue
 
     audit_dir = tmp_path / "docs" / "audits"
     issues = [

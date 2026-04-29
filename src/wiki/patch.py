@@ -1,6 +1,6 @@
 """Section-aware markdown mutation helpers.
 
-Supporting module for `patch_page` in `src.compile.compiler`. Keeping the
+Supporting module for `patch_page` in `src.agent.tools.pages`. Keeping the
 text-munging algorithm isolated from the @tool wrapper so it's trivial to
 unit-test without touching the filesystem.
 

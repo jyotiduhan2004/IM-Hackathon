@@ -136,7 +136,7 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
             return None
 
         # Import inside the function to avoid a circular import at module load.
-        from src.compile.compiler import _current_batch_sibling_slugs_written
+        from src.agent.run_state import _current_batch_sibling_slugs_written
 
         prior_slugs = _current_batch_sibling_slugs_written.get()
         if not prior_slugs:
@@ -201,7 +201,7 @@ class SiblingDraftCheckMiddleware(AgentMiddleware):
             return
         if not isinstance(result, ToolMessage) or result.status == "error":
             return
-        from src.compile.compiler import _current_batch_sibling_slugs_written
+        from src.agent.run_state import _current_batch_sibling_slugs_written
 
         slugs = _current_batch_sibling_slugs_written.get()
         if slugs is None:

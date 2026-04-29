@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from src.compile import compiler as compiler_mod
-from src.compile.patch import replace_section
+from src.agent import compiler_agent as compiler_mod
 from src.db import messages as messages_repo
+from src.wiki.patch import replace_section
 
 
 def _invoke(tool: Any, **kwargs: Any) -> dict[str, Any]:

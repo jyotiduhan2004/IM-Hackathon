@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.edit_payload_sanity import MAX_PAYLOAD_BYTES
-from src.compile.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
-from src.compile.middleware.edit_payload_sanity import _extract_content
-from src.compile.middleware.edit_payload_sanity import _maybe_reject
+from src.agent.middleware.edit_payload_sanity import MAX_PAYLOAD_BYTES
+from src.agent.middleware.edit_payload_sanity import EditPayloadSanityMiddleware
+from src.agent.middleware.edit_payload_sanity import _extract_content
+from src.agent.middleware.edit_payload_sanity import _maybe_reject
 
 # ---------------------------------------------------------------------------
 # Pure helpers

@@ -192,11 +192,10 @@ def _section_entity_shapes(buf: StringIO) -> None:
     """Track entity-slug migration progress (email-canonical vs legacy)."""
     buf.write("## Entities by slug shape\n\n")
     try:
-        from src.compile.entities import email_to_slug
+        from src.wiki.entities import email_to_slug
     except ImportError:
         buf.write(
-            "_Skipped: `src.compile.entities.email_to_slug` not importable — "
-            "W0 not merged yet._\n\n"
+            "_Skipped: `src.wiki.entities.email_to_slug` not importable — W0 not merged yet._\n\n"
         )
         return
     entities_dir = settings.wiki_dir / "entities"
@@ -224,10 +223,7 @@ def _section_compile_runs(buf: StringIO) -> None:
                 "SELECT 1 FROM pg_tables WHERE tablename = 'compile_runs' LIMIT 1"
             ).fetchone()
             if not gate:
-                buf.write(
-                    "_Skipped: `compile_runs` table does not exist — "
-                    "W3 not merged yet._\n\n"
-                )
+                buf.write("_Skipped: `compile_runs` table does not exist — W3 not merged yet._\n\n")
                 return
             rows = conn.execute(
                 """
@@ -255,9 +251,7 @@ def _section_compile_runs(buf: StringIO) -> None:
         cents = r["cost_cents"]
         cost_s = f"${cents / 100:.2f}" if cents is not None else "-"
         notes = (r["notes"] or "").replace("\n", " ").replace("|", "\\|")
-        buf.write(
-            f"| {started_s} | {status} | {processed} | {failed} | {cost_s} | {notes} |\n"
-        )
+        buf.write(f"| {started_s} | {status} | {processed} | {failed} | {cost_s} | {notes} |\n")
     buf.write("\n")
 
 

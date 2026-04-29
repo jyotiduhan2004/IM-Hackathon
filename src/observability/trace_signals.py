@@ -68,7 +68,7 @@ TODOS_EARLY_WINDOW: int = 3
 # an existing topic page" (already_captured). The audit metric
 # denominator excludes these so correct skips don't look like synthesis
 # failures. Kept in sync with `_VALID_INSIGHT_CATEGORIES` in
-# `src/compile/compiler.py`.
+# `src/agent/tools/insights.py`.
 NOOP_INSIGHT_CATEGORIES: tuple[str, ...] = ("trivial_skip", "already_captured")
 
 
@@ -214,7 +214,7 @@ def is_glob_timeout(output_str: str) -> bool:
 def extract_reviewer_merge_count(output_str: str) -> int:
     """Return len(merge_candidates) from a reviewer AGENT observation's output.
 
-    The reviewer subagent (``src/compile/reviewer.py``) returns a
+    The reviewer subagent (``src/agent/reviewer.py``) returns a
     ``ReviewReport`` with a ``merge_candidates: list[str]`` field. The
     final AI message in the subagent's trace carries the serialized
     report — either as the whole message body or appended after prose

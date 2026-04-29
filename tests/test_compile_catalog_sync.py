@@ -190,7 +190,7 @@ def test_sync_does_not_cascade_on_bad_row(
             return 0
         return real_upsert(conn, slug=slug, **kw)
 
-    monkeypatch.setattr(compile_all, "upsert_wiki_page", flaky_upsert)
+    monkeypatch.setattr("src.coordinator.post_batch.upsert_wiki_page", flaky_upsert)
 
     synced = compile_all._sync_wiki_catalog([good_a, bad, good_b], wiki)
 

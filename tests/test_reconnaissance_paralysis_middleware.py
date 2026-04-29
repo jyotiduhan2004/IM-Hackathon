@@ -1,12 +1,12 @@
-"""Unit tests for src/compile/middleware/reconnaissance_paralysis.py."""
+"""Unit tests for src/agent/middleware/reconnaissance_paralysis.py."""
 
 from __future__ import annotations
 
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.reconnaissance_paralysis import RECONNAISSANCE_NUDGE_MESSAGE
-from src.compile.middleware.reconnaissance_paralysis import ReconnaissanceParalysisMiddleware
+from src.agent.middleware.reconnaissance_paralysis import RECONNAISSANCE_NUDGE_MESSAGE
+from src.agent.middleware.reconnaissance_paralysis import ReconnaissanceParalysisMiddleware
 
 NUDGE_TAG = "[reconnaissance_paralysis]"
 THRESHOLD = ReconnaissanceParalysisMiddleware.READ_THRESHOLD

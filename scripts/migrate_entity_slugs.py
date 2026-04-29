@@ -49,13 +49,13 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.entities import email_to_slug  # noqa: E402
-from src.compile.entities import is_external_email  # noqa: E402
-from src.compile.entities import is_valid_email  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
+from src.wiki.entities import email_to_slug  # noqa: E402
+from src.wiki.entities import is_external_email  # noqa: E402
+from src.wiki.entities import is_valid_email  # noqa: E402
 
 CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 BODY_EMAIL_RE = re.compile(
@@ -122,9 +122,7 @@ def _normalize_frontmatter(page: Path, email: str, *, dry_run: bool) -> bool:
     body = extract_body(content)
 
     expected_external = is_external_email(email)
-    needs_update = (
-        fm.get("email") != email or fm.get("is_external") != expected_external
-    )
+    needs_update = fm.get("email") != email or fm.get("is_external") != expected_external
     if not needs_update:
         return False
     fm["email"] = email
@@ -136,9 +134,7 @@ def _normalize_frontmatter(page: Path, email: str, *, dry_run: bool) -> bool:
 
 @click.command()
 @click.option("--dry-run", is_flag=True, help="Preview only. No writes.")
-@click.option(
-    "--limit", type=int, default=20, help="Max migrations per run (default 20)"
-)
+@click.option("--limit", type=int, default=20, help="Max migrations per run (default 20)")
 @click.option(
     "--only-missing-fm",
     is_flag=True,
@@ -201,9 +197,7 @@ def main(dry_run: bool, limit: int, only_missing_fm: bool) -> None:
     total_rewrites = 0
     for page, target, email in batch:
         click.echo(f"  {page.name} → {target.name} (email={email})")
-        rewrites = _rewrite_wikilinks(
-            settings.wiki_dir, page.stem, target.stem, dry_run=dry_run
-        )
+        rewrites = _rewrite_wikilinks(settings.wiki_dir, page.stem, target.stem, dry_run=dry_run)
         click.echo(f"    rewrites pending: {rewrites}")
         if not dry_run:
             page.rename(target)

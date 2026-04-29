@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.compile.prompts import COMPILER_SYSTEM_PROMPT
+from src.agent.prompts import COMPILER_SYSTEM_PROMPT
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPILE_ALL_SRC = (_REPO_ROOT / "scripts" / "compile_all.py").read_text(encoding="utf-8")
@@ -232,7 +232,7 @@ def test_forbidden_tools_not_mentioned() -> None:
 def test_dead_constants_removed() -> None:
     """Phase A U3: CLASSIFY_EMAIL_PROMPT and SUPERSESSION_DETECTION_PROMPT
     were dead code — imported nowhere. They must not come back."""
-    from src.compile import prompts as prompts_module
+    from src.agent import prompts as prompts_module
 
     assert not hasattr(prompts_module, "CLASSIFY_EMAIL_PROMPT")
     assert not hasattr(prompts_module, "SUPERSESSION_DETECTION_PROMPT")
@@ -668,16 +668,16 @@ def test_example_1_exhibits_required_shape() -> None:
 
 def test_prompt_domain_list_matches_compiler() -> None:
     """v9-U1: the prompt lists 8 canonical domains in <domain_frontmatter>.
-    The source of truth for domain slugs is `src.compile.compiler._DOMAINS`;
+    The source of truth for domain slugs is `src.wiki.domains._DOMAINS`;
     if someone adds or renames a domain there without updating the prompt,
     the agent's world-model drifts from the validator's world-model.
     Pin the invariant."""
-    from src.compile.compiler import _DOMAIN_BY_SLUG
+    from src.wiki.domains import _DOMAIN_BY_SLUG
 
     for slug in _DOMAIN_BY_SLUG:
         assert slug in COMPILER_SYSTEM_PROMPT, (
             f"domain slug {slug!r} missing from prompt — keep prompt "
-            "in sync with src.compile.compiler._DOMAINS"
+            "in sync with src.wiki.domains._DOMAINS"
         )
 
 
@@ -688,15 +688,18 @@ def test_prompt_topic_sections_match_validator() -> None:
     pages the agent thinks are valid but the validator flags as
     missing. Both were updated together in PR2 — the floor dropped
     `Summary`, `Key decisions`, `References`, and renamed
-    `Related pages` → `Related`."""
-    from src.compile.section_shapes import SUGGESTED_SECTIONS
+    `Related pages` → `Related`.
+
+    v11-U7: dict was renamed REQUIRED_SECTIONS → SUGGESTED_SECTIONS
+    and now lives in `src.wiki.sections`."""
+    from src.wiki.sections import SUGGESTED_SECTIONS
 
     for section in SUGGESTED_SECTIONS["topic"]:
         heading = f"## {section}"
         assert heading in COMPILER_SYSTEM_PROMPT, (
             f"validator suggests {heading!r} on topic pages but prompt "
             "doesn't teach it — keep prompt in sync with "
-            "src.compile.section_shapes.SUGGESTED_SECTIONS"
+            "src.wiki.sections.SUGGESTED_SECTIONS"
         )
 
 
@@ -807,7 +810,7 @@ def test_expert_questions_section_present() -> None:
     `<expert_questions>` was reframed per-archetype (launch / bug /
     policy / decision / system) instead of per-domain, and the depth-
     teaching 5W block moved to the reviewer prompt
-    (`src/compile/reviewer.py`). The compiler-side block keeps a
+    (`src/agent/reviewer.py`). The compiler-side block keeps a
     5-line `## Why it matters` pointer so depth doesn't structurally
     collapse on the writer.
 
@@ -831,7 +834,7 @@ def test_reviewer_carries_5w_coverage_rubric() -> None:
     """PR2 (Q16.6): the depth-teaching 5W block moved to the reviewer
     prompt. Without this assertion, the compiler-side test cut would
     silently drop the rubric across both surfaces."""
-    from src.compile.reviewer import REVIEWER_SYSTEM_PROMPT
+    from src.agent.reviewer import REVIEWER_SYSTEM_PROMPT
 
     assert "5W" in REVIEWER_SYSTEM_PROMPT, (
         "PR2 (Q16.6) moved 5W coverage to the reviewer prompt; can't "

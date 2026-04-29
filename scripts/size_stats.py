@@ -91,7 +91,9 @@ def main(top: int, danger_kb: int, dupe_threshold: int) -> None:
     # Summary per category
     danger_bytes = danger_kb * 1024
     click.echo("## Size distribution (bytes)\n")
-    click.echo(f"{'Category':<12} {'N':>5} {'p50':>8} {'p90':>8} {'p99':>8} {'max':>8} {'>' + str(danger_kb) + 'KB':>6}")
+    click.echo(
+        f"{'Category':<12} {'N':>5} {'p50':>8} {'p90':>8} {'p99':>8} {'max':>8} {'>' + str(danger_kb) + 'KB':>6}"
+    )
     click.echo("-" * 65)
     grand_over_danger: list[tuple[int, Path, dict]] = []
     for cat in CATEGORIES:
@@ -119,7 +121,9 @@ def main(top: int, danger_kb: int, dupe_threshold: int) -> None:
             click.echo(f"  {size / 1024:>6.1f}KB  {len(sources):>4} sources  {rel}")
 
     # Subject-dup analysis
-    click.echo(f"\n## Subject duplication (same thread repeated {dupe_threshold}+ times in sources)\n")
+    click.echo(
+        f"\n## Subject duplication (same thread repeated {dupe_threshold}+ times in sources)\n"
+    )
     dupe_findings: list[tuple[int, Path, list[tuple[str, int]]]] = []
     for cat in CATEGORIES:
         for _size, path, fm in by_cat[cat]:

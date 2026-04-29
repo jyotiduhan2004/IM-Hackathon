@@ -67,7 +67,7 @@ def count_appearances_by_role(email: str) -> dict[str, int]:
     - ``cc_count``: messages where this user is in the Cc header.
     - ``distinct_threads``: count of unique thread_ids across the three roles.
 
-    Used by the entity-evidence gate in `src.compile.entities.create_entity_page`
+    Used by the entity-evidence gate in `src.wiki.entities.create_entity_page`
     to tell "in From/To of at least one email" (strong) from "CC-only on a
     single thread" (weak). An email with zero participant rows returns all
     zeros — same shape, no KeyError.

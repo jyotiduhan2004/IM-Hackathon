@@ -14,7 +14,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from src.compile import compiler as compiler_mod
+from src.agent import compiler_agent as compiler_mod
 from src.db import wiki_pages as repo
 
 

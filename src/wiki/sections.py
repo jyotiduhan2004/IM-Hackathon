@@ -7,8 +7,8 @@ validator can never drift apart.
 History note: this dict was previously called ``REQUIRED_SECTIONS`` in
 ``scripts/validate_wiki.py``. v11-U7 reframed the contract from
 "validator enforces" to "agent suggests, reviewer judges" — see
-``src/compile/critique._check_suggested_h2_sections`` for the warning-
-severity rule and ``src/compile/reviewer.REVIEWER_SYSTEM_PROMPT``
+``src/agent/critique._check_suggested_h2_sections`` for the warning-
+severity rule and ``src/agent/reviewer.REVIEWER_SYSTEM_PROMPT``
 (``filing_cabinet`` + ``structure_mismatch``) for the judgement layer.
 The rename mirrors that vocabulary shift.
 
@@ -17,8 +17,8 @@ substring + case-insensitive — so a heading like ``## Key decisions
 made in 2026`` still satisfies the ``Key decisions`` slot.
 
 ``ANTI_PATTERN_H2`` is the shared bad-list consumed by both the scorer
-(``src.compile.scoring.score_concept_shape``) and the critique rule
-(``src.compile.critique._check_anti_pattern_h2``). It is the union of
+(``src.wiki.scoring.score_concept_shape``) and the critique rule
+(``src.agent.critique._check_anti_pattern_h2``). It is the union of
 the scorer's ``THREAD_SUBJECT_H2`` and the V12 50-compile deep audit
 findings (``Business Requirements``, ``Key Stakeholder Feedback``,
 ``Early Impact Analysis``, ``Leadership Response and Goals``,
@@ -30,7 +30,7 @@ exact-title (case-insensitive via ``ANTI_PATTERN_H2_LOWER``); the
 
 from __future__ import annotations
 
-from src.compile.scoring import THREAD_SUBJECT_H2
+from src.wiki.scoring import THREAD_SUBJECT_H2
 
 SUGGESTED_SECTIONS: dict[str, list[str]] = {
     # PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the universal H2 floor

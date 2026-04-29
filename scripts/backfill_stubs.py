@@ -97,9 +97,7 @@ def _grep_raw_for_entity(
     email_hits: set[str] = set()
     name_only_hits: set[str] = set()
     repo_root_resolved = REPO_ROOT.resolve()
-    from_cc_re = _re.compile(
-        r"^(from|to|cc|delivered-to):\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
-    )
+    from_cc_re = _re.compile(r"^(from|to|cc|delivered-to):\s*(.+)$", _re.IGNORECASE | _re.MULTILINE)
 
     for md in raw_dir.glob("*.md"):
         try:
@@ -157,9 +155,7 @@ def _is_stub(fm: dict) -> bool:
 
 
 @click.command()
-@click.option(
-    "--dry-run", is_flag=True, help="Show what would be backfilled without writing"
-)
+@click.option("--dry-run", is_flag=True, help="Show what would be backfilled without writing")
 @click.option(
     "--recompile",
     is_flag=True,

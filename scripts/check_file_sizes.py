@@ -21,8 +21,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Grandfathered ceilings (file path → max LOC, chosen as current + small buffer).
 # snapshot as of 2026-04-18; ratchet down over time
 CEILINGS: dict[str, int] = {
-    "src/compile/compiler.py": 3500,
-    "scripts/compile_all.py": 2580,
+    # src/compile/ deleted in the 2026-04-29 refactor (compiler.py 3066 → split
+    # across src/{wiki,agent,coordinator}/). Largest survivor is agent/prompts.py.
+    "src/agent/prompts.py": 1400,
+    "scripts/compile_all.py": 850,
     "scripts/validate_wiki.py": 1500,
     "scripts/trace_scorecard.py": 1500,
 }

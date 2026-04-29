@@ -81,7 +81,7 @@ def test_refresh_pool_calls_healthy_pool_each_batch(compile_all_module: Any) -> 
         ),
     ]
 
-    with patch.object(mod, "_healthy_pool", side_effect=mock_returns) as mock_hp:
+    with patch("src.coordinator.model_pool._healthy_pool", side_effect=mock_returns) as mock_hp:
         results = []
         for batch_idx in range(1, 4):
             results.append(
@@ -125,7 +125,7 @@ def test_refresh_pool_announces_quarantine_once_per_model(
     # Same exclusion record returned across 3 batches.
     mock_returns = [(["good-model"], [excluded_record])] * 3
 
-    with patch.object(mod, "_healthy_pool", side_effect=mock_returns):
+    with patch("src.coordinator.model_pool._healthy_pool", side_effect=mock_returns):
         for batch_idx in range(1, 4):
             mod._refresh_pool_for_batch(initial_pool, unauthorized, announced, batch_idx)
 
@@ -148,7 +148,9 @@ def test_refresh_pool_subtracts_unauthorized_before_healthy_pool(
     unauthorized: set[str] = {"no-auth"}
     announced: set[tuple[str, str]] = set()
 
-    with patch.object(mod, "_healthy_pool", return_value=(["auth-ok"], [])) as mock_hp:
+    with patch(
+        "src.coordinator.model_pool._healthy_pool", return_value=(["auth-ok"], [])
+    ) as mock_hp:
         result = mod._refresh_pool_for_batch(initial_pool, unauthorized, announced, 1)
 
     mock_hp.assert_called_once_with(["auth-ok"])
@@ -166,12 +168,11 @@ def test_refresh_pool_returns_empty_when_initial_pool_exhausted(
     unauthorized: set[str] = {"a", "b"}
     announced: set[tuple[str, str]] = set()
 
-    with patch.object(mod, "_healthy_pool") as mock_hp:
+    with patch("src.coordinator.model_pool._healthy_pool") as mock_hp:
         result = mod._refresh_pool_for_batch(initial_pool, unauthorized, announced, 1)
 
     mock_hp.assert_not_called()
     assert result == []
-
 
 
 def test_refresh_pool_does_not_announce_when_fails_open(
@@ -195,7 +196,7 @@ def test_refresh_pool_does_not_announce_when_fails_open(
         "failed_hard": 5,
     }
     # fails-open: pool keeps "a" AND the excluded record references "a"
-    with patch.object(mod, "_healthy_pool", return_value=(["a"], [excluded_record])):
+    with patch("src.coordinator.model_pool._healthy_pool", return_value=(["a"], [excluded_record])):
         result = mod._refresh_pool_for_batch(initial_pool, unauthorized, announced, 1)
 
     assert result == ["a"]

@@ -14,7 +14,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from src.compile import compiler
+from src.agent.tools import sources as compiler
 from src.db import messages as repo
 
 

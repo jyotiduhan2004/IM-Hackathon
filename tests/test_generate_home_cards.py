@@ -15,8 +15,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import yaml
-from src.compile.compiler import _DOMAINS
-from src.compile.landing import _generate_home
+from src.wiki.domains import _DOMAINS
+from src.wiki.landing import _generate_home
 
 
 def _iso(ts: datetime) -> str:

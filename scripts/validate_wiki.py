@@ -67,44 +67,23 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import settings  # noqa: E402
 
-REQUIRED_FIELDS = {"title", "page_type", "status"}
-# Legacy (current/contested) + North-Star (active/superseded/archived). Both
-# are accepted during the migration; the rename to active/archived ships in
-# Workstream D Slice 2.
-VALID_STATUSES = {"current", "superseded", "contested", "active", "archived"}
-# Legacy types + North-Star generated-page types (domain hubs, glossary,
-# decision stubs, person pages). Generated pages live outside CATEGORY_TO_TYPE
-# today, but listing them keeps the validator honest if/when the generators
-# emit pages into a categorised subdir.
-VALID_PAGE_TYPES = {
-    "topic",
-    "entity",
-    "system",
-    "policy",
-    "timeline",
-    "conflict",
-    "index",
-    "domain",
-    "glossary",
-    "decision",
-    "person",
-    "home",
-    "changes",
-    "coordinator_notes",
-}
-CATEGORY_TO_TYPE = {
-    "topics": "topic",
-    "entities": "entity",
-    "people": "person",
-    "systems": "system",
-    "policies": "policy",
-    "timelines": "timeline",
-    "conflicts": "conflict",
-}
+# Per-page primitives moved to src.wiki.page_validator so the post-batch
+# coordinator can reuse them without importing from scripts/. We re-export
+# the names this CLI used to expose so callers (tests, ad-hoc scripts) keep
+# working unchanged.
+from src.wiki.page_validator import CATEGORY_TO_TYPE  # noqa: E402
+from src.wiki.page_validator import REQUIRED_FIELDS  # noqa: E402,F401
+from src.wiki.page_validator import VALID_PAGE_TYPES  # noqa: E402,F401
+from src.wiki.page_validator import VALID_STATUSES  # noqa: E402,F401
+from src.wiki.page_validator import Error  # noqa: E402
+from src.wiki.page_validator import _count_fm_fences  # noqa: E402,F401
+from src.wiki.page_validator import _DuplicateKeyLoader  # noqa: E402
+from src.wiki.page_validator import _extract_frontmatter  # noqa: E402
+from src.wiki.page_validator import validate_page  # noqa: E402
 
 # Suggested H2 section headings per page type. Sourced from the shared
-# `src.compile.section_shapes` module so the validator, the post-write
-# critique, and the prompt can't drift apart.
+# `src.wiki.sections` module so the validator, the post-write critique,
+# and the prompt can't drift apart.
 #
 # Match is substring + case-insensitive so minor renames like "Key
 # decisions made in 2026" still satisfy "Key decisions".
@@ -113,13 +92,7 @@ CATEGORY_TO_TYPE = {
 # to match the new "deterministic propose, LLM dispose" framing —
 # critique counts (warning-severity), reviewer makes the final judgment
 # call. Validator still enforces the same shape for backlog reporting.
-from src.compile.section_shapes import SUGGESTED_SECTIONS  # noqa: E402
-
-
-@dataclass
-class Error:
-    page: Path
-    reason: str
+from src.wiki.sections import SUGGESTED_SECTIONS  # noqa: E402
 
 
 @dataclass
@@ -134,12 +107,12 @@ from src.utils.wikilinks import WIKILINK_RE  # noqa: E402
 from src.utils.wikilinks import parse_wikilink_target  # noqa: E402
 
 # Entity identity helpers — prefer the canonical implementation in
-# src.compile.entities (shipped by W0). Fallback to inline regex when that
+# src.wiki.entities (shipped by W0). Fallback to inline regex when that
 # module isn't on the current branch, so this validator stays runnable even
 # on main before W0 merges.
 try:
-    from src.compile.entities import email_to_slug as _email_to_slug
-    from src.compile.entities import is_valid_email as _is_valid_email
+    from src.wiki.entities import email_to_slug as _email_to_slug
+    from src.wiki.entities import is_valid_email as _is_valid_email
 
     _HAS_ENTITY_HELPERS = True
 except ImportError:
@@ -150,18 +123,18 @@ except ImportError:
         return bool(_FALLBACK_EMAIL_RE.match(email.strip().lower()))
 
     def _email_to_slug(email: str) -> str:  # pragma: no cover - fallback only
-        raise NotImplementedError("email_to_slug unavailable without src.compile.entities")
+        raise NotImplementedError("email_to_slug unavailable without src.wiki.entities")
 
 
-# North-star domain slugs — sourced from src.compile.compiler so the
+# North-star domain slugs — sourced from src.wiki.domains so the
 # validator and the hub generator can't drift apart. Fallback to a
-# hardcoded set if the compiler module isn't importable (keeps the
+# hardcoded set if the wiki module isn't importable (keeps the
 # validator runnable on branches that haven't picked up the compiler
 # changes yet).
 try:
-    from src.compile.compiler import _DOMAIN_BY_SLUG as _COMPILER_DOMAIN_BY_SLUG
-    from src.compile.compiler import _SLUG_PREFIX_DOMAIN as _SLUG_PREFIX_DOMAIN
-    from src.compile.compiler import _domain_from_slug_prefix as _domain_from_slug_prefix
+    from src.wiki.domains import _DOMAIN_BY_SLUG as _COMPILER_DOMAIN_BY_SLUG
+    from src.wiki.domains import _SLUG_PREFIX_DOMAIN as _SLUG_PREFIX_DOMAIN
+    from src.wiki.domains import _domain_from_slug_prefix as _domain_from_slug_prefix
 
     CANONICAL_DOMAINS: frozenset[str] = frozenset(_COMPILER_DOMAIN_BY_SLUG.keys())
 except ImportError:  # pragma: no cover - fallback only
@@ -177,13 +150,13 @@ except ImportError:  # pragma: no cover - fallback only
             "engineering-productivity",
         }
     )
-    # Fallback when src.compile.compiler isn't importable. Mirrors the
+    # Fallback when src.wiki.domains isn't importable. Mirrors the
     # canonical-domain hardcoded fallback above; rebinding the same
     # name keeps the check helpers below importable either way.
     _SLUG_PREFIX_DOMAIN = {}
 
     def _domain_from_slug_prefix(slug: str) -> str | None:
-        """Fallback no-op when src.compile.compiler isn't importable.
+        """Fallback no-op when src.wiki.domains isn't importable.
 
         Skipping the prefix sanity check entirely is preferable to a
         stale hardcoded prefix map drifting away from the compiler.
@@ -192,161 +165,6 @@ except ImportError:  # pragma: no cover - fallback only
 
 
 _EXPECTED_DOMAINS_HINT = ", ".join(sorted(CANONICAL_DOMAINS))
-
-# Gmail thread_id is a 16-char lowercase hex string (see src/db/schema.sql
-# threads.thread_id — TEXT but every observed value matches this shape).
-# Used for validating `source_threads:` frontmatter entries on wiki pages.
-_THREAD_ID_RE = re.compile(r"^[0-9a-f]{16}$")
-
-
-class _DuplicateKeyLoader(yaml.SafeLoader):
-    """PyYAML loader that raises on duplicate mapping keys.
-
-    Default SafeLoader silently keeps the last value, hiding corruption like
-    `last_compiled:` appearing twice. We need to flag those for humans.
-    """
-
-
-def _construct_mapping_strict(loader: yaml.Loader, node: yaml.nodes.MappingNode) -> dict:
-    mapping: dict = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=False)
-        if key in mapping:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"duplicate key: {key!r}", key_node.start_mark
-            )
-        mapping[key] = loader.construct_object(value_node, deep=False)
-    return mapping
-
-
-_DuplicateKeyLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_strict
-)
-
-
-def _extract_frontmatter(content: str) -> tuple[dict[str, Any], str]:
-    """Line-aware frontmatter extraction. See src.utils.split_frontmatter."""
-    fm_text, body = split_frontmatter(content)
-    if not fm_text:
-        return {}, body
-    try:
-        fm = yaml.safe_load(fm_text) or {}
-        if not isinstance(fm, dict):
-            fm = {}
-    except yaml.YAMLError:
-        fm = {}
-    return fm, body
-
-
-def _count_fm_fences(content: str) -> int:
-    """Count how many lines are exactly `---` in the raw file content.
-
-    A well-formed page has exactly two: one opening + one closing the
-    frontmatter block. Three or more means the file got corrupted (see
-    `tech-security-team.md` in the 2026-04-14 audit — a newline split a
-    filename across what looked like a second `---\n...\n---` block,
-    producing a page with two frontmatter sections that partially parse).
-    Zero or one means the frontmatter is broken.
-    """
-    return sum(1 for line in content.splitlines() if line == "---")
-
-
-def validate_page(path: Path) -> list[Error]:
-    errors: list[Error] = []
-    try:
-        content = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
-        return [Error(path, f"unreadable: {e}")]
-
-    # Fence count check — must be exactly two `---` lines. Run this before
-    # frontmatter parse so corrupted two-block files still surface the
-    # concrete fence count rather than a "no parseable YAML" message.
-    fence_count = _count_fm_fences(content)
-    if fence_count != 2:
-        errors.append(
-            Error(
-                path,
-                f"malformed frontmatter: expected 2 --- fences, found {fence_count}",
-            )
-        )
-
-    fm, body = _extract_frontmatter(content)
-
-    if not fm:
-        if not errors:
-            errors.append(Error(path, "no parseable YAML frontmatter"))
-        return errors
-
-    # Detect orphan body: only last_compiled present means auto-stamp
-    # recovered from a broken frontmatter. Caller should re-compile this page.
-    if set(fm.keys()) == {"last_compiled"}:
-        errors.append(Error(path, "orphan frontmatter (only last_compiled present)"))
-        return errors
-
-    # Required fields
-    missing = REQUIRED_FIELDS - set(fm.keys())
-    if missing:
-        errors.append(Error(path, f"missing required fields: {sorted(missing)}"))
-
-    # page_type valid
-    pt = fm.get("page_type")
-    if pt and pt not in VALID_PAGE_TYPES:
-        errors.append(Error(path, f"invalid page_type: {pt!r}"))
-
-    # status valid
-    st = fm.get("status")
-    if st and st not in VALID_STATUSES:
-        errors.append(Error(path, f"invalid status: {st!r}"))
-
-    # page_type matches directory (skip nav-only index pages)
-    category = path.parent.name
-    want = CATEGORY_TO_TYPE.get(category)
-    if want and pt and pt != want and pt != "index":
-        errors.append(Error(path, f"in {category}/ but page_type={pt!r}, expected {want!r}"))
-
-    # Systems directory is for products/services — a populated `email:`
-    # field means it's actually a human and belongs in entities/ (see
-    # issue #43). Hard error — `scripts/audit_systems_entities.py` will
-    # relocate these when run with --confirm.
-    if category == "systems":
-        email = fm.get("email")
-        if isinstance(email, str) and email.strip():
-            errors.append(
-                Error(path, "page has email: field but lives in systems/; move to entities/")
-            )
-
-    # `source_threads:` — Phase A U5 page-level citation field. Replaces the
-    # per-message `sources:` list (which the agent used to destructively
-    # overwrite every batch). Each entry must be a 16-char hex Gmail
-    # thread_id; malformed entries are errors regardless of any flag since
-    # they represent concrete corruption, not ontology drift.
-    raw_threads = fm.get("source_threads")
-    if raw_threads is not None:
-        if not isinstance(raw_threads, list):
-            errors.append(
-                Error(path, f"source_threads must be a list, got {type(raw_threads).__name__}")
-            )
-        else:
-            bad: list[str] = []
-            for t in raw_threads:
-                if not isinstance(t, str) or not _THREAD_ID_RE.match(t):
-                    bad.append(repr(t))
-            if bad:
-                preview = ", ".join(bad[:3])
-                more = f" (+{len(bad) - 3} more)" if len(bad) > 3 else ""
-                errors.append(
-                    Error(
-                        path,
-                        f"source_threads has {len(bad)} invalid thread_id(s) "
-                        f"(expected 16-char hex): {preview}{more}",
-                    )
-                )
-
-    # Body exists (empty body is suspicious)
-    if not body.strip():
-        errors.append(Error(path, "empty body"))
-
-    return errors
 
 
 def check_duplicates(wiki_dir: Path) -> list[Error]:
@@ -686,7 +504,7 @@ def check_entity_identity(wiki_dir: Path) -> list[ValidationWarning]:
     - `entity-invalid-email`: `email:` is set but doesn't match an RFC-ish shape
     - `entity-slug-mismatch`: filename stem doesn't match email_to_slug(email);
       most existing pages were named after display names, so this is legacy
-      drift rather than corruption. Skipped if src.compile.entities isn't
+      drift rather than corruption. Skipped if src.wiki.entities isn't
       importable (keeps this validator runnable on branches without W0).
 
     KNOWN GAP (covered by C1 migration PR): this check only scans

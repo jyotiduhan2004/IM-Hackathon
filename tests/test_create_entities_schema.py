@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-from src.compile.compiler import EntityRequest
-from src.compile.compiler import create_entities
+from src.agent.tools.entities import EntityRequest
+from src.agent.tools.entities import create_entities
 
 
 def test_inner_schema_marks_email_required() -> None:

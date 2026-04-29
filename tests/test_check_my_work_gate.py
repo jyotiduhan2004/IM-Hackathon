@@ -17,11 +17,11 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from src.compile.middleware.check_my_work_gate import GATE_REJECT_MESSAGE
-from src.compile.middleware.check_my_work_gate import GATE_REJECT_PAT
-from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_MESSAGE
-from src.compile.middleware.check_my_work_gate import POST_WRITE_NUDGE_PAT
-from src.compile.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
+from src.agent.middleware.check_my_work_gate import GATE_REJECT_MESSAGE
+from src.agent.middleware.check_my_work_gate import GATE_REJECT_PAT
+from src.agent.middleware.check_my_work_gate import POST_WRITE_NUDGE_MESSAGE
+from src.agent.middleware.check_my_work_gate import POST_WRITE_NUDGE_PAT
+from src.agent.middleware.check_my_work_gate import CheckMyWorkGateMiddleware
 
 # ---------------------------------------------------------------------------
 # Request / handler helpers
@@ -434,7 +434,7 @@ def test_middleware_wired_into_compiler() -> None:
     the gate's `wrap_tool_call` lives several layers deep in the closure
     chain rather than at the outermost level — we walk recursively.
     """
-    from src.compile.compiler import create_compiler
+    from src.agent.compiler_agent import create_compiler
 
     agent = create_compiler("z-ai/glm-5")
     tools_node = agent.nodes["tools"].bound
@@ -488,13 +488,13 @@ def _reset_check_my_work_cache():
     leftover cache entry from one test can mask a miss expected by
     another.
     """
-    import src.compile.compiler as compiler_mod
+    from src.agent import run_state as _run_state
 
-    compiler_mod._check_my_work_cache.clear()
-    compiler_mod._write_epoch = 0
+    _run_state._check_my_work_cache.clear()
+    _run_state._write_epoch = 0
     yield
-    compiler_mod._check_my_work_cache.clear()
-    compiler_mod._write_epoch = 0
+    _run_state._check_my_work_cache.clear()
+    _run_state._write_epoch = 0
 
 
 def test_check_my_work_caches_when_no_writes_between(
@@ -504,9 +504,9 @@ def test_check_my_work_caches_when_no_writes_between(
     cached payload with `unchanged_since: true`, and critique_pages runs
     only once (not twice).
     """
-    import src.compile.compiler as compiler_mod
-    from src.compile import critique as critique_mod
-    from src.compile.critique import CritiqueResult
+    from src.agent import critique as critique_mod
+    from src.agent.critique import CritiqueResult
+    from src.agent.tools import legacy as compiler_mod
 
     # Pretend the repo_root is tmp_path so no real wiki is touched.
     monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
@@ -555,9 +555,9 @@ def test_check_my_work_reruns_after_write(
     """Call, bump write_epoch (simulate an edit_file success), call again
     → critique_pages must run twice.
     """
-    import src.compile.compiler as compiler_mod
-    from src.compile import critique as critique_mod
-    from src.compile.critique import CritiqueResult
+    from src.agent import critique as critique_mod
+    from src.agent.critique import CritiqueResult
+    from src.agent.tools import legacy as compiler_mod
 
     monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
 
@@ -583,12 +583,14 @@ def test_check_my_work_reruns_after_write(
     monkeypatch.setattr(critique_mod, "critique_pages", fake_critique_pages)
     monkeypatch.setattr(critique_mod, "write_audit", fake_write_audit)
 
+    from src.agent import run_state as _run_state
+
     raw_path = "raw/2026-04-23_test.md"
     compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
     assert call_count["critique_pages"] == 1
 
     # Simulate a successful write bumping the epoch.
-    compiler_mod._bump_write_epoch()
+    _run_state._bump_write_epoch()
 
     compiler_mod.check_my_work.invoke({"raw_email_path": raw_path})
     assert call_count["critique_pages"] == 2, (
@@ -603,9 +605,9 @@ def test_cached_payload_preserves_audit_path(
 
     Prevents a regression where the cache copies only a subset of fields.
     """
-    import src.compile.compiler as compiler_mod
-    from src.compile import critique as critique_mod
-    from src.compile.critique import CritiqueResult
+    from src.agent import critique as critique_mod
+    from src.agent.critique import CritiqueResult
+    from src.agent.tools import legacy as compiler_mod
 
     monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
 
@@ -653,9 +655,9 @@ def test_cache_invalidated_by_different_acknowledge(
     """Changing the acknowledge list must force a fresh critique — different
     ack set ≠ same question, so the cache key must include ack_hash.
     """
-    import src.compile.compiler as compiler_mod
-    from src.compile import critique as critique_mod
-    from src.compile.critique import CritiqueResult
+    from src.agent import critique as critique_mod
+    from src.agent.critique import CritiqueResult
+    from src.agent.tools import legacy as compiler_mod
 
     monkeypatch.setattr(compiler_mod.Path, "cwd", staticmethod(lambda: tmp_path))
 
@@ -694,15 +696,15 @@ def test_bump_write_epoch_called_on_successful_content_write(
     """The middleware wires `_bump_write_epoch` into `_record_success`, so
     recording a successful content write must increment the counter.
     """
-    import src.compile.compiler as compiler_mod
+    from src.agent import run_state as _run_state
 
     mw = CheckMyWorkGateMiddleware()
-    start = compiler_mod._write_epoch
+    start = _run_state._write_epoch
 
     write_req = _make_request("write_file", {"file_path": "wiki/topics/foo.md"})
     mw.wrap_tool_call(write_req, _success_handler("write_file"))
 
-    assert compiler_mod._write_epoch == start + 1, (
+    assert _run_state._write_epoch == start + 1, (
         "CheckMyWorkGateMiddleware._record_success must bump the module-level "
         "write_epoch so the check_my_work cache invalidates."
     )

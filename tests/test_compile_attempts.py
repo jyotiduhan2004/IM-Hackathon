@@ -400,7 +400,7 @@ def test_healthy_pool_fails_open_on_db_error(
     def _boom(**_kwargs: Any) -> list[dict[str, Any]]:
         raise psycopg.OperationalError("connection refused")
 
-    monkeypatch.setattr(compile_all_module, "model_health_stats", _boom)
+    monkeypatch.setattr("src.coordinator.model_pool.model_health_stats", _boom)
     kept, excluded = compile_all_module._healthy_pool(["model_A", "model_B"])
     assert kept == ["model_A", "model_B"]
     assert excluded == []

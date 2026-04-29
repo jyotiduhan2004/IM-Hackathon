@@ -94,9 +94,9 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.categories import WIKI_CATEGORIES  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.wiki.categories import WIKI_CATEGORIES  # noqa: E402
 
 # Files inside wiki/entities/ that are not real entity pages. Keep the
 # corresponding files in wiki/people/ untouched; never move these.

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import inspect
 
-from src.compile.compiler import create_compiler
+from src.agent.compiler_agent import create_compiler
 
 
 def _bound_tool_names() -> set[str]:
@@ -72,7 +72,7 @@ def test_find_new_sources_still_importable() -> None:
     """The function remains in the module for coordinator /
     script-side use. Only the @tool-binding at agent-visible surface
     was removed."""
-    from src.compile.compiler import find_new_sources
+    from src.agent.tools.sources import find_new_sources
 
     # LangChain wraps @tool functions; the callable is still there.
     assert find_new_sources is not None

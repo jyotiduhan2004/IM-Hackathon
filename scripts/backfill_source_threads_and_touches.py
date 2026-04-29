@@ -96,7 +96,6 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.categories import WIKI_CATEGORIES  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.db.messages import find_by_raw_paths  # noqa: E402
 from src.db.touched_pages import insert_touch  # noqa: E402
@@ -104,6 +103,7 @@ from src.db.wiki_pages import find_pages_by_slugs  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
+from src.wiki.categories import WIKI_CATEGORIES  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 

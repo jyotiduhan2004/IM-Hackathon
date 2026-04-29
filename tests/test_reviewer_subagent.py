@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import pytest
 from langchain.agents.structured_output import ToolStrategy
-from src.compile.reviewer import REVIEWER_MODEL
-from src.compile.reviewer import REVIEWER_NAME
-from src.compile.reviewer import ReviewFinding
-from src.compile.reviewer import ReviewReport
-from src.compile.reviewer import build_reviewer_subagent
+from src.agent.reviewer import REVIEWER_MODEL
+from src.agent.reviewer import REVIEWER_NAME
+from src.agent.reviewer import ReviewFinding
+from src.agent.reviewer import ReviewReport
+from src.agent.reviewer import build_reviewer_subagent
 
 
 def test_review_finding_validates_required_fields() -> None:

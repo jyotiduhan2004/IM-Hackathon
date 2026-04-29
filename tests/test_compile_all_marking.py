@@ -329,7 +329,7 @@ def test_terminal_guard_sentinel_is_present_in_nudge_message(compile_all_module)
     test fires — without it a wording tweak silently breaks the
     coordinator fallback.
     """
-    from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+    from src.agent.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
 
     assert compile_all_module._TERMINAL_NUDGE_SENTINEL in TERMINAL_NUDGE_MESSAGE
 
@@ -337,7 +337,7 @@ def test_terminal_guard_sentinel_is_present_in_nudge_message(compile_all_module)
 def test_terminal_guard_exhausted_detects_injected_nudge(compile_all_module) -> None:
     """``_terminal_guard_exhausted`` returns True when the nudge is in messages."""
     from langchain_core.messages import HumanMessage
-    from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+    from src.agent.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
 
     mod = compile_all_module
     result = {"messages": [HumanMessage(content=TERMINAL_NUDGE_MESSAGE)]}

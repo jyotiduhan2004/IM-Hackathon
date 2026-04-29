@@ -21,11 +21,11 @@ import asyncio
 import time
 
 import pytest
-from src.compile.compiler import InvokeWallClockTimeout
-from src.compile.compiler import StuckLLMRoundError
-from src.compile.compiler import _ainvoke_with_timeout
-from src.compile.middleware.stuck_heartbeat import StuckHeartbeatMiddleware
-from src.compile.middleware.stuck_heartbeat import StuckHeartbeatState
+from src.agent.middleware.stuck_heartbeat import StuckHeartbeatMiddleware
+from src.agent.middleware.stuck_heartbeat import StuckHeartbeatState
+from src.agent.runtime import InvokeWallClockTimeout
+from src.agent.runtime import StuckLLMRoundError
+from src.agent.runtime import _ainvoke_with_timeout
 
 # ---------------------------------------------------------------------------
 # State + middleware: the cheap parts.
@@ -164,7 +164,7 @@ async def test_stuck_before_first_tool_return_does_not_fire_heartbeat() -> None:
     so the outer wall-clock is what trips first → InvokeWallClockTimeout,
     not StuckLLMRoundError.
     """
-    from src.compile.compiler import InvokeWallClockTimeout
+    from src.agent.runtime import InvokeWallClockTimeout
 
     state = StuckHeartbeatState()  # default None — never marked
     with pytest.raises(InvokeWallClockTimeout):

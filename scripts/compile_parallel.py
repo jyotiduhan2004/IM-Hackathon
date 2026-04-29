@@ -37,10 +37,10 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import list_uncompiled_emails  # noqa: E402
-from src.compile.compiler import run_compilation  # noqa: E402
-from src.compile.compiler import update_wiki_index  # noqa: E402
+from src.agent.compiler_agent import run_compilation  # noqa: E402
+from src.agent.tools.sources import list_uncompiled_emails  # noqa: E402
 from src.config import settings  # noqa: E402
+from src.wiki.landing import update_wiki_index  # noqa: E402
 
 structlog.configure(
     processors=[

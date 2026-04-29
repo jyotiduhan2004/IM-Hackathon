@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from src.compile.compiler import SilentModelFailError
-from src.compile.compiler import _check_silent_fail
+from src.agent.reviewer_result import SilentModelFailError
+from src.agent.reviewer_result import _check_silent_fail
 
 
 def _user(content: str = "compile this") -> dict[str, Any]:

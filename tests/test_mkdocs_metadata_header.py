@@ -385,9 +385,7 @@ def test_hook_threads_banner_noun_pluralises_correctly(monkeypatch) -> None:
             "status": "active",
             "source_threads": [f"abcdef{i:010x}" for i in range(count)],
         }
-        return on_page_markdown(
-            "# T\n", page=_page("topics/t.md", meta), config={}, files=[]
-        )
+        return on_page_markdown("# T\n", page=_page("topics/t.md", meta), config={}, files=[])
 
     assert "1 thread · " in _banner_with(1)
     assert "2 threads · " in _banner_with(2)

@@ -187,9 +187,7 @@ def main(dry_run: bool, min_sources: int, category: str) -> None:
                     for g in sorted(thread_groups, key=lambda g: -g.count)
                 ]
             body = extract_body(content)
-            page.write_text(
-                render_with_frontmatter(fm, body), encoding="utf-8"
-            )
+            page.write_text(render_with_frontmatter(fm, body), encoding="utf-8")
 
     click.echo()
     click.echo(f"Pages changed: {pages_changed}")

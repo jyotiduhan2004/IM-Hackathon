@@ -426,8 +426,60 @@ def db_conn() -> Iterator[psycopg.Connection]:
 
 @pytest.fixture
 def compile_all_module() -> ModuleType:
-    """scripts/compile_all.py loaded as a module for white-box testing."""
-    return load_script("compile_all")
+    """scripts/compile_all.py loaded as a module for white-box testing.
+
+    Phase 1B (refactor) split most of the script's private helpers into
+    ``src.coordinator.*`` submodules. To avoid touching every test, this
+    fixture loads the script and then re-exports every coordinator symbol
+    onto the loaded module — so existing white-box tests keep working
+    via attribute access (e.g. ``compile_all_module._healthy_pool``).
+
+    The aggregation also brings the ``concurrent`` import (touched by the
+    stall-detection test's ``monkeypatch.setattr(mod.concurrent.futures,
+    ThreadPoolExecutor, ...)``) onto the namespace explicitly.
+    """
+    import concurrent as _concurrent
+    import concurrent.futures
+
+    import httpx as _httpx
+    from src.config import settings as _settings
+    from src.coordinator import batch_state
+    from src.coordinator import grouping
+    from src.coordinator import logging
+    from src.coordinator import model_pool
+    from src.coordinator import post_batch
+    from src.coordinator import preflight
+    from src.db.messages import model_health_stats as _model_health_stats
+
+    mod = load_script("compile_all")
+
+    # Re-export every public + private name from each coordinator submodule
+    # so legacy white-box tests can keep doing ``mod._healthy_pool`` etc.
+    # The script already imports each function by name, so the underscore-
+    # prefixed names are present on ``mod`` directly. Exposing the
+    # *defining* module as the source-of-truth is what protects callers
+    # that ``monkeypatch.setattr(mod.settings, ...)`` style.
+    for sub in (post_batch, batch_state, model_pool, logging, grouping, preflight):
+        for name in dir(sub):
+            if name.startswith("__") and name.endswith("__"):
+                continue
+            if not hasattr(mod, name):
+                setattr(mod, name, getattr(sub, name))
+
+    # Load-bearing attributes the tests reach through monkeypatch.
+    # ``settings`` and ``httpx`` live on ``model_pool`` after the move;
+    # re-bind them on the script module so the original
+    # ``monkeypatch.setattr(mod.settings, ...)`` assertions stay valid.
+    if not hasattr(mod, "settings"):
+        mod.settings = _settings
+    if not hasattr(mod, "httpx"):
+        mod.httpx = _httpx
+    if not hasattr(mod, "concurrent"):
+        mod.concurrent = _concurrent
+    if not hasattr(mod, "model_health_stats"):
+        mod.model_health_stats = _model_health_stats
+
+    return mod
 
 
 @pytest.fixture

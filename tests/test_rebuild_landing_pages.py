@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.compile.compiler import _page_summary
-from src.compile.compiler import rebuild_landing_pages
+from src.wiki.landing import rebuild_landing_pages
+from src.wiki.pages import _page_summary
 
 
 def _write_page(path: Path, frontmatter: str, body: str = "Body content.\n") -> None:

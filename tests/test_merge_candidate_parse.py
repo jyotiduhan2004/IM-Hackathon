@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import _extract_merge_candidates  # noqa: E402
+from src.agent.reviewer_result import _extract_merge_candidates  # noqa: E402
 
 from tests._script_loader import load_script  # noqa: E402
 

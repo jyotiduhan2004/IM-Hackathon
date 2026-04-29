@@ -19,9 +19,7 @@ def test_start_run_returns_uuid_and_row_is_running(db_conn: psycopg.Connection) 
 
     assert isinstance(run_id, uuid.UUID)
 
-    row = db_conn.execute(
-        "SELECT * FROM compile_runs WHERE run_id = %s", (run_id,)
-    ).fetchone()
+    row = db_conn.execute("SELECT * FROM compile_runs WHERE run_id = %s", (run_id,)).fetchone()
     assert row is not None
     assert row["status"] == "running"
     assert row["model"] == "gpt-4o-mini"
@@ -46,9 +44,7 @@ def test_finish_run_updates_status_counts_and_finished_at(
         cost_cents=1250,
     )
 
-    row = db_conn.execute(
-        "SELECT * FROM compile_runs WHERE run_id = %s", (run_id,)
-    ).fetchone()
+    row = db_conn.execute("SELECT * FROM compile_runs WHERE run_id = %s", (run_id,)).fetchone()
     assert row is not None
     assert row["status"] == "completed"
     assert row["emails_processed"] == 42

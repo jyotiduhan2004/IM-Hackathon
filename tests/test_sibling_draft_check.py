@@ -29,10 +29,10 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from src.compile.compiler import _current_batch_sibling_slugs_written
-from src.compile.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
-from src.compile.middleware.sibling_draft_check import _extract_sibling_slug
-from src.compile.middleware.sibling_draft_check import _slug_tokens
+from src.agent.middleware.sibling_draft_check import SiblingDraftCheckMiddleware
+from src.agent.middleware.sibling_draft_check import _extract_sibling_slug
+from src.agent.middleware.sibling_draft_check import _slug_tokens
+from src.agent.run_state import _current_batch_sibling_slugs_written
 
 
 def _make_request(

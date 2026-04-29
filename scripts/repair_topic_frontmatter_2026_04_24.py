@@ -45,8 +45,7 @@ def fix_centralized_gst(path: Path) -> None:
     # draft). The actual fix is the deterministic string-replace below.
     text = path.read_text(encoding="utf-8")
     fixed = text.replace(
-        "- raw/2026-04-06_launchim-mplaunchim-indiamart-android-app-1371\n"
-        "last_compiled:",
+        "- raw/2026-04-06_launchim-mplaunchim-indiamart-android-app-1371\nlast_compiled:",
         "- raw/2026-04-06_launchim-mplaunchim-indiamart-android-app-1371"
         "c_6ed8f857.md\n"
         "last_compiled:",
@@ -104,8 +103,7 @@ def main(dry_run: bool) -> None:
         # Count standalone-`---` lines; run only if there are >2 (i.e. a body
         # HR beyond the frontmatter open + close).
         divider_count = sum(
-            1 for line in p.read_text(encoding="utf-8").splitlines()
-            if line.strip() == "---"
+            1 for line in p.read_text(encoding="utf-8").splitlines() if line.strip() == "---"
         )
         if divider_count > 2:
             fixes.append(("mcat-buyer-spec", p, fix_mcat_buyer_spec))

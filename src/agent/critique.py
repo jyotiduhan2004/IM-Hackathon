@@ -29,12 +29,12 @@ from typing import Any
 
 import yaml
 
-from src.compile.section_shapes import ANTI_PATTERN_H2_LOWER
-from src.compile.section_shapes import SUGGESTED_SECTIONS
 from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
 from src.utils.wikilinks import WIKILINK_RE
 from src.utils.wikilinks import parse_wikilink_target
+from src.wiki.sections import ANTI_PATTERN_H2_LOWER
+from src.wiki.sections import SUGGESTED_SECTIONS
 
 # Broken pages (unparseable frontmatter) count as touched when their mtime
 # is within this window — catches pages the agent just corrupted without
@@ -53,7 +53,7 @@ _H1_RE = re.compile(r"^#\s+[^#].+$", re.MULTILINE)
 # ``email_to_slug`` output. Used by ``_check_broken_wikilinks`` to demote a
 # missing-people-page from ``blocker`` to ``warning``: the agent can't
 # create people stubs by hand (see #167); auto-stub creation fires
-# elsewhere. Pattern mirrors ``src.compile.scoring._EMAIL_SLUG_WIKILINK_RE``.
+# elsewhere. Pattern mirrors ``src.wiki.scoring._EMAIL_SLUG_WIKILINK_RE``.
 _PEOPLE_SLUG_RE = re.compile(
     r"^[a-z0-9]+(?:-[a-z0-9]+)*-(?:indiamart-com|gmail-com|amazon-com)$",
     re.IGNORECASE,
@@ -407,7 +407,7 @@ _SUMMARY_STALENESS_WINDOW_DAYS = 90
 # any of these tokens (or contains any ISO date itself), we assume it's
 # been rewritten to current truth and the rule stays quiet. Case-
 # insensitive match; trailing spaces avoid substring collisions, mirroring
-# ``src.compile.scoring.GOOD_TOKENS`` discipline.
+# ``src.wiki.scoring.GOOD_TOKENS`` discipline.
 _SUMMARY_CURRENT_STATE_TOKENS: tuple[str, ...] = (
     "live ",
     "currently ",
@@ -423,7 +423,7 @@ def _check_anti_pattern_h2(page: Path, repo_root: Path, body: str) -> list[Issue
     describe one email's flow, not a concept. Warn the agent so it can
     self-correct mid-batch.
 
-    Shares ``ANTI_PATTERN_H2`` with ``src.compile.scoring`` — scorer and
+    Shares ``ANTI_PATTERN_H2`` with ``src.wiki.scoring`` — scorer and
     critique must never drift. ``decision:`` prefix rule is handled here
     (not in the frozenset) to avoid enumerating every suffix like
     ``## Decision: Scale to 100%``.
@@ -543,7 +543,7 @@ def _recent_changes_block(body: str) -> str | None:
 def _first_paragraph(body: str) -> str:
     """Return the first non-empty, non-heading paragraph after any H1.
 
-    Mirrors ``src.compile.scoring._first_paragraph`` — duplicated (not
+    Mirrors ``src.wiki.scoring._first_paragraph`` — duplicated (not
     imported) to keep the critique module's dependency graph narrow;
     both copies are one-screen functions, and the scoring module treats
     its copy as private (leading underscore)."""

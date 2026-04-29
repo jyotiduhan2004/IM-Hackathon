@@ -1,6 +1,6 @@
 """Draft-page critique heuristics.
 
-Supporting module for `validate_page_draft` in `src.compile.compiler`.
+Supporting module for `validate_page_draft` in `src.agent.compiler_agent`.
 Each rule function takes the draft body (and, where relevant, the
 frontmatter / existing wiki state) and returns a warning dict or None.
 
@@ -18,8 +18,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from src.compile.categories import WIKI_CATEGORIES
 from src.utils import extract_frontmatter
+from src.wiki.categories import WIKI_CATEGORIES
 
 # Matches `tl;dr` or `tldr` as a standalone token (case-insensitive). Covers
 # both the heading case (`## TL;DR`) and any in-prose mention. The `\b`

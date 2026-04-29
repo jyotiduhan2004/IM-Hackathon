@@ -2,7 +2,7 @@
 
 The prompt tells the agent it's processing email N of a thread "as a writer
 at that point in time" and should not see future replies. `get_thread_context`
-now enforces this with a cutoff (see `src/compile/compiler.py`), but the
+now enforces this with a cutoff (see `src/agent/tools/raw_access.py`), but the
 agent can still leak future content via `read_file` if it happens to know
 or guess a future-dated raw path (e.g. from an earlier cached response).
 
@@ -70,7 +70,7 @@ def _cutoff_date() -> date | None:
     The ContextVar stores an ISO8601 timestamp string (possibly with TZ
     suffix); we only need the date part for the filename comparison.
     """
-    from src.compile.compiler import _current_batch_cutoff_date
+    from src.agent.run_state import _current_batch_cutoff_date
 
     raw = _current_batch_cutoff_date.get()
     if raw is None:

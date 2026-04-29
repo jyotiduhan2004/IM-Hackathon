@@ -21,8 +21,8 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
-from src.compile.tool_call_log import ToolCallLogHandler
 from src.db import tool_call_log as repo
+from src.observability.tool_call_log import ToolCallLogHandler
 
 # ---------------------------------------------------------------------------
 # ToolCallLogHandler — callback plumbing

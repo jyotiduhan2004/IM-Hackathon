@@ -12,10 +12,10 @@ from typing import cast
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.legacy_page_hint import LegacyPageHintMiddleware
-from src.compile.middleware.legacy_page_hint import _detect_legacy_reasons
-from src.compile.middleware.legacy_page_hint import _is_wiki_page_path
-from src.compile.middleware.legacy_page_hint import _strip_line_numbers
+from src.agent.middleware.legacy_page_hint import LegacyPageHintMiddleware
+from src.agent.middleware.legacy_page_hint import _detect_legacy_reasons
+from src.agent.middleware.legacy_page_hint import _is_wiki_page_path
+from src.agent.middleware.legacy_page_hint import _strip_line_numbers
 
 # ---------------------------------------------------------------------------
 # _strip_line_numbers — resilient to formatted + raw input

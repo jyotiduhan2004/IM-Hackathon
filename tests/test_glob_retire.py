@@ -25,8 +25,8 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from src.compile.middleware.glob_narrowing import GlobNarrowingMiddleware
-from src.compile.middleware.glob_narrowing import _is_slug_lookup_pattern
+from src.agent.middleware.glob_narrowing import GlobNarrowingMiddleware
+from src.agent.middleware.glob_narrowing import _is_slug_lookup_pattern
 
 # ---------------------------------------------------------------------------
 # Request / handler helpers (mirror test_same_thread_topic_guard.py)
@@ -208,7 +208,7 @@ def test_middleware_registered_in_compiler() -> None:
     (it builds a filesystem view + LiteLLM model) — grep-style assertion is
     enough to prove the wiring. Direct tests above cover behaviour.
     """
-    from src.compile import middleware as mw_pkg
+    from src.agent import middleware as mw_pkg
 
     assert hasattr(mw_pkg, "GlobNarrowingMiddleware")
     assert "GlobNarrowingMiddleware" in mw_pkg.__all__
@@ -216,7 +216,7 @@ def test_middleware_registered_in_compiler() -> None:
     # And it's imported in compiler.create_compiler's body.
     import inspect
 
-    from src.compile import compiler as comp_mod
+    from src.agent import compiler_agent as comp_mod
 
     source = inspect.getsource(comp_mod.create_compiler)
     assert "GlobNarrowingMiddleware" in source

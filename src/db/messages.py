@@ -1,6 +1,7 @@
 """Repository functions for the messages table.
 
-Replaces the raw-frontmatter scan in src.compile.compiler. The compile
+Replaces the raw-frontmatter scan that lived in the legacy
+src.compile.compiler. The compile
 state machine lives here:
 
   pending  ──claim──>  claimed  ──finish──>  compiled

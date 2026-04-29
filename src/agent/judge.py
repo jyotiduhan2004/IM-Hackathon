@@ -148,7 +148,7 @@ def call_judge(system_prompt: str, user_prompt: str, model: str) -> dict[str, An
 
     Routes through ``settings.litellm_base_url`` when set (team LiteLLM
     proxy), falling back to direct provider auth otherwise — mirrors
-    ``src/compile/compiler.py:_build_model_client`` so we don't need a
+    ``src/agent/runtime.py``'s model factory so we don't need a
     second set of provider API keys for the judge path.
 
     Retry policy: one extra attempt on parse failure with "Return VALID

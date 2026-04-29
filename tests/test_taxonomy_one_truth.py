@@ -10,10 +10,10 @@ stay aligned with it."""
 
 from __future__ import annotations
 
-from src.compile.categories import AGENT_VISIBLE_CATEGORIES
-from src.compile.categories import WIKI_CATEGORIES
-from src.compile.compiler import list_wiki_pages
-from src.compile.prompts import COMPILER_SYSTEM_PROMPT
+from src.agent.prompts import COMPILER_SYSTEM_PROMPT
+from src.agent.tools.sources import list_wiki_pages
+from src.wiki.categories import AGENT_VISIBLE_CATEGORIES
+from src.wiki.categories import WIKI_CATEGORIES
 
 
 def test_agent_visible_categories_is_a_strict_subset_of_disk_categories() -> None:

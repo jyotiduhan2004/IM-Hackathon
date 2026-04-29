@@ -7,13 +7,12 @@ Isolation: see tests/conftest.py. Each test runs against the dedicated
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from typing import Any
 
 import psycopg
-
 from src.db import messages as repo
 
 
@@ -74,8 +73,8 @@ def test_insert_message_basic(db_conn: psycopg.Connection) -> None:
 def test_list_uncompiled_orders_by_date_asc_nulls_last(
     db_conn: psycopg.Connection,
 ) -> None:
-    d_old = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    d_new = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    d_old = datetime(2026, 1, 1, tzinfo=UTC)
+    d_new = datetime(2026, 6, 1, tzinfo=UTC)
 
     _insert(db_conn, message_id="m_new", date=d_new)
     _insert(db_conn, message_id="m_null", date=None)
@@ -92,9 +91,9 @@ def test_list_uncompiled_by_thread_returns_all_emails_from_oldest_n_threads(
     db_conn: psycopg.Connection,
 ) -> None:
     """`limit_threads=2` pulls all pending emails from the 2 oldest threads."""
-    d1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    d2 = datetime(2026, 2, 1, tzinfo=timezone.utc)
-    d3 = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    d1 = datetime(2026, 1, 1, tzinfo=UTC)
+    d2 = datetime(2026, 2, 1, tzinfo=UTC)
+    d3 = datetime(2026, 3, 1, tzinfo=UTC)
 
     # Thread A: 3 emails (oldest)
     _insert(db_conn, message_id="a1", thread_id="tA", date=d1)
@@ -117,7 +116,7 @@ def test_list_uncompiled_by_thread_treats_null_thread_as_singleton(
     db_conn: psycopg.Connection,
 ) -> None:
     """Emails with NULL thread_id each count as their own thread."""
-    d1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    d1 = datetime(2026, 1, 1, tzinfo=UTC)
     _insert(db_conn, message_id="s1", thread_id=None, date=d1)
     _insert(db_conn, message_id="s2", thread_id=None, date=d1)
     db_conn.commit()
@@ -133,7 +132,7 @@ def test_list_uncompiled_by_thread_treats_null_thread_as_singleton(
 
 
 def test_claim_finish_happy_path(db_conn: psycopg.Connection) -> None:
-    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=UTC))
     db_conn.commit()
 
     run_id = uuid.uuid4()
@@ -163,8 +162,8 @@ def test_claim_finish_happy_path(db_conn: psycopg.Connection) -> None:
 
 
 def test_claim_skip_locked_no_double_claim(db_conn: psycopg.Connection) -> None:
-    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    _insert(db_conn, message_id="m2", date=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=UTC))
+    _insert(db_conn, message_id="m2", date=datetime(2026, 2, 1, tzinfo=UTC))
     db_conn.commit()
 
     run_a = uuid.uuid4()
@@ -189,7 +188,7 @@ def test_claim_skip_locked_no_double_claim(db_conn: psycopg.Connection) -> None:
 
 
 def test_fail_then_reclaim_increments_attempts(db_conn: psycopg.Connection) -> None:
-    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=UTC))
     db_conn.commit()
 
     run_id = uuid.uuid4()
@@ -219,7 +218,7 @@ def test_fail_then_reclaim_increments_attempts(db_conn: psycopg.Connection) -> N
 
 
 def test_stale_claim_recovery(db_conn: psycopg.Connection) -> None:
-    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m1", date=datetime(2026, 1, 1, tzinfo=UTC))
     db_conn.commit()
 
     first = repo.claim_next_message(uuid.uuid4())
@@ -231,7 +230,7 @@ def test_stale_claim_recovery(db_conn: psycopg.Connection) -> None:
     assert fresh is None
 
     # Simulate a crashed worker: backdate claimed_at by 1 hour.
-    stale_ts = datetime.now(timezone.utc) - timedelta(hours=1)
+    stale_ts = datetime.now(UTC) - timedelta(hours=1)
     db_conn.execute(
         "UPDATE messages SET claimed_at = %s WHERE message_id = %s",
         (stale_ts, "m1"),
@@ -254,7 +253,7 @@ def test_stale_claim_recovery(db_conn: psycopg.Connection) -> None:
 
 def test_recover_stale_claims_resets_old_claims(db_conn: psycopg.Connection) -> None:
     """A `claimed` row older than the threshold flips back to pending."""
-    _insert(db_conn, message_id="m_stale", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m_stale", date=datetime(2026, 1, 1, tzinfo=UTC))
     db_conn.commit()
 
     claimed = repo.claim_next_message(uuid.uuid4())
@@ -263,7 +262,7 @@ def test_recover_stale_claims_resets_old_claims(db_conn: psycopg.Connection) -> 
     # Backdate claimed_at to 13 hours ago — past the 12h default threshold.
     db_conn.execute(
         "UPDATE messages SET claimed_at = %s WHERE message_id = %s",
-        (datetime.now(timezone.utc) - timedelta(hours=13), "m_stale"),
+        (datetime.now(UTC) - timedelta(hours=13), "m_stale"),
     )
     db_conn.commit()
 
@@ -280,7 +279,7 @@ def test_recover_stale_claims_resets_old_claims(db_conn: psycopg.Connection) -> 
 
 def test_recover_stale_claims_leaves_fresh_claims_alone(db_conn: psycopg.Connection) -> None:
     """A `claimed` row younger than the threshold is left in `claimed`."""
-    _insert(db_conn, message_id="m_fresh", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m_fresh", date=datetime(2026, 1, 1, tzinfo=UTC))
     db_conn.commit()
 
     claimed = repo.claim_next_message(uuid.uuid4())
@@ -411,7 +410,7 @@ def test_find_by_raw_paths_chunks_at_500(db_conn: psycopg.Connection) -> None:
 def test_reset_to_pending_bulk(db_conn: psycopg.Connection) -> None:
     """Flip every compiled row back to pending; leave already-pending rows alone."""
     # 3 compiled with non-null compiled_at, 2 already pending.
-    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
     for i in range(1, 4):
         _insert(db_conn, message_id=f"c{i}", compile_state="compiled")
         db_conn.execute(
@@ -449,8 +448,8 @@ def test_mark_skipped_flips_state_and_is_excluded_from_claim(
 ) -> None:
     """Skipped rows carry the reason in last_error and are invisible to the
     claim loop (which only scans pending/failed/stale-claimed)."""
-    _insert(db_conn, message_id="m_skip", date=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    _insert(db_conn, message_id="m_keep", date=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    _insert(db_conn, message_id="m_skip", date=datetime(2026, 1, 1, tzinfo=UTC))
+    _insert(db_conn, message_id="m_keep", date=datetime(2026, 2, 1, tzinfo=UTC))
     db_conn.commit()
 
     rows_flipped = repo.mark_skipped("m_skip", "auto_sender")
@@ -481,7 +480,7 @@ def test_reset_to_pending_by_path(db_conn: psycopg.Connection) -> None:
         "raw/2026-04-02-bbb.md",
         "raw/2026-04-03-ccc.md",
     ]
-    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    compiled_ts = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
     for idx, path in enumerate(raw_paths, start=1):
         _insert(
             db_conn,

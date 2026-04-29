@@ -14,13 +14,13 @@ from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
-from src.compile.judge import JudgeParseError
-from src.compile.judge import build_system_prompt
-from src.compile.judge import build_user_prompt
-from src.compile.judge import call_judge
-from src.compile.judge import estimate_cost
-from src.compile.judge import load_persona
-from src.compile.judge import severity_from_score
+from src.agent.judge import JudgeParseError
+from src.agent.judge import build_system_prompt
+from src.agent.judge import build_user_prompt
+from src.agent.judge import call_judge
+from src.agent.judge import estimate_cost
+from src.agent.judge import load_persona
+from src.agent.judge import severity_from_score
 
 from tests._script_loader import load_script
 

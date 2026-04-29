@@ -268,8 +268,8 @@ async def test_graph_ainvoke_times_out_and_raises():
     """A `agent.ainvoke` that never returns must raise InvokeWallClockTimeout
     well before the outer batch-timeout would have noticed.
     """
-    from src.compile.compiler import InvokeWallClockTimeout
-    from src.compile.compiler import _ainvoke_with_timeout
+    from src.agent.runtime import InvokeWallClockTimeout
+    from src.agent.runtime import _ainvoke_with_timeout
 
     class _HungAgent:
         async def ainvoke(self, *_args, **_kwargs):
@@ -290,7 +290,7 @@ async def test_graph_ainvoke_times_out_and_raises():
 @pytest.mark.asyncio
 async def test_graph_ainvoke_completes_under_timeout():
     """A fast-returning `agent.ainvoke` must pass through without raising."""
-    from src.compile.compiler import _ainvoke_with_timeout
+    from src.agent.runtime import _ainvoke_with_timeout
 
     class _FastAgent:
         async def ainvoke(self, *_args, **_kwargs):
@@ -305,7 +305,7 @@ async def test_graph_ainvoke_preserves_other_exceptions():
     """Exceptions raised inside ainvoke (not timeouts) must bubble up
     unchanged — we only translate asyncio.TimeoutError.
     """
-    from src.compile.compiler import _ainvoke_with_timeout
+    from src.agent.runtime import _ainvoke_with_timeout
 
     class _BoomAgent:
         async def ainvoke(self, *_args, **_kwargs):

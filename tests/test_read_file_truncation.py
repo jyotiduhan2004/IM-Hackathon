@@ -21,13 +21,13 @@ from pathlib import Path
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
-from src.compile.middleware.read_file_truncation_hint import _build_hint
-from src.compile.middleware.read_file_truncation_hint import _coerce_to_int
-from src.compile.middleware.read_file_truncation_hint import _count_returned_lines
-from src.compile.middleware.read_file_truncation_hint import _count_total_lines
-from src.compile.middleware.read_file_truncation_hint import _extract_path_offset_limit
-from src.compile.middleware.read_file_truncation_hint import _resolve_to_disk
+from src.agent.middleware.read_file_truncation_hint import ReadFileTruncationHintMiddleware
+from src.agent.middleware.read_file_truncation_hint import _build_hint
+from src.agent.middleware.read_file_truncation_hint import _coerce_to_int
+from src.agent.middleware.read_file_truncation_hint import _count_returned_lines
+from src.agent.middleware.read_file_truncation_hint import _count_total_lines
+from src.agent.middleware.read_file_truncation_hint import _extract_path_offset_limit
+from src.agent.middleware.read_file_truncation_hint import _resolve_to_disk
 
 # ---------------------------------------------------------------------------
 # Pure helpers

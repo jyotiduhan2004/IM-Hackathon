@@ -43,7 +43,7 @@ if str(REPO_ROOT) not in sys.path:
 # Tier A telemetry constants live in scripts.trace_scorecard so both
 # reports stay in lockstep when PathAutoHealMiddleware / reviewer
 # subagent / todo-nudging land. GATE_REJECT_PAT is the one exception:
-# pulled straight from src.compile.middleware (the authoritative source)
+# pulled straight from src.agent.middleware (the authoritative source)
 # so the audit doesn't drift if the scorecard re-exports it.
 from scripts.trace_scorecard import AUTO_CORRECT_PAT  # noqa: E402
 from scripts.trace_scorecard import REVIEWER_VERDICT_PAT  # noqa: E402
@@ -51,7 +51,7 @@ from scripts.trace_scorecard import REVIEWER_VERDICTS  # noqa: E402
 from scripts.trace_scorecard import TODOS_EARLY_WINDOW  # noqa: E402
 from scripts.trace_scorecard import _migration_inflight_pct  # noqa: E402
 from scripts.trace_scorecard import _pages_migrated_per_run  # noqa: E402
-from src.compile.middleware.check_my_work_gate import GATE_REJECT_PAT  # noqa: E402
+from src.agent.middleware.check_my_work_gate import GATE_REJECT_PAT  # noqa: E402
 from src.config import settings  # noqa: E402
 
 logger = structlog.get_logger(__name__)

@@ -183,7 +183,7 @@ class CheckMyWorkGateMiddleware(AgentMiddleware):
         if isinstance(path, str) and path:
             self.touched_paths.add(path)
 
-        from src.compile.compiler import _bump_write_epoch
+        from src.agent.run_state import _bump_write_epoch
 
         _bump_write_epoch()
 

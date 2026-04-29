@@ -11,9 +11,9 @@ from typing import cast
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from src.compile.middleware.path_autoheal import PathAutohealMiddleware
-from src.compile.middleware.path_autoheal import _rewrite_args
-from src.compile.middleware.path_autoheal import _try_rewrite
+from src.agent.middleware.path_autoheal import PathAutohealMiddleware
+from src.agent.middleware.path_autoheal import _rewrite_args
+from src.agent.middleware.path_autoheal import _try_rewrite
 
 # ---------------------------------------------------------------------------
 # _try_rewrite — pure function

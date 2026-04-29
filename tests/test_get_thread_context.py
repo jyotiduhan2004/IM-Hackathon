@@ -23,10 +23,10 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from src.compile.compiler import _current_batch_cutoff_date
-from src.compile.compiler import get_thread_context
-from src.compile.tools.raw_access import _cite_key_from_raw_path
-from src.compile.tools.raw_access import _cutoff_to_date
+from src.agent.run_state import _current_batch_cutoff_date
+from src.agent.tools.raw_access import _cite_key_from_raw_path
+from src.agent.tools.raw_access import _cutoff_to_date
+from src.agent.tools.raw_access import get_thread_context
 
 
 class _FakeCursor:

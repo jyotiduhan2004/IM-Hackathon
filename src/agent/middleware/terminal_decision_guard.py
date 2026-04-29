@@ -135,7 +135,7 @@ def _insight_category(tool_args: dict[str, Any]) -> str | None:
     """Pull the category out of a ``log_insight`` call's args.
 
     ``log_insight`` takes ``category`` as the canonical key (see
-    ``src/compile/compiler.py:log_insight``). A ToolMessage only
+    ``src/agent/tools/insights.py:log_insight``). A ToolMessage only
     reaches the post-handler path with a successful call, which
     already means the args matched the tool signature — so a
     missing ``category`` here would mean the tool schema drifted.

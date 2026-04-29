@@ -57,9 +57,7 @@ CONTENT_CATEGORIES = ("topics", "systems", "policies", "timelines", "conflicts")
 ALL_CATEGORIES = ("topics", "entities", "systems", "policies", "timelines", "conflicts")
 
 
-def _collect_cited_raw_paths(
-    wiki_dir: Path, categories: tuple[str, ...]
-) -> set[str]:
+def _collect_cited_raw_paths(wiki_dir: Path, categories: tuple[str, ...]) -> set[str]:
     """Scan the given category directories' `sources:` lists.
 
     Only pages in `categories` are scanned. Pass `CONTENT_CATEGORIES` for
@@ -150,9 +148,7 @@ def main(dry_run: bool, include_entity_only: bool) -> None:
     if not include_entity_only:
         entity_cited = _collect_cited_raw_paths(wiki_dir, ("entities",))
         entity_only = (entity_cited - cited) & {m["raw_path"] for m in pending}
-        click.echo(
-            f"Entity-only-cited (left pending for re-compile): {len(entity_only)}"
-        )
+        click.echo(f"Entity-only-cited (left pending for re-compile): {len(entity_only)}")
 
     if not to_flip:
         click.echo("Nothing to reconcile.")

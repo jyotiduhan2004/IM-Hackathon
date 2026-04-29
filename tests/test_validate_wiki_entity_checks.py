@@ -53,8 +53,8 @@ def _run_entity_checks(wiki: Path) -> list:
 def test_canonical_entity_produces_no_warning(mini_wiki: Path) -> None:
     """Valid email + canonical slug (matching email_to_slug) → zero warnings."""
     if not validator._HAS_ENTITY_HELPERS:
-        pytest.skip("src.compile.entities not importable — slug-canonicality unknown")
-    from src.compile.entities import email_to_slug
+        pytest.skip("src.wiki.entities not importable — slug-canonicality unknown")
+    from src.wiki.entities import email_to_slug
 
     email = "amit@indiamart.com"
     _write_entity(mini_wiki / "entities", email_to_slug(email), email=email)

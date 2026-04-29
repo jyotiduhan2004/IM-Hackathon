@@ -11,9 +11,9 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from src.compile.compiler import _current_raw_paths
-from src.compile.compiler import log_insight
-from src.compile.prompts import COMPILER_SYSTEM_PROMPT
+from src.agent.prompts import COMPILER_SYSTEM_PROMPT
+from src.agent.run_state import _current_raw_paths
+from src.agent.tools.insights import log_insight
 
 
 def _invoke(**kwargs: Any) -> dict[str, Any]:

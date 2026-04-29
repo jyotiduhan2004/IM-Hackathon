@@ -105,9 +105,7 @@ def main(raw_dir: str | None) -> None:
     click.echo(f"skipped (already in DB): {skipped_existing}")
     click.echo(f"skipped (no message_id in frontmatter): {skipped_no_id}")
     if duplicates:
-        click.echo(
-            f"WARNING: {len(duplicates)} raw files share a message_id with another file:"
-        )
+        click.echo(f"WARNING: {len(duplicates)} raw files share a message_id with another file:")
         for mid, path in duplicates[:5]:
             click.echo(f"  {path} → {mid}")
     click.echo("\nstate counts:")

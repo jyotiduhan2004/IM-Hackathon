@@ -135,7 +135,7 @@ Gmail mailing list
   -> ingest (`scripts/ingest_backlog.py`, `src/ingest/*`)
   -> immutable raw emails in `raw/`
   -> Postgres queue/catalog (`src/db/*`)
-  -> compiler agent (`src/compile/compiler.py` + `prompts.py`)
+  -> compiler agent (`src/agent/compiler_agent.py` + `src/agent/prompts.py`)
   -> wiki pages in `wiki/`
   -> MkDocs viewer (`mkdocs.yml`, `mkdocs_hooks.py`)
 ```
@@ -151,8 +151,9 @@ Gmail mailing list
 ### Post-batch auto-format and validate
 
 After every batch of emails is marked compiled, the coordinator runs the
-idempotent formatter (`scripts/format_wiki.py`) and the per-page validator
-(`scripts/validate_wiki.py::validate_page`) in-process over every wiki page
+idempotent formatter (`src/wiki/page_formatter.py::format_page`) and the
+per-page validator (`src/wiki/page_validator.py::validate_page`) in-process
+over every wiki page
 whose mtime advanced during the batch. The formatter strips agent-written
 nav sections and normalises `## Related`; the validator surfaces format
 drift the formatter can't auto-fix (malformed frontmatter, broken
@@ -201,7 +202,11 @@ email-knowledge-base/
 │   ├── config.py
 │   ├── budget.py
 │   ├── ingest/                    # Gmail -> raw markdown
-│   ├── compile/                   # Compiler agent, prompts, cache stats, entity identity
+│   ├── agent/                     # Compiler agent, prompts, middleware, tool surface
+│   ├── wiki/                      # Wiki data layer — pages, formatter, validator,
+│   │                              #   landing-page generators, entity identity
+│   ├── coordinator/               # Post-batch hooks the agent doesn't see
+│   ├── observability/             # Langfuse, tracing, tool-call log
 │   └── db/                        # Postgres-backed queue/catalog state
 ├── scripts/
 │   ├── ingest_backlog.py

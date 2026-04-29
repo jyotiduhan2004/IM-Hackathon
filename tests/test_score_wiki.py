@@ -16,12 +16,12 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.score_wiki import CSV_COLUMNS  # noqa: E402
 from scripts.score_wiki import _select_topic_paths  # noqa: E402
 from scripts.score_wiki import _write_csv  # noqa: E402
-from src.compile.scoring import build_wikilink_incoming_index  # noqa: E402
-from src.compile.scoring import score_concept_shape  # noqa: E402
-from src.compile.scoring import score_graph_health  # noqa: E402
-from src.compile.scoring import score_source_density  # noqa: E402
-from src.compile.scoring import score_structural_smells  # noqa: E402
-from src.compile.scoring import score_summary_currency  # noqa: E402
+from src.wiki.scoring import build_wikilink_incoming_index  # noqa: E402
+from src.wiki.scoring import score_concept_shape  # noqa: E402
+from src.wiki.scoring import score_graph_health  # noqa: E402
+from src.wiki.scoring import score_source_density  # noqa: E402
+from src.wiki.scoring import score_structural_smells  # noqa: E402
+from src.wiki.scoring import score_summary_currency  # noqa: E402
 
 # --- concept_shape ---------------------------------------------------------
 

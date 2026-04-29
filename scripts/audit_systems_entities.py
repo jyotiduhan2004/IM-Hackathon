@@ -45,9 +45,9 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.entities import is_valid_email  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.wiki.entities import is_valid_email  # noqa: E402
 
 # Words that make a slug obviously a system/product/tool rather than a
 # person. Matched case-insensitively as whole tokens in slug `-` splits.

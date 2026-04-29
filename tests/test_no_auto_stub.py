@@ -29,8 +29,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from src.compile.compiler import _rebuild_person_backlinks
-from src.compile.compiler import rebuild_landing_pages
+from src.wiki.backlinks import _rebuild_person_backlinks
+from src.wiki.landing import rebuild_landing_pages
 
 
 def _write_page(path: Path, frontmatter: dict[str, object], body: str) -> None:

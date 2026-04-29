@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.compile.compiler import get_page_summary
-from src.compile.compiler import list_wiki_pages
+from src.agent.tools.sources import get_page_summary
+from src.agent.tools.sources import list_wiki_pages
 
 
 def _write(path: Path, frontmatter: dict, body: str = "Body text.") -> None:

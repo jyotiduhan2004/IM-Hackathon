@@ -24,8 +24,15 @@ MMD_FILE = REPO_ROOT / "docs/diagrams/compile-agent-langgraph.mmd"
 # Deep Agents builtin tool names — anything else in the bound tool list is
 # treated as one of ours. Update if the upstream library renames or adds.
 DEEP_AGENTS_BUILTIN_NAMES = {
-    "read_file", "write_file", "edit_file", "ls", "glob", "grep",
-    "write_todos", "task", "execute",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "ls",
+    "glob",
+    "grep",
+    "write_todos",
+    "task",
+    "execute",
 }
 FILE_OPS = {"read_file", "write_file", "edit_file", "ls", "glob", "grep"}
 
@@ -107,7 +114,10 @@ def extract_tool_table(agent: Any) -> str:
     workflow = sorted(n for n in tools_by_name if n in DEEP_AGENTS_BUILTIN_NAMES - FILE_OPS)
     ordered = customs + file_ops + workflow
 
-    rows = ["| Tool | Source | First line of docstring |", "|------|--------|------------------------|"]
+    rows = [
+        "| Tool | Source | First line of docstring |",
+        "|------|--------|------------------------|",
+    ]
     for name in ordered:
         tool = tools_by_name[name]
         desc = first_line(getattr(tool, "description", ""))
@@ -130,7 +140,7 @@ def main() -> None:
     if not ARCH_DOC.exists():
         raise SystemExit(f"{ARCH_DOC} not found — create the skeleton first")
 
-    from src.compile.compiler import create_compiler
+    from src.agent.compiler_agent import create_compiler
 
     # Build the agent once — two calls to create_compiler() were not only
     # double the build cost but a drift risk: if construction isn't perfectly
@@ -153,7 +163,7 @@ def main() -> None:
     if MMD_FILE.exists():
         mmd_header = (
             "%% Auto-extracted from dump_agent_diagram.py :: extract_langgraph_mermaid()\n"
-            "%% Source: src/compile/compiler.py :: create_compiler()\n"
+            "%% Source: src/agent/compiler_agent.py :: create_compiler()\n"
             "%% Regenerate: make dump-agent-diagram\n"
         )
         MMD_FILE.write_text(mmd_header + graph_mermaid + "\n", encoding="utf-8")

@@ -11,12 +11,12 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
-from src.compile.compiler import _DOMAINS
-from src.compile.compiler import _generate_changes
-from src.compile.compiler import _generate_home
-from src.compile.compiler import _regenerate_decision_stubs
-from src.compile.compiler import _regenerate_domain_hubs
 from src.utils import extract_frontmatter
+from src.wiki.domains import _DOMAINS
+from src.wiki.landing import _generate_changes
+from src.wiki.landing import _generate_home
+from src.wiki.landing import _regenerate_decision_stubs
+from src.wiki.landing import _regenerate_domain_hubs
 
 
 def _write_page(path: Path, frontmatter: dict[str, object], body: str) -> None:

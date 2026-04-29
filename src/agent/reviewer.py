@@ -312,9 +312,9 @@ def build_reviewer_subagent(model_name: str | None = None) -> dict[str, object]:
     """
     from langchain.agents.structured_output import ToolStrategy
 
-    from src.compile.compiler import _make_chat_model
-    from src.compile.compiler import get_page_summary
-    from src.compile.compiler import resolve_page
+    from src.agent.runtime import _make_chat_model
+    from src.agent.tools.raw_access import resolve_page
+    from src.agent.tools.sources import get_page_summary
 
     model = _make_chat_model(model_name or REVIEWER_MODEL)
 

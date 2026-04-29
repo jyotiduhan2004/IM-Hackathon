@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.compile.compiler import rebuild_landing_pages
+from src.wiki.landing import rebuild_landing_pages
 
 
 def _write(path: Path, frontmatter: str, body: str) -> None:

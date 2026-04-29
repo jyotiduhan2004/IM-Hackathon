@@ -5,7 +5,7 @@ Safe to delete after: 2026-06-18
 Walks `wiki/topics/*.md` + `wiki/systems/*.md` and fills in `domain:`
 frontmatter for every page that's missing it. Domain is inferred by
 scoring each page's title + first body paragraph against the canonical
-8-domain keyword lists defined in `src.compile.compiler._DOMAINS`.
+8-domain keyword lists defined in `src.wiki.domains._DOMAINS`.
 
 When two domains score within 20% of each other the page is flagged
 ambiguous: a `domain_candidates: [...]` list is written alongside
@@ -44,13 +44,13 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import _DOMAINS  # noqa: E402
-from src.compile.compiler import _first_paragraph  # noqa: E402
-from src.compile.compiler import _iter_content_pages  # noqa: E402
-from src.compile.compiler import _read_page  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
 from src.utils import render_with_frontmatter  # noqa: E402
+from src.wiki.domains import _DOMAINS  # noqa: E402
+from src.wiki.pages import _first_paragraph  # noqa: E402
+from src.wiki.pages import _iter_content_pages  # noqa: E402
+from src.wiki.pages import _read_page  # noqa: E402
 
 # Ratio threshold for flagging a page as ambiguous. Runner-up within
 # 20% of the leader (by keyword-hit count) → write both candidates and

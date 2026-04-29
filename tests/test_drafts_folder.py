@@ -23,10 +23,10 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.compiler import write_draft_page  # noqa: E402
-from src.compile.prompts import COMPILER_SYSTEM_PROMPT  # noqa: E402
+from src.agent.prompts import COMPILER_SYSTEM_PROMPT  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.wiki.draft import write_draft_page  # noqa: E402
 
 
 def _invoke_write_draft(

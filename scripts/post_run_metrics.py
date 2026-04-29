@@ -71,7 +71,7 @@ AUDITS_DIR = REPO_ROOT / "docs" / "audits"
 REPORT_PREFIX = "post-run-metrics"
 HISTORY_PATH = AUDITS_DIR / "metrics-history.jsonl"
 DASHBOARD_PATH = AUDITS_DIR / "dashboard.md"
-PROMPTS_FILE = REPO_ROOT / "src" / "compile" / "prompts.py"
+PROMPTS_FILE = REPO_ROOT / "src" / "agent" / "prompts.py"
 
 # Trace-derivable metrics we push to Langfuse as scores. Wiki-side
 # metrics (M1, M2, M5, M6, M7, M10) live only in the JSONL — they don't
@@ -824,7 +824,7 @@ def render_markdown(report: Report, prior: dict[str, float] | None) -> str:
 
 
 def _prompt_commit_sha() -> str:
-    """Short SHA of the last commit touching ``src/compile/prompts.py``.
+    """Short SHA of the last commit touching ``src/agent/prompts.py``.
 
     Returns the literal string ``"unknown"`` (not ``None``) on any
     failure so the JSONL field is always a string. Tests + CI without

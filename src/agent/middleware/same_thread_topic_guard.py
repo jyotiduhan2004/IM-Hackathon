@@ -5,7 +5,7 @@ Why this exists: Codex 2026-04-17 audit flagged Seller BL thread
 optimization.md` + `seller-bl-user-details-verification-api-optimization.md`)
 for a single concept stream. Per the prompt, a thread producing a topic
 + a system page is valid (systems describe durable nouns, topics
-describe changes on them — see `src/compile/prompts.py` lines 37 +
+describe changes on them — see `src/agent/prompts.py` lines 37 +
 164). Only two *topic* pages for one thread is the bug.
 
 This middleware intercepts `write_file` on `/wiki/topics/<slug>.md`
@@ -136,8 +136,8 @@ def _maybe_reject(tool_name: str, args: dict[str, Any]) -> dict[str, Any] | None
         return None
 
     # Import inside the function to avoid a circular import at module load.
-    from src.compile.compiler import _current_batch_thread_id
-    from src.compile.compiler import _current_batch_topic_slugs_written
+    from src.agent.run_state import _current_batch_thread_id
+    from src.agent.run_state import _current_batch_topic_slugs_written
 
     thread_id = _current_batch_thread_id.get()
     if not thread_id:
@@ -183,7 +183,7 @@ def _record_in_run_topic_write(new_slug: str) -> None:
     entry. Mutation is in-place; if the var is None (tests / outside a
     run), we silently no-op.
     """
-    from src.compile.compiler import _current_batch_topic_slugs_written
+    from src.agent.run_state import _current_batch_topic_slugs_written
 
     slugs = _current_batch_topic_slugs_written.get()
     if slugs is None:

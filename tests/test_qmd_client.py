@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Iterator
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from src.compile.tools import qmd_client
-
+from src.agent.tools import qmd_client
 
 # ---------------------------------------------------------------------------
 # is_enabled — flag comes from pydantic-settings. Conftest's autouse fixture

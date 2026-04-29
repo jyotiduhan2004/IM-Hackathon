@@ -34,24 +34,24 @@ REPO_ROOT = Path(__file__).parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.scoring import build_wikilink_incoming_index  # noqa: E402
-from src.compile.scoring import score_concept_shape  # noqa: E402
-from src.compile.scoring import score_graph_health  # noqa: E402
-from src.compile.scoring import score_source_density  # noqa: E402
-from src.compile.scoring import score_structural_smells  # noqa: E402
-from src.compile.scoring import score_summary_currency  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.db.page_feedback import insert_feedback  # noqa: E402
 from src.utils import extract_body  # noqa: E402
 from src.utils import extract_frontmatter  # noqa: E402
+from src.wiki.scoring import build_wikilink_incoming_index  # noqa: E402
+from src.wiki.scoring import score_concept_shape  # noqa: E402
+from src.wiki.scoring import score_graph_health  # noqa: E402
+from src.wiki.scoring import score_source_density  # noqa: E402
+from src.wiki.scoring import score_structural_smells  # noqa: E402
+from src.wiki.scoring import score_summary_currency  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
 # Hub-page stems we never want in the scored topic set — generated listings
 # (``index.md``) and the legacy ``home``/``changes`` if they drift into
 # ``wiki/topics/`` at some point. Mirrors ``_GENERATED_HUB_STEMS`` in
-# ``src.compile.scoring`` but kept local because ``score_wiki`` owns its
+# ``src.wiki.scoring`` but kept local because ``score_wiki`` owns its
 # selection policy.
 _KNOWN_HUB_STEMS: frozenset[str] = frozenset({"index", "home", "changes"})
 

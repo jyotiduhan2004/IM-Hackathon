@@ -1,8 +1,8 @@
 """Raw-email access tools — `get_thread_context` and `resolve_page`.
 
-Extracted from `src/compile/compiler.py`. Compiler re-exports these at
-the bottom of that module so the `create_deep_agent(..., tools=[...])`
-registration keeps working unchanged.
+Extracted from the legacy `src/compile/compiler.py`. The tools are
+registered directly with `create_deep_agent(..., tools=[...])` in
+`src/agent/compiler_agent.py`; there is no re-export shim.
 """
 
 from __future__ import annotations
@@ -210,8 +210,8 @@ def resolve_page(query: str, limit: int = 10) -> dict[str, Any]:
 
     import structlog
 
-    from src.compile.tools.qmd_client import is_enabled as semantic_enabled
-    from src.compile.tools.qmd_client import query_qmd
+    from src.agent.tools.qmd_client import is_enabled as semantic_enabled
+    from src.agent.tools.qmd_client import query_qmd
 
     _logger = structlog.get_logger(__name__)
 
@@ -397,7 +397,7 @@ def get_thread_context(
         "cutoff_date": str | None}``. Empty list / ``message_count: 0``
         when the thread is unknown.
     """
-    from src.compile.compiler import _current_batch_cutoff_date
+    from src.agent.run_state import _current_batch_cutoff_date
     from src.db import connect
 
     cutoff = _current_batch_cutoff_date.get()

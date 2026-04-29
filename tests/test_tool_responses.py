@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from src.compile.compiler import _current_batch_cutoff_date
-from src.compile.compiler import get_page_summary
-from src.compile.compiler import get_thread_context
-from src.compile.compiler import list_wiki_pages
+from src.agent.run_state import _current_batch_cutoff_date
+from src.agent.tools.raw_access import get_thread_context
+from src.agent.tools.sources import get_page_summary
+from src.agent.tools.sources import list_wiki_pages
 
 # ---------------------------------------------------------------------------
 # Helpers

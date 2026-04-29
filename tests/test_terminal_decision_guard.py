@@ -28,9 +28,9 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from src.compile.middleware.terminal_decision_guard import _MAX_NUDGES
-from src.compile.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
-from src.compile.middleware.terminal_decision_guard import TerminalDecisionGuardMiddleware
+from src.agent.middleware.terminal_decision_guard import _MAX_NUDGES
+from src.agent.middleware.terminal_decision_guard import TERMINAL_NUDGE_MESSAGE
+from src.agent.middleware.terminal_decision_guard import TerminalDecisionGuardMiddleware
 
 # ---------------------------------------------------------------------------
 # Request / handler helpers — mirror test_check_my_work_gate.py shape.
@@ -374,7 +374,7 @@ def test_middleware_wired_into_compiler() -> None:
     the wiring survives refactors. Mirrors the pattern used by
     `test_check_my_work_gate.test_middleware_wired_into_compiler`.
     """
-    from src.compile.compiler import create_compiler
+    from src.agent.compiler_agent import create_compiler
 
     agent = create_compiler("z-ai/glm-5")
     tools_node = agent.nodes["tools"].bound

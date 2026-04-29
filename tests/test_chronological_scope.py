@@ -20,9 +20,9 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import patch
 
-from src.compile.compiler import _current_batch_cutoff_date
-from src.compile.middleware.chronological_scope import _check_future_raw
-from src.compile.middleware.chronological_scope import _raw_file_date
+from src.agent.middleware.chronological_scope import _check_future_raw
+from src.agent.middleware.chronological_scope import _raw_file_date
+from src.agent.run_state import _current_batch_cutoff_date
 
 
 class TestRawFileDateParse:
@@ -111,7 +111,7 @@ class TestCheckFutureRaw:
         assert rej is not None
 
     def test_compute_batch_cutoff_date_from_filenames(self) -> None:
-        from src.compile.compiler import _compute_batch_cutoff_date
+        from src.agent.run_state import _compute_batch_cutoff_date
 
         # Filenames-only derivation, no DB round-trip, no TZ drift.
         assert (
@@ -126,7 +126,7 @@ class TestCheckFutureRaw:
         )
 
     def test_compute_batch_cutoff_date_no_parseable_paths(self) -> None:
-        from src.compile.compiler import _compute_batch_cutoff_date
+        from src.agent.run_state import _compute_batch_cutoff_date
 
         assert _compute_batch_cutoff_date([]) is None
         assert _compute_batch_cutoff_date(["wiki/topics/foo.md"]) is None
@@ -145,7 +145,7 @@ class TestGetThreadContextCutoff:
         # Exercise the code path that applies the cutoff filter. We don't
         # need a real DB — a mocked connect + execute proves the query
         # shape changes when the ContextVar is set.
-        from src.compile.compiler import get_thread_context
+        from src.agent.tools.raw_access import get_thread_context
 
         class _FakeCursor:
             def __init__(self) -> None:
@@ -190,7 +190,7 @@ class TestGetThreadContextCutoff:
         assert "date::date <= %s::date" in (cur.last_sql or "")
 
     def test_no_cutoff_no_filter(self) -> None:
-        from src.compile.compiler import get_thread_context
+        from src.agent.tools.raw_access import get_thread_context
 
         class _FakeCursor:
             last_sql: str | None = None

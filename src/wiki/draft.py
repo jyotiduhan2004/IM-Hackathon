@@ -1,8 +1,8 @@
 """Draft-page writer — the `write_draft_page` agent tool.
 
-Extracted from `src/compile/compiler.py`. Compiler re-exports the tool
-at the bottom of that module so the `create_deep_agent(..., tools=[...])`
-registration keeps working unchanged.
+Extracted from the legacy `src/compile/compiler.py`. The tool is registered
+directly with `create_deep_agent(..., tools=[...])` in
+`src/agent/compiler_agent.py`; there is no re-export shim.
 """
 
 from __future__ import annotations

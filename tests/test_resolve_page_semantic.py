@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
-from src.compile import compiler as compiler_mod
+from src.agent import compiler_agent as compiler_mod
 from src.db import wiki_pages as repo
 
 
@@ -92,7 +92,7 @@ def test_response_has_no_operational_telemetry_fields(
     semantic_result = _semantic_ok(
         [{"slug": "foo", "title": "Foo", "score": 0.9, "snippet": "body"}],
     )
-    with patch("src.compile.tools.qmd_client.query_qmd", return_value=semantic_result):
+    with patch("src.agent.tools.qmd_client.query_qmd", return_value=semantic_result):
         result = _resolve("foo")
 
     # Exact-hit envelope — no latency should leak.
@@ -141,7 +141,7 @@ def test_flag_on_exact_slug_wins_even_when_semantic_missed(
         ]
     )
 
-    with patch("src.compile.tools.qmd_client.query_qmd", return_value=semantic_result):
+    with patch("src.agent.tools.qmd_client.query_qmd", return_value=semantic_result):
         result = _resolve("marketplace-launch")
 
     assert result["exists"] is True
@@ -176,7 +176,7 @@ def test_flag_on_exact_hit_carries_snippet_when_semantic_also_found_it(
         ]
     )
 
-    with patch("src.compile.tools.qmd_client.query_qmd", return_value=semantic_result):
+    with patch("src.agent.tools.qmd_client.query_qmd", return_value=semantic_result):
         result = _resolve("seller-isq")
 
     assert result["exists"] is True
@@ -224,7 +224,7 @@ def test_flag_on_no_exact_returns_semantic_candidates(
         ]
     )
 
-    with patch("src.compile.tools.qmd_client.query_qmd", return_value=semantic_result):
+    with patch("src.agent.tools.qmd_client.query_qmd", return_value=semantic_result):
         result = _resolve("how do we speed up seller BL API calls")
 
     assert result["exists"] is False
@@ -264,7 +264,7 @@ def test_flag_on_semantic_skips_candidates_not_in_catalog(
         ]
     )
 
-    with patch("src.compile.tools.qmd_client.query_qmd", return_value=semantic_result):
+    with patch("src.agent.tools.qmd_client.query_qmd", return_value=semantic_result):
         result = _resolve("some query")
 
     assert result["exists"] is False
@@ -292,7 +292,7 @@ def test_flag_on_semantic_error_falls_back_to_fuzzy(
     db_conn.commit()
 
     with patch(
-        "src.compile.tools.qmd_client.query_qmd",
+        "src.agent.tools.qmd_client.query_qmd",
         return_value=_semantic_err("missing_binary"),
     ):
         result = _resolve("whatsapp-something")
@@ -319,7 +319,7 @@ def test_flag_on_semantic_empty_falls_back_to_fuzzy(
     db_conn.commit()
 
     with patch(
-        "src.compile.tools.qmd_client.query_qmd",
+        "src.agent.tools.qmd_client.query_qmd",
         return_value=_semantic_ok([]),
     ):
         result = _resolve("whatsapp-something")
@@ -360,7 +360,7 @@ def test_email_query_uses_sql_path_even_with_flag_on(
         ]
     )
     with patch(
-        "src.compile.tools.qmd_client.query_qmd",
+        "src.agent.tools.qmd_client.query_qmd",
         return_value=bad_semantic,
     ) as mock_qmd:
         result = _resolve("alice@example.com")

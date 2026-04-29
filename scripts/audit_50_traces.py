@@ -44,9 +44,9 @@ from scripts.trace_scorecard import ENTITY_TOOLS  # noqa: E402
 from scripts.trace_scorecard import _coerce_batch_index  # noqa: E402
 from scripts.trace_scorecard import _langfuse_env  # noqa: E402
 from scripts.trace_scorecard import _run_langfuse  # noqa: E402
-from src.compile.categories import AGENT_VISIBLE_CATEGORIES  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.observability.trace_signals import CONTENT_PAGE_TYPES  # noqa: E402
+from src.wiki.categories import AGENT_VISIBLE_CATEGORIES  # noqa: E402
 
 # Content-page category directories we accept for the broadened
 # "attempted content page" denominator. Sourced from the shared

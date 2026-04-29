@@ -42,13 +42,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.compile.judge import JudgeParseError  # noqa: E402
-from src.compile.judge import Severity  # noqa: E402
-from src.compile.judge import build_system_prompt  # noqa: E402
-from src.compile.judge import build_user_prompt  # noqa: E402
-from src.compile.judge import call_judge  # noqa: E402
-from src.compile.judge import estimate_cost  # noqa: E402
-from src.compile.judge import severity_from_score  # noqa: E402
+from src.agent.judge import JudgeParseError  # noqa: E402
+from src.agent.judge import Severity  # noqa: E402
+from src.agent.judge import build_system_prompt  # noqa: E402
+from src.agent.judge import build_user_prompt  # noqa: E402
+from src.agent.judge import call_judge  # noqa: E402
+from src.agent.judge import estimate_cost  # noqa: E402
+from src.agent.judge import severity_from_score  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.db import connect  # noqa: E402
 from src.db.page_feedback import insert_feedback  # noqa: E402
