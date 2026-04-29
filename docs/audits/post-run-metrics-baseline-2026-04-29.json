@@ -1,0 +1,109 @@
+{
+  "run_id": null,
+  "generated_at": "2026-04-29T06:19:35.086034+00:00",
+  "since": null,
+  "new_pages_total": 465,
+  "metrics": [
+    {
+      "name": "M1",
+      "label": "% new pages with `owner:` frontmatter",
+      "value": 0.0,
+      "target": "\u226580%",
+      "sample_size": 465,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M2",
+      "label": "% new pages with \u22652-sentence lead paragraph + a number",
+      "value": 0.1913978494623656,
+      "target": "\u226570%",
+      "sample_size": 465,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M3",
+      "label": "log_insight active-teaching calls per email",
+      "value": 3.0,
+      "target": "\u22651/batch",
+      "sample_size": 102,
+      "unit": "raw",
+      "note": "baseline since=2026-04-28T06:19:35.083492+00:00"
+    },
+    {
+      "name": "M4",
+      "label": "check_my_work pre-write rate",
+      "value": null,
+      "target": "0%",
+      "sample_size": 0,
+      "unit": "pct",
+      "note": "skipped (--skip-langfuse)"
+    },
+    {
+      "name": "M5",
+      "label": "% pages with `## TL;DR` H2",
+      "value": 0.07096774193548387,
+      "target": "\u21920%",
+      "sample_size": 465,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M6",
+      "label": "% pages with strikethrough `~~`",
+      "value": 0.0064516129032258064,
+      "target": "0%",
+      "sample_size": 465,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M7",
+      "label": "median people-wikilinks per page",
+      "value": 0.0,
+      "target": "\u22643",
+      "sample_size": 465,
+      "unit": "raw",
+      "note": ""
+    },
+    {
+      "name": "M8",
+      "label": "reviewer pass-on-first-cycle rate",
+      "value": null,
+      "target": "\u226560%",
+      "sample_size": 0,
+      "unit": "pct",
+      "note": "skipped (--skip-langfuse)"
+    },
+    {
+      "name": "M9",
+      "label": "average prompt tokens per trace",
+      "value": null,
+      "target": "track",
+      "sample_size": 0,
+      "unit": "raw",
+      "note": "skipped (--skip-langfuse)"
+    },
+    {
+      "name": "M10",
+      "label": "archetype distribution (see table below)",
+      "value": null,
+      "target": "balanced",
+      "sample_size": 465,
+      "unit": "raw",
+      "note": ""
+    }
+  ],
+  "archetype_dist": {
+    "other": 292,
+    "bug": 22,
+    "launch": 46,
+    "system": 103,
+    "policy": 1,
+    "decision": 1
+  },
+  "warnings": [
+    "langfuse: skipped (--skip-langfuse)"
+  ]
+}

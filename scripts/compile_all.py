@@ -2507,6 +2507,28 @@ def main(
 
     click.echo(f"\nDone. Processed {processed}/{total} emails.")
 
+    # Post-run metrics dipstick — does the prompt revamp actually land?
+    # Only emit on a clean run (failed runs would muddy the comparison
+    # window). Best-effort: any langfuse / DB hiccup is logged and the
+    # report ships with whatever metrics succeeded.
+    if run_status == "completed":
+        try:
+            from scripts.post_run_metrics import emit_for_run
+
+            metrics_path = emit_for_run(run_id)
+            if metrics_path is not None:
+                # `is_relative_to` survives test setups that monkeypatch
+                # REPO_ROOT to a tmp dir while the dipstick still writes
+                # under the real repo audits dir.
+                pretty = (
+                    metrics_path.relative_to(REPO_ROOT)
+                    if metrics_path.is_relative_to(REPO_ROOT)
+                    else metrics_path
+                )
+                click.echo(f"\nPost-run metrics: {pretty}")
+        except ImportError as exc:
+            logger.warning("post_run_metrics_import_failed", error=str(exc))
+
     # Optional: publish the freshly-compiled wiki to Cloud Run. Only fires
     # on a clean 'completed' run. KeyboardInterrupt re-raises through the
     # `finally:` above so deploy never runs on Ctrl+C. Uncaught exceptions
