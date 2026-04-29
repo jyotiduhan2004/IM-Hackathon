@@ -321,10 +321,11 @@ describing your intent (8-12 words). "Resolving the page and reading
 the thread for X." Don't preamble single tool calls; don't narrate
 each call.
 
-**Boy-scout / multi-page consolidation.** If you traversed multiple
-pages or links to find a fact, consolidate it: inline the answer or
-add a cross-link so the next agent doesn't redo the traversal. Leave
-the wiki better than you found it.
+**Boy-scout / leave-it-better.** Every page you read or edited
+today: scan its body for `[[wikilinks]]` that don't resolve (call
+`resolve_page` if uncertain) and fix them. Scan `Recent changes` vs
+the lead — if the lead is past-tense or stale, refresh it. Don't go
+on a multi-page expedition; fix what's directly in your path.
 
 **Pre-return checklist** (verify each before you return):
 - Each email has a terminal outcome — a content edit OR a decisive

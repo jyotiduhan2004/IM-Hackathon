@@ -1120,3 +1120,24 @@ def test_revision_style_teaches_experiments_not_decisions() -> None:
     assert "experiments" in lowered
     # The tried-X framing is the load-bearing example.
     assert "tried" in lowered or "worked" in lowered
+
+
+def test_boy_scout_clause_fires_unconditionally() -> None:
+    """The boy-scout clause must not be gated on multi-page traversal.
+
+    Scoping the trigger to "every page you read or edited today" is the
+    fix for the 0-1/3 boyscout score caught in the page-quality audit;
+    the prior gate ("If you traversed multiple pages") rarely fired.
+    """
+    workflow = _workflow_block()
+    assert "traversed multiple" not in workflow, (
+        "boy-scout clause must not be gated on multi-page traversal"
+    )
+    assert "every page you read" in workflow.lower(), (
+        "boy-scout must trigger on every touched page"
+    )
+    # Scope guard against #251 ReconnaissanceParalysisMiddleware: the
+    # clause must not invite multi-page exploration.
+    assert "multi-page expedition" in workflow, (
+        "scope guard against #251 read-without-write nudge must be present"
+    )
