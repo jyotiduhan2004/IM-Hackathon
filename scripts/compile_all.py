@@ -54,6 +54,7 @@ from src.coordinator.post_batch import _iter_touched_content_pages  # noqa: E402
 from src.coordinator.post_batch import _iter_touched_pages  # noqa: E402
 from src.coordinator.post_batch import _mdlint_autofix_touched_pages  # noqa: E402
 from src.coordinator.post_batch import _normalize_touched_pages  # noqa: E402
+from src.coordinator.post_batch import _refresh_qmd_index  # noqa: E402
 from src.coordinator.post_batch import _regenerate_landing_surfaces  # noqa: E402
 from src.coordinator.post_batch import _stamp_recently_modified_pages  # noqa: E402
 from src.coordinator.post_batch import _sync_and_stamp_landing_surfaces  # noqa: E402
@@ -514,6 +515,11 @@ def main(
                 _backfill_references_on_touched_pages(touched_content_pages, Path(wiki_dir))
                 catalog_synced = _sync_wiki_catalog(touched_pages, Path(wiki_dir))
                 errors_by_page = _validate_touched_pages(touched_pages, Path(wiki_dir))
+                # Refresh qmd's index so the next batch's resolve_page
+                # sees pages this batch just wrote. Skip on empty
+                # batches (trivial-skip / no-op runs) — nothing changed.
+                if touched_pages:
+                    _refresh_qmd_index()
                 if errors_by_page:
                     logger.warning(
                         "batch touched pages have validator errors",
@@ -734,6 +740,9 @@ def main(
             f"Landing surfaces: stamped {landing_stamped}, "
             f"catalog synced {landing_synced} (home/glossary/changes + domains + decisions)"
         )
+
+    # Run-end reindex: per-batch hook misses landing surfaces written here.
+    _refresh_qmd_index()
 
     # Push per-trace Langfuse Scores for the headline north-star metrics
     # so they show up in dashboards without re-running trace_scorecard.py.

@@ -127,6 +127,23 @@ def test_query_qmd_skips_rows_without_parseable_slug() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_query_qmd_invokes_with_no_rerank_flag() -> None:
+    """Pin the argv shape — ``--no-rerank`` is the load-bearing knob
+    that drops p95 latency 37s → 1.3s (see
+    docs/audits/qmd-rerank-ab-2026-04-29.md). Removing it would
+    silently re-introduce the 45s timeout cliff.
+    """
+    payload = _qmd_payload(
+        {"docid": "#x", "score": 0.5, "file": "qmd://w/p.md", "title": "P"},
+    )
+    with patch("subprocess.run", return_value=_fake_proc(stdout=payload)) as run_mock:
+        qmd_client.query_qmd("anything", limit=5)
+
+    argv = run_mock.call_args.args[0]
+    assert "--no-rerank" in argv
+    assert argv[:2] == ["qmd", "query"]
+
+
 def test_query_qmd_handles_missing_binary() -> None:
     with patch("subprocess.run", side_effect=FileNotFoundError("qmd not installed")):
         result = qmd_client.query_qmd("q", limit=5)

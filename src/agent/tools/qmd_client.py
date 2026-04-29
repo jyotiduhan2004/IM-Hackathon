@@ -1,23 +1,26 @@
 """qmd subprocess client for semantic wiki retrieval.
 
-Thin wrapper around ``qmd query <q> -n <limit> --json``. Returns
-relevance-ranked candidates with line-numbered snippets so the caller
-(``resolve_page``) can surface *why* each page matched without a
-follow-up ``read_file``.
+Thin wrapper around ``qmd query <q> -n <limit> --json --no-rerank``.
+Returns relevance-ranked candidates with line-numbered snippets so the
+caller (``resolve_page``) can surface *why* each page matched without
+a follow-up ``read_file``.
 
 Design notes:
 - Subprocess over HTTP MCP daemon for Phase 1. Simpler, no daemon
-  lifecycle. First-call latency (~16s cold) is acceptable for the
-  tool-rounds-per-miss reduction we expect. HTTP daemon is a Phase
-  1.5 optimisation if latency becomes a production concern.
+  lifecycle. First-call latency (~3s cold without reranker) is
+  acceptable for the tool-rounds-per-miss reduction we expect.
 - Returns a structured shape the caller can drop straight into the
   existing resolve_page envelope. No exception propagation — errors
   come back as ``{"error": "...", "candidates": []}`` so the caller
   can fall back to SQL cleanly.
-- Spike audit (docs/audits/qmd-spike-2026-04-23.md) validated 85%
-  top-5 sensibility on 40 real Langfuse queries, 9/9 on fixture
-  backstop. ``QMD_TIMEOUT_S`` is the per-call hard cap; default is
-  generous (60s) to cover the worst cold-start reranker warm-up.
+- ``--no-rerank`` skips the LLM reranker. The 77-query A/B
+  (docs/audits/qmd-rerank-ab-2026-04-29.md) showed top-1 identical on
+  73/73 non-person queries with rerank-on as ground truth, while
+  cutting p95 latency 37.5s → 1.3s and *fixing* two spike-documented
+  failure modes (`marketplace-launch`, long-slug queries) where the
+  reranker over-weighted prose and hid the exact-match page.
+- ``QMD_TIMEOUT_S`` is the per-call hard cap; the default is tight
+  (10s) because no-rerank queries return in <3s even under contention.
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ def query_qmd(
     limit: int = 5,
     timeout_s: int | None = None,
 ) -> dict[str, Any]:
-    """Run ``qmd query <q> -n <limit> --json`` and parse results.
+    """Run ``qmd query <q> -n <limit> --json --no-rerank`` and parse results.
 
     Returns a dict with one of two shapes:
 
@@ -83,7 +86,7 @@ def query_qmd(
     timeout = timeout_s if timeout_s is not None else settings.qmd_timeout_s
     try:
         proc = subprocess.run(
-            ["qmd", "query", query, "-n", str(limit), "--json"],
+            ["qmd", "query", query, "-n", str(limit), "--json", "--no-rerank"],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -113,7 +116,7 @@ def query_qmd(
         }
     try:
         payload = json.loads(proc.stdout)
-    except (ValueError, json.JSONDecodeError):
+    except json.JSONDecodeError:
         return {
             "candidates": [],
             "latency_s": latency,

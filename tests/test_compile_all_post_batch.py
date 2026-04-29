@@ -343,3 +343,101 @@ def test_backfill_references_noop_on_clean_page(
     before = page.read_text(encoding="utf-8")
     assert compile_all_module._backfill_references_on_touched_pages([page], wiki_dir) == 0
     assert page.read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
+# _refresh_qmd_index — Codex P2 / P3 (PR #289)
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_qmd_index_short_circuits_on_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-zero ``qmd update`` must skip ``qmd embed`` (embedding
+    against a half-known corpus would re-vectorise stale state) and
+    log a warning instead of swallowing the failure. Codex P2 on PR #289.
+
+    The behaviour contract is: exactly ONE subprocess call when the
+    first one returns non-zero. The warning emission is exercised at
+    the same code path; pinning argv-count is what protects the
+    silent-failure regression Codex flagged.
+    """
+    import subprocess
+    from unittest.mock import patch
+
+    from src.config import settings as _s
+    from src.coordinator import post_batch
+
+    monkeypatch.setattr(_s, "use_semantic_resolve", True)
+
+    fake_proc = subprocess.CompletedProcess(
+        args=["qmd", "update"], returncode=2, stdout="", stderr="index corrupt"
+    )
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/qmd"),
+        patch("subprocess.run", return_value=fake_proc) as run_mock,
+        patch.object(post_batch.logger, "warning") as warn_mock,
+    ):
+        post_batch._refresh_qmd_index()
+
+    assert run_mock.call_count == 1, "qmd embed must not run after qmd update fails"
+    assert warn_mock.called, "non-zero exit must surface as a warning"
+    args, kwargs = warn_mock.call_args
+    assert args[0] == "qmd_reindex_nonzero_exit"
+    assert kwargs["returncode"] == 2
+
+
+def test_refresh_qmd_index_runs_both_steps_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: both ``qmd update`` and ``qmd embed`` run when
+    ``use_semantic_resolve`` is on and update succeeds."""
+    import subprocess
+    from unittest.mock import patch
+
+    from src.config import settings as _s
+    from src.coordinator import post_batch
+
+    monkeypatch.setattr(_s, "use_semantic_resolve", True)
+    fake_ok = subprocess.CompletedProcess(args=["qmd"], returncode=0, stdout="", stderr="")
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/qmd"),
+        patch("subprocess.run", return_value=fake_ok) as run_mock,
+    ):
+        post_batch._refresh_qmd_index()
+    assert [c.args[0] for c in run_mock.call_args_list] == [["qmd", "update"], ["qmd", "embed"]]
+
+
+def test_refresh_qmd_index_skips_when_semantic_resolve_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No subprocess calls when ``use_semantic_resolve=False`` — keeps
+    the hook free for users who haven't opted into qmd."""
+    from unittest.mock import patch
+
+    from src.config import settings as _s
+    from src.coordinator import post_batch
+
+    monkeypatch.setattr(_s, "use_semantic_resolve", False)
+    with patch("subprocess.run") as run_mock:
+        post_batch._refresh_qmd_index()
+    assert run_mock.call_count == 0
+
+
+def test_refresh_qmd_index_skips_when_qmd_not_on_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No subprocess calls when ``qmd`` binary is missing — production
+    images without the dev extra shouldn't crash on the hook."""
+    from unittest.mock import patch
+
+    from src.config import settings as _s
+    from src.coordinator import post_batch
+
+    monkeypatch.setattr(_s, "use_semantic_resolve", True)
+    with (
+        patch("shutil.which", return_value=None),
+        patch("subprocess.run") as run_mock,
+    ):
+        post_batch._refresh_qmd_index()
+    assert run_mock.call_count == 0

@@ -176,14 +176,14 @@ class Settings(BaseSettings):
 
     # qmd semantic retriever (Phase 1). When True, resolve_page routes
     # ambiguous queries through the qmd CLI before SQL fallback.
-    # qmd_timeout_s caps the per-call subprocess wall-clock. Originally
-    # 45s (covered worst cold-start rerank in the 2026-04-23 spike), but
-    # trace audit on run 5928c151 (2026-04-29) showed 15.4% of calls
-    # hitting the cap (vs 8.9% on prior run 3e88f996) with p95 latency
-    # plastered at 45.1s. Bumped to 60s as a band-aid while embedding-
-    # service degradation RCA runs separately.
+    # qmd_timeout_s caps the per-call subprocess wall-clock. With
+    # ``--no-rerank`` (see qmd_client) the 77-query A/B
+    # (docs/audits/qmd-rerank-ab-2026-04-29.md) measured p95=1.3s
+    # sequential and ~5s under 3-way contention — 10s gives 2x headroom
+    # and trips fast on real hangs. Supplants PR #281's 45s→60s
+    # band-aid: the reranker was the actual cliff, not the cap.
     use_semantic_resolve: bool = False
-    qmd_timeout_s: int = 60
+    qmd_timeout_s: int = 10
 
     # Per-`agent.ainvoke` wall-clock timeout in seconds. Caps a single LLM
     # round so a wedged proxy connection (2026-04-22 grok-4.1-fast: 5h31m

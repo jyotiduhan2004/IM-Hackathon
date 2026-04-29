@@ -418,6 +418,62 @@ def _mdlint_autofix_touched_pages(pages: list[Path]) -> int:
     return fixed
 
 
+def _refresh_qmd_index() -> None:
+    """Best-effort `qmd update && qmd embed` so the next batch's
+    ``resolve_page`` semantic search sees the pages this batch just
+    wrote.
+
+    qmd has no file-watch mode and the daemon doesn't auto-reindex
+    (verified 2026-04-29 against tobi/qmd). Without this hook the index
+    drifts — the 5928c151 audit found qmd indexing 305 topic pages while
+    the filesystem had 382, missing 25% of recent topics.
+
+    Cost: ``qmd update`` is metadata-only (~0.4s on full corpus);
+    ``qmd embed`` only re-vectorizes docs whose hashes changed (~1-2s
+    per touched page on M-series). Typical batch overhead: 2-10s.
+
+    Skipped silently when ``use_semantic_resolve`` is off (no point
+    keeping an index fresh for a retriever no one queries) or when
+    ``qmd`` isn't on PATH (production images without the dev extra).
+    Non-zero exits and exceptions are both logged but never fail the
+    batch — index corruption / runtime errors surface in the
+    operator's structlog stream rather than tanking the compile.
+    """
+    import shutil
+    import subprocess
+
+    from src.config import settings
+
+    if not settings.use_semantic_resolve or shutil.which("qmd") is None:
+        return
+    # Update is metadata-only (~0.4s on full corpus); 10s cap keeps the
+    # failure tail tight. Embed scales with changed-doc count (1-2s/doc
+    # on M-series); 120s covers backlog runs that touched many pages.
+    timeouts = {"update": 10, "embed": 120}
+    for argv in (["qmd", "update"], ["qmd", "embed"]):
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeouts[argv[1]],
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.warning("qmd_reindex_failed", argv=argv, error=str(exc))
+            return
+        if proc.returncode != 0:
+            # First non-zero stops the chain — running ``embed`` after
+            # a failed ``update`` re-vectorises a half-known corpus.
+            logger.warning(
+                "qmd_reindex_nonzero_exit",
+                argv=argv,
+                returncode=proc.returncode,
+                stderr=(proc.stderr or "").strip()[:500],
+            )
+            return
+
+
 def _sync_wiki_catalog(pages: list[Path], wiki_dir: Path) -> int:
     """Upsert each touched page into the `wiki_pages` catalog.
 
