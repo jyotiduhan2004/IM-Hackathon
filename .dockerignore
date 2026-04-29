@@ -21,7 +21,9 @@ __pycache__
 token.json
 credentials.json
 
-src
+# `src/` is needed at builder stage — mkdocs_hooks.py imports
+# from src.wiki.references at module load (PR #284). Final nginx
+# image excludes Python entirely so this is builder-only bloat.
 scripts
 tests
 # Keep raw/*.md so mkdocs_hooks.py can inline the "Sources" section on each
