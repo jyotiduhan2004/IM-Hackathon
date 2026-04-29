@@ -9,7 +9,7 @@ H2, malformed frontmatter, stray markdown, H1-in-body).
 
 The agent either fixes the page and retries (critique re-runs clean)
 or passes `acknowledge=['issue_id', ...]` to proceed anyway. Every
-round is logged to `docs/audits/critique-<ISO>-<msgid>.md` so we can
+round is logged to `logs/critiques/critique-<ISO>-<msgid>.md` so we can
 later sample how often the agent skipped hints. `scripts/compile_all.py`
 still flips `compile_state` based on deterministic citation evidence —
 `check_my_work` is advisory, not a gate.
@@ -809,7 +809,7 @@ def write_audit(
     audit_dir: Path,
     acknowledged_ids: set[str] | None = None,
 ) -> Path:
-    """Dump critique + action to docs/audits/critique-<ISO>-<msgid>.md.
+    """Dump critique + action to logs/critiques/critique-<ISO>-<msgid>.md.
 
     The timestamp is microsecond-precise and, if a collision is still
     possible (fix-loop retries inside a single microsecond), we walk a

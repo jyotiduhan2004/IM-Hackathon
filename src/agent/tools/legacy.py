@@ -98,7 +98,7 @@ def check_my_work(
          check treats those IDs as intentional and passes.
 
     Every call writes an audit file to
-    ``docs/audits/critique-<ISO>-<msgid>.md`` so the operator can sample
+    ``logs/critiques/critique-<ISO>-<msgid>.md`` so the operator can sample
     how often blockers surfaced, what you fixed, and what you acked.
 
     NOTE: This tool does NOT flip DB state. The coordinator
@@ -129,7 +129,7 @@ def check_my_work(
 
     repo_root = Path.cwd()
     wiki_dir = repo_root / "wiki"
-    audit_dir = repo_root / "docs" / "audits"
+    audit_dir = repo_root / "logs" / "critiques"
 
     # Sorted ack list so (['b', 'a'],) hashes the same as (['a', 'b'],).
     ack_hash = hashlib.sha256((",".join(sorted(acknowledge or []))).encode("utf-8")).hexdigest()
