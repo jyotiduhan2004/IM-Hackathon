@@ -42,7 +42,12 @@ FIXTURE_WIKI = REPO_ROOT / "tests" / "fixtures" / "validate_sections_fixture" / 
 
 
 def test_warns_on_missing_sections_by_default() -> None:
-    """Default mode: bad-topic + bad-system each produce 1 warning, 0 errors."""
+    """Default mode: bad-topic + bad-system each produce 1 warning, 0 errors.
+
+    PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the universal H2 floor
+    shrunk to 5 slots per page type (Summary, Key decisions,
+    References dropped). Bad fixtures + asserted slot names updated
+    to match the new shape."""
     errors, warnings = validator.check_suggested_sections(FIXTURE_WIKI)
     assert errors == []
     assert len(warnings) == 2
@@ -51,11 +56,12 @@ def test_warns_on_missing_sections_by_default() -> None:
     assert "bad-system.md" in by_page
     assert by_page["bad-topic.md"].check == "suggested-sections-missing"
     assert by_page["bad-system.md"].check == "suggested-sections-missing"
-    # bad-topic omits "Open questions" and "References"
+    # bad-topic omits "Why it matters", "Recent changes", "Open questions"
+    assert "Why it matters" in by_page["bad-topic.md"].reason
     assert "Open questions" in by_page["bad-topic.md"].reason
-    assert "References" in by_page["bad-topic.md"].reason
-    # bad-system omits "Related pages"
-    assert "Related pages" in by_page["bad-system.md"].reason
+    # bad-system omits "Active related topics", "Dependencies", "Related"
+    assert "Active related topics" in by_page["bad-system.md"].reason
+    assert "Dependencies" in by_page["bad-system.md"].reason
 
 
 def test_strict_promotes_warnings_to_errors() -> None:

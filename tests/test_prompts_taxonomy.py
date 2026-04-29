@@ -100,34 +100,21 @@ def test_decision_guidance_lives_in_workflow() -> None:
 
 
 def test_workflow_prompt_under_budget() -> None:
-    """Informational token-budget guard. v10-U4 merged two ~1700-token
-    sections into one; v11-U7 reframed Required→Suggested H2s and added
-    thread-subject anti-pattern call-outs (~200 chars); v12-U1 added
-    `<concept_vs_thread>` (~2.5k chars) teaching the concept-vs-thread
-    reframe with a worked good/bad Summary pair; v12-U2 added
-    `<expert_questions>` (~2.8k chars) teaching the 5W + IndiaMart-
-    flavored expert questions; v12-U3 added `<inline_citations>`
-    (~2k chars) teaching inline `[^msg-*]` footnote syntax + the
-    `## References` footnote block; v12-U4 added `<revision_style>`
-    (~2.8k chars) teaching the current-truth Summary + collapsible
-    archive revision style; the v12-U4 Codex-#219 follow-up added
-    ~400 chars rewording the decision-page guidance to match the
-    lazy-creation contract; the V12 audit fix-C (2026-04-23) added
-    ~400 chars teaching the `insufficient_decision` terminal category
-    + surfacing it in the tool reference; Wave-1-U6 added ~1.1k chars
-    carving out the question-delta exception (director asks extend
-    the page, do not skip as already_captured); the smoke-99a267f4
-    follow-up (2026-04-28) added ~1.5k chars for the symmetric
-    answer-delta exception (don't skip when the email is the answer
-    to an already-open question on the page). The ceiling is 45500
-    chars — crossing it means a later edit re-introduced duplication
-    or bloat. Raise only on a deliberate feature that genuinely needs
-    more space."""
-    assert len(COMPILER_SYSTEM_PROMPT) < 45500, (
-        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; Wave-1-U6 "
-        "baseline was ~43.3k (v12 stack + Wave-1-U6 question-delta carve-out). "
-        "If the growth is deliberate, raise this ceiling; otherwise it's "
-        "probably re-introduced duplication."
+    """Informational token-budget guard.
+
+    PR2 (2026-04-28 prompt-review): added `<content_floor>`,
+    `<voice>`, `<related_links>`, six new few-shot examples
+    (selective-wikilinking, Q-delta, forward-update, chronological
+    DON'T, bug-page shape, meta-insight) and expanded
+    `<tool_guidance>` with the reviewer-call rule + check_my_work
+    contract. Net growth pushed the ceiling to ~60k chars; the
+    procedure cuts (Q6-meta CC-G hybrid) and the `<expert_questions>`
+    5W move to reviewer offset some of it but not all. Raise only on
+    a deliberate feature that genuinely needs more space."""
+    assert len(COMPILER_SYSTEM_PROMPT) < 60000, (
+        f"prompt grew to {len(COMPILER_SYSTEM_PROMPT)} chars; PR2 "
+        "baseline is ~58k. If the growth is deliberate, raise this "
+        "ceiling; otherwise it's probably re-introduced duplication."
     )
 
 
@@ -171,14 +158,18 @@ def test_editorial_notes_teaches_three_outcomes() -> None:
     assert "don't loop" in block.lower() or "not a gatekeeper" in block.lower()
 
 
-def test_workflow_step_7_points_to_editorial_notes_section() -> None:
-    """Step 7 teaches the call, but the nuance lives in the
-    <editorial_notes> block. Workflow must name-drop the section so
-    the writer knows to go read it."""
-    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
-    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
-    workflow = COMPILER_SYSTEM_PROMPT[start:end]
-    assert "editorial_notes" in workflow
+def test_reviewer_call_guidance_points_to_editorial_notes() -> None:
+    """PR2 (2026-04-28 prompt-review Q6-meta CC-G hybrid): the 9-step
+    procedure was replaced with an outcome-based lean procedure +
+    examples. The reviewer-call rule moved into `<tool_guidance>`
+    under `## Reviewer call rule`. The section must name-drop
+    `<editorial_notes>` so the writer knows where to go for nuance.
+    """
+    start = COMPILER_SYSTEM_PROMPT.find("<tool_guidance>")
+    end = COMPILER_SYSTEM_PROMPT.find("</tool_guidance>")
+    block = COMPILER_SYSTEM_PROMPT[start:end]
+    assert "Reviewer call rule" in block
+    assert "editorial_notes" in block
 
 
 def test_taxonomy_covers_three_plus_two() -> None:
@@ -428,37 +419,45 @@ def test_investigatory_insights_marked_non_terminal() -> None:
     assert "do not close the loop" in lowered or "do not satisfy" in lowered
 
 
-def test_check_my_work_taught_in_workflow_with_correct_contract() -> None:
-    """Codex P1: `check_my_work` is bound at runtime but the prompt
-    never mentioned it. Workflow now teaches all three possible
-    return shapes (clean / blocked / gate-rejected). The gate-
-    rejected shape is the key one — it's a plain error ToolMessage
-    whose content starts 'Rejected: call check_my_work only after…'
-    — and if the prompt doesn't describe it the agent loops retrying
+def test_check_my_work_taught_with_correct_contract() -> None:
+    """PR2 (Q6-meta CC-G hybrid): the 9-step procedure became a lean
+    outcome-based section + examples. The check_my_work contract
+    (clean / blocked / gate-rejected) moved into `<tool_guidance>`
+    under the Quality block. Same three return shapes must be
+    taught — including the gate-rejected one ("Rejected: call
+    check_my_work only after…") — otherwise the agent loops retrying
     the same gate with no write in between."""
-    start = COMPILER_SYSTEM_PROMPT.find("<workflow>")
-    end = COMPILER_SYSTEM_PROMPT.find("</workflow>")
-    workflow = COMPILER_SYSTEM_PROMPT[start:end]
-    assert "check_my_work" in workflow, "check_my_work must be named in workflow"
+    assert "check_my_work" in COMPILER_SYSTEM_PROMPT, "check_my_work must be named in the prompt"
     # All three return shapes taught:
-    assert "clean" in workflow and "blocked" in workflow
-    assert "Rejected: call check_my_work only after" in workflow, (
+    assert "clean" in COMPILER_SYSTEM_PROMPT and "blocked" in COMPILER_SYSTEM_PROMPT
+    assert "Rejected: call check_my_work only after" in COMPILER_SYSTEM_PROMPT, (
         "gate-rejection shape (plain ToolMessage content) must be taught so "
         "the agent doesn't loop retrying"
     )
+    lowered = COMPILER_SYSTEM_PROMPT.lower()
     # Recovery on gate rejection: go write a page, don't retry the gate.
-    lowered = workflow.lower()
     assert "go write a page first" in lowered or "write a page first" in lowered
 
 
 def test_workflow_has_terminal_decision_check() -> None:
-    """The workflow's pre-return step must tell the agent to verify
-    each email has a terminal outcome before returning. Without this
-    step the decision guidance (post-v10-U4: inside `<workflow>`) is
-    advisory; with it the agent has an explicit self-audit hook."""
+    """The workflow's pre-return checklist must tell the agent to
+    verify each email has a terminal outcome before returning.
+
+    PR2 (Q6-meta CC-G hybrid): the 9-step procedure was replaced
+    with a lean outcome-based section that ends with a "Pre-return
+    checklist". The first checklist item is the terminal-outcome
+    self-audit; the section also names the Devin "take one beat"
+    one-liner. Without these the agent has no exit gate."""
     workflow = _workflow_block()
-    assert "Before returning" in workflow
+    # Devin one-liner OR the checklist anchor — either survives if a
+    # later edit reshuffles the procedure prose.
     assert "terminal outcome" in workflow
+    assert (
+        "Pre-return checklist" in workflow
+        or "Before you return" in workflow
+        or "Before returning" in workflow
+        or "before you return" in workflow
+    )
 
 
 def test_wikilink_recovery_guidance_present() -> None:
@@ -525,24 +524,32 @@ def test_prompt_has_no_internals() -> None:
 
 
 def test_topic_suggested_h2_sections_taught() -> None:
-    """v11-U7: the prompt teaches 8 suggested H2 sections on topic pages
-    (Summary / Current state / Why it matters / Key decisions / Recent
-    changes / Open questions / Related pages / References) as a
-    template, not a law. Reviewer evaluates whether the chosen
-    structure fits. Pin the heading list so future edits can't
-    quietly drop the menu."""
+    """PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the universal H2
+    floor for topic pages drops `## Summary` (lead paragraph IS the
+    summary) and `## Key decisions` (decisions live on their own
+    pages and are surfaced via wikilinks). The runtime auto-renders
+    `## References` from inline footnotes. The remaining H2 floor:
+    `## Why it matters` → `## Current state` → `## Recent changes`
+    → `## Open questions` → `## Related`. Pin the heading list so
+    future edits can't quietly drop the menu."""
     suggested = (
-        "## Summary",
-        "## Current state",
         "## Why it matters",
-        "## Key decisions",
+        "## Current state",
         "## Recent changes",
         "## Open questions",
-        "## Related pages",
-        "## References",
+        "## Related",
     )
     missing = [s for s in suggested if s not in COMPILER_SYSTEM_PROMPT]
-    assert not missing, f"prompt must name topic suggested H2 sections; missing: {missing}"
+    assert not missing, f"prompt must name topic universal H2 floor; missing: {missing}"
+    # Regression guard for Q7.2 (lead paragraph IS the summary): the
+    # `## Summary` H2 must not come back.
+    assert "## Summary" not in COMPILER_SYSTEM_PROMPT, (
+        "PR2 (Q7.2) dropped `## Summary` H2 — lead paragraph IS the summary"
+    )
+    # Regression guard for Q7.2 (drop ## TL;DR H2):
+    assert "## TL;DR" not in COMPILER_SYSTEM_PROMPT, (
+        "PR2 (Q7.2) dropped `## TL;DR` H2 — runtime parses lead paragraph"
+    )
 
 
 def test_system_suggested_h2_sections_taught() -> None:
@@ -556,17 +563,18 @@ def test_system_suggested_h2_sections_taught() -> None:
     assert not missing, f"prompt must name system suggested H2 sections; missing: {missing}"
 
 
-def test_suggested_h2_section_framing_present() -> None:
-    """v11-U7: the prompt frames the H2 list as "Suggested" not "Required",
-    and explicitly calls out thread-subject vocabulary as the anti-pattern
-    the reviewer flags via `filing_cabinet` / `structure_mismatch`."""
-    assert "Suggested H2 sections" in COMPILER_SYSTEM_PROMPT, (
-        "v11-U7 expects 'Suggested H2 sections' framing in <page_types>"
+def test_universal_h2_floor_framing_present() -> None:
+    """PR2 (2026-04-28 prompt-review Q7.1): the H2 list is now framed
+    as a "Universal H2 floor" (a direction, not a law) — the reviewer
+    judges fit. Old "Suggested H2 sections" / "Required H2 sections"
+    framings should not be back."""
+    assert "Universal H2 floor" in COMPILER_SYSTEM_PROMPT, (
+        "PR2 (Q7.1) expects 'Universal H2 floor' framing in <page_types>"
     )
     # Old "Required" / "MUST NOT omit" / "drift breaks validation" framing
     # must be gone — that vocabulary teaches the agent the wrong contract.
     assert "Required H2 sections" not in COMPILER_SYSTEM_PROMPT, (
-        "v11-U7 dropped 'Required H2 sections' framing — use 'Suggested'"
+        "v11-U7 dropped 'Required H2 sections' framing — use 'Universal H2 floor'"
     )
     assert "MUST NOT do\nis omit the heading" not in COMPILER_SYSTEM_PROMPT
     assert "drift breaks validation" not in COMPILER_SYSTEM_PROMPT
@@ -633,27 +641,29 @@ def test_domain_frontmatter_block_present() -> None:
 
 
 def test_example_1_exhibits_required_shape() -> None:
-    """v9-U1: Example 1 is the canonical-shape worked example. It must
-    show `domain:` frontmatter, a ≥2-sentence lead paragraph, and all 8
-    topic H2 sections in order so the model has a full template to
-    pattern-match against."""
+    """PR2 (2026-04-28 prompt-review Q7.1, Q7.2, Q12.1): Example 1 is
+    the canonical-shape worked example. It must show `domain:` +
+    `owner:` frontmatter, a ≥2-sentence lead paragraph (no
+    `## Summary` H2), and the universal H2 floor sections so the
+    model has a full template to pattern-match against."""
     start = COMPILER_SYSTEM_PROMPT.find("### Example 1")
     end = COMPILER_SYSTEM_PROMPT.find("### Example 2")
     assert start != -1 and end != -1 and end > start
     example = COMPILER_SYSTEM_PROMPT[start:end]
     assert "domain:" in example, "Example 1 must show `domain:` frontmatter"
-    # Each of the 8 topic H2 sections appears in Example 1.
+    assert "owner:" in example, "Example 1 must show `owner:` frontmatter (PR2 Q3.4)"
+    # Each H2 in the universal H2 floor for topic pages.
     for section in (
-        "## Summary",
-        "## Current state",
         "## Why it matters",
-        "## Key decisions",
+        "## Current state",
         "## Recent changes",
         "## Open questions",
-        "## Related pages",
-        "## References",
     ):
         assert section in example, f"Example 1 missing required section heading: {section}"
+    # Regression guard: PR2 (Q7.2) dropped `## Summary` H2.
+    assert "## Summary" not in example, (
+        "PR2 (Q7.2) dropped `## Summary` H2 — Example 1 must not regress"
+    )
 
 
 def test_prompt_domain_list_matches_compiler() -> None:
@@ -672,14 +682,13 @@ def test_prompt_domain_list_matches_compiler() -> None:
 
 
 def test_prompt_topic_sections_match_validator() -> None:
-    """v9-U1: the prompt's suggested-topic-sections list must match the
-    validator's `SUGGESTED_SECTIONS['topic']`. Drift here silently
-    produces pages the agent thinks are valid but the validator
-    flags as missing — the exact failure mode Cycle 9 surfaced. Pin
-    the invariant.
-
-    v11-U7: dict was renamed REQUIRED_SECTIONS → SUGGESTED_SECTIONS
-    and now lives in `src.compile.section_shapes`."""
+    """PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the prompt's
+    universal H2 floor must match the validator's
+    `SUGGESTED_SECTIONS['topic']`. Drift here silently produces
+    pages the agent thinks are valid but the validator flags as
+    missing. Both were updated together in PR2 — the floor dropped
+    `Summary`, `Key decisions`, `References`, and renamed
+    `Related pages` → `Related`."""
     from src.compile.section_shapes import SUGGESTED_SECTIONS
 
     for section in SUGGESTED_SECTIONS["topic"]:
@@ -794,25 +803,42 @@ def test_per_batch_instruction_drops_old_framing() -> None:
 
 
 def test_expert_questions_section_present() -> None:
-    """v12-U2: the prompt must carry an `<expert_questions>` section
-    teaching the 5W coverage checklist (WHAT / WHY / HOW / WHO / WHEN
-    / WHERE). Without this section the agent summarises evidence but
-    doesn't check whether the page would answer the questions an expert
-    PM or new-joiner asks on first read.
+    """PR2 (2026-04-28 prompt-review Q3.2 / Q16.6 / CC-C):
+    `<expert_questions>` was reframed per-archetype (launch / bug /
+    policy / decision / system) instead of per-domain, and the depth-
+    teaching 5W block moved to the reviewer prompt
+    (`src/compile/reviewer.py`). The compiler-side block keeps a
+    5-line `## Why it matters` pointer so depth doesn't structurally
+    collapse on the writer.
 
-    PR1 dedupe removed the per-domain "Flavor varies by domain" sub-
-    list — it was a duplicate of the canonical 8-domain inventory in
-    `<domain_frontmatter>`. Domain coverage is now asserted by
-    `test_domain_frontmatter_block_present` only."""
+    The reviewer-side rubric is asserted by
+    `test_reviewer_carries_5w_coverage_rubric` below."""
     assert "<expert_questions>" in COMPILER_SYSTEM_PROMPT
     assert "</expert_questions>" in COMPILER_SYSTEM_PROMPT
     start = COMPILER_SYSTEM_PROMPT.find("<expert_questions>")
     end = COMPILER_SYSTEM_PROMPT.find("</expert_questions>")
     block = COMPILER_SYSTEM_PROMPT[start:end]
-    # 5W framing + each W called out.
-    assert "5W" in block
+    # Per-archetype framing — at least three archetypes named.
+    archetypes = ("Launch", "Bug", "Policy", "Decision", "System overview")
+    present = [a for a in archetypes if a in block]
+    assert len(present) >= 3, f"<expert_questions> must name ≥3 archetypes per CC-C; got {present}"
+    # `## Why it matters` is load-bearing — keep the 5-line pointer.
+    assert "Why it matters" in block
+    assert "load-bearing" in block.lower() or "operational constraint" in block.lower()
+
+
+def test_reviewer_carries_5w_coverage_rubric() -> None:
+    """PR2 (Q16.6): the depth-teaching 5W block moved to the reviewer
+    prompt. Without this assertion, the compiler-side test cut would
+    silently drop the rubric across both surfaces."""
+    from src.compile.reviewer import REVIEWER_SYSTEM_PROMPT
+
+    assert "5W" in REVIEWER_SYSTEM_PROMPT, (
+        "PR2 (Q16.6) moved 5W coverage to the reviewer prompt; can't "
+        "find '5W' in REVIEWER_SYSTEM_PROMPT"
+    )
     for w in ("WHAT", "WHY", "HOW", "WHO", "WHEN", "WHERE"):
-        assert w in block, f"expert_questions block must name {w}"
+        assert w in REVIEWER_SYSTEM_PROMPT, f"reviewer 5W block must name {w}"
 
 
 def test_expert_questions_follows_concept_vs_thread() -> None:
@@ -854,23 +880,26 @@ def test_inline_citations_section_present() -> None:
     # literal bracket+caret sequence must survive pre-commit / YAML
     # escaping unchanged.
     assert "[^msg-" in block, "inline footnote syntax `[^msg-` missing"
+    # PR2 (Q4.2): the runtime renders `## References` from inline
+    # footnotes (mkdocs_hooks.py auto-builder); the prompt no longer
+    # carries the bottom-block template, but it still mentions
+    # `## References` to anchor the contract.
     assert "## References" in block
-    # Regression guard for Codex's P1 on PR #218: prompt must NOT
-    # instruct the agent to use `## Sources` — that exact heading
-    # triggers the MkDocs `on_page_markdown` short-circuit in
-    # mkdocs_hooks.py and drops the viewer's raw-email evidence
-    # rendering. Normalise whitespace so a line wrap between
-    # "never use" and "`## Sources`" still matches.
-    normalised = " ".join(block.split()).lower()
-    assert "never use `## sources`" in normalised, (
-        "inline_citations must explicitly warn against `## Sources` "
-        "heading — it collides with mkdocs_hooks.py:on_page_markdown"
+    # PR2 (Q4.2): the `## Sources` warning was cut from the prompt
+    # because the mkdocs hook now strips + warns at render time. The
+    # block stays free of either an embedded warning or a `## Sources`
+    # reference (Codex's original P1 from PR #218 is now enforced by
+    # mkdocs_hooks.py, not by prompt prose).
+    assert "## Sources" not in block, "PR2 (Q4.2) cut the `## Sources` warning — runtime owns it"
+    # PR2 (Q4.1): the helper returns a `cite_key` field; prompt should
+    # reference it.
+    assert "cite_key" in block, (
+        "inline_citations must reference the `cite_key` field that "
+        "get_thread_context returns (Q4.1)"
     )
-    # Helper reference matches the real tool that exposes raw_path
-    # (see src/compile/tools/raw_access.py:get_thread_context).
     assert "get_thread_context" in block, (
         "inline_citations must reference the real helper that returns "
-        "raw_path (`get_thread_context` in src/compile/tools/raw_access.py)"
+        "cite_key (`get_thread_context` in src/compile/tools/raw_access.py)"
     )
 
 
@@ -894,18 +923,23 @@ def test_inline_citations_after_concept_vs_thread() -> None:
 
 def test_revision_style_section_present() -> None:
     """v12-U4: the prompt must carry a `<revision_style>` section
-    teaching the wiki's revision style — current-truth Summary, Recent
-    changes bullet, collapsible `<details>` archive, never strikethrough.
-    Significant changes mint decision/experiment pages. Without this the
-    agent falls back to its email-summarization priors and writes
-    strikethrough tombstones or lineage-in-Summary prose."""
+    teaching the wiki's revision style — current-truth in lead
+    paragraph, Recent changes bullet, collapsible `<details>` archive,
+    never strikethrough. Significant changes mint decision/experiment
+    pages. Without this the agent falls back to its email-summarization
+    priors and writes strikethrough tombstones or lineage-in-summary
+    prose.
+
+    PR2 (2026-04-28 prompt-review Q7.2): "Current truth in Summary"
+    became "Current truth in the lead paragraph" since the
+    `## Summary` H2 was dropped."""
     assert "<revision_style>" in COMPILER_SYSTEM_PROMPT
     assert "</revision_style>" in COMPILER_SYSTEM_PROMPT
     start = COMPILER_SYSTEM_PROMPT.find("<revision_style>")
     end = COMPILER_SYSTEM_PROMPT.find("</revision_style>")
     block = COMPILER_SYSTEM_PROMPT[start:end]
     # Load-bearing phrases from the user's design instincts:
-    assert "Current truth in Summary" in block
+    assert "Current truth in the lead paragraph" in block
     assert "NEVER use strikethrough" in block
     # Collapsible archive — literal HTML tag must appear so the model
     # reaches for `<details>` instead of strikethrough.

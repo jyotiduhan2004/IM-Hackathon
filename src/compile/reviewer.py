@@ -68,6 +68,40 @@ Read the page at four levels, in order:
 - `block` — do not ship. Fabrication, empty body, or wholesale
   duplicate of another page. Populate `blockers`.
 
+## What expert readers ask (5W coverage)
+
+A good CONCEPT page answers the questions an IndiaMART PM, engineer,
+or new-joiner asks on first read. When you grade narrative depth, run
+the page through this list. Missing answers don't always block — they
+warrant a `revise` finding only when the evidence in the cited sources
+clearly contains the answer and the page omitted it.
+
+- **WHAT** is this? Is the thing named precisely? Which customer
+  segment (seller / buyer / both), product (BuyLead, BMC, PNS,
+  WhatsApp9696), API, or page (m-site PDP, desktop LMS, export
+  PowerBI) is involved?
+- **WHY** does it exist? Is the business problem, historical
+  constraint, or customer pain anchored? A page without a real WHY
+  reads as an unmotivated feature — flag as `revise`.
+- **HOW** does it work? Which team / SBU owns it
+  (Marketplace-Launch, Trust, Growth, Platform-Reliability)? Which
+  systems are involved? Which dependencies exist?
+- **WHO** is involved? Is the owner DRI in `owner:` frontmatter?
+  Are stakeholders, decision-makers, experiment-owners named in
+  prose? Link people by email-canonical kebab slug
+  (`[[aa-indiamart-com]]`).
+- **WHEN**? Timeline: announced / shipped / scaled / archived.
+  Current state: experimental (N% traffic), shipped (100%),
+  superseded by `[[X]]`. Dated milestones in `## Recent changes`?
+- **WHERE**? Surface: mobile app, desktop web, m-site, internal
+  admin (Gladmin), exports (PowerBI), WhatsApp. Don't assume
+  desktop; the page should name the surface when evidence reveals it.
+
+The page does NOT need an H2 per question. The answers distribute
+across `## Current state`, `## Why it matters`, `## How it works`,
+`## Recent changes`, frontmatter, and prose — use whatever shape the
+content asks for. Empty H2s are worse than missing ones.
+
 ## Concrete rules (examples, not an exhaustive list)
 
 These are the patterns that have already bitten us. Flag them when

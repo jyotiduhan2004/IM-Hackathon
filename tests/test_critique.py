@@ -206,7 +206,12 @@ def test_missing_suggested_h2s_warns(tmp_path: Path) -> None:
     """v11-U7: a topic page with thread-subject-templated H2s and
     zero canonical sections must surface a `missing_suggested_h2s`
     warning naming the present + missing slots. Severity is always
-    `warning` — reviewer takes the final call."""
+    `warning` — reviewer takes the final call.
+
+    PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the universal H2
+    floor dropped `Summary` (lead paragraph IS the summary) and
+    `Key decisions` (decisions are lazy + linked-from). Replaced
+    the asserted slot names accordingly."""
     wiki = tmp_path / "wiki"
     page = wiki / "topics" / "launch-foo.md"
     _write_page(
@@ -220,7 +225,7 @@ def test_missing_suggested_h2s_warns(tmp_path: Path) -> None:
     matches = [w for w in result.warnings if w.check == "missing_suggested_h2s"]
     assert len(matches) == 1, [w.message for w in result.warnings]
     msg = matches[0].message
-    assert "Summary" in msg
+    assert "Why it matters" in msg
     assert "Current state" in msg
     assert "missing" in msg
     # Severity is warning — never blocker.
@@ -228,16 +233,20 @@ def test_missing_suggested_h2s_warns(tmp_path: Path) -> None:
 
 
 def test_suggested_h2s_complete_no_warning(tmp_path: Path) -> None:
-    """A topic page that hits the floor (≥4/8) does NOT warn."""
+    """A topic page that hits the floor does NOT warn.
+
+    PR2 (Q7.1): the new floor is 5 slots — `Why it matters`,
+    `Current state`, `Recent changes`, `Open questions`, `Related`
+    — and the threshold is ≥4/5."""
     wiki = tmp_path / "wiki"
     page = wiki / "topics" / "complete.md"
     _write_page(
         page,
         "Complete",
         ["raw/x.md"],
-        "\nLead paragraph here.\n\n## Summary\nA.\n\n"
-        "## Current state\nB.\n\n## Why it matters\nC.\n\n"
-        "## Key decisions\nD.\n\n## Recent changes\nE.\n",
+        "\nLead paragraph here.\n\n## Why it matters\nA.\n\n"
+        "## Current state\nB.\n\n## Recent changes\nC.\n\n"
+        "## Open questions\nD.\n\n## Related\nE.\n",
     )
     result = critique_pages([page], wiki, tmp_path)
     assert all(w.check != "missing_suggested_h2s" for w in result.warnings)

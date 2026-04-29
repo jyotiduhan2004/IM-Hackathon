@@ -4,26 +4,10 @@ page_type: topic
 status: current
 ---
 
-## Summary
-
-Short intro — missing "Open questions" and "References".
-
 ## Current state
 
-Body.
+Body — missing "Why it matters", "Recent changes", "Open questions".
 
-## Why it matters
-
-Impact.
-
-## Key decisions
-
-Decisions.
-
-## Recent changes
-
-Changelog.
-
-## Related pages
+## Related
 
 Links.

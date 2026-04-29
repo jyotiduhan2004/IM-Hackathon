@@ -688,10 +688,14 @@ def _check_summary_stale_date(
 # half-or-less of the canonical list — enough latitude for genuinely
 # alternative structures, tight enough to flag thread-subject-templated
 # pages with zero canonical H2s. Reviewer takes the final call.
+#
+# PR2 (2026-04-28 prompt-review Q7.1): the universal H2 floor shrunk
+# (Summary, Key decisions, References dropped); thresholds rescaled
+# proportionally.
 _SUGGESTED_H2_FLOOR: dict[str, int] = {
-    "topic": 4,  # 4/8
-    "system": 4,  # 4/7
-    "policy": 3,  # 3/6
+    "topic": 3,  # 3/5
+    "system": 3,  # 3/5
+    "policy": 3,  # 3/5
 }
 
 

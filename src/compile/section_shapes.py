@@ -33,24 +33,28 @@ from __future__ import annotations
 from src.compile.scoring import THREAD_SUBJECT_H2
 
 SUGGESTED_SECTIONS: dict[str, list[str]] = {
+    # PR2 (2026-04-28 prompt-review Q7.1, Q7.2): the universal H2 floor
+    # drops `## Summary` (lead paragraph IS the summary, per Q7.2) and
+    # `## Key decisions` (decisions live on their own pages and are
+    # surfaced via wikilinks in `## Recent changes`, per the lazy-
+    # decision rule + the new Hard rule banning inline `## Decision: <X>`
+    # H2s). The MkDocs hook auto-renders `## References` from inline
+    # `[^msg-*]` footnotes (per Q4.2) so writers no longer hand-author
+    # that section. The list below mirrors the prompt's universal H2
+    # floor in `<page_types>`.
     "topic": [
-        "Summary",
-        "Current state",
         "Why it matters",
-        "Key decisions",
+        "Current state",
         "Recent changes",
         "Open questions",
-        "Related pages",
-        "References",
+        "Related",
     ],
     "system": [
-        "Summary",
         "Role",
         "Active related topics",
         "Dependencies",
         "Known issues",
-        "Related pages",
-        "References",
+        "Related",
     ],
     "policy": [
         "Current policy",
@@ -58,7 +62,6 @@ SUGGESTED_SECTIONS: dict[str, list[str]] = {
         "Effective date",
         "Supersedes",
         "History",
-        "References",
     ],
 }
 
