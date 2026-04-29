@@ -317,6 +317,18 @@ def _refresh_pool_for_batch(
     """
     eligible = [m for m in initial_pool if m not in unauthorized]
     if not eligible:
+        # Don't lose visibility on the run-permanent 401/403 carryover case
+        # — that's exactly the diagnosis the F8 instrumentation is meant to
+        # catch. Operators need to see when ``unauthorized`` empties the
+        # eligible set.
+        logger.info(
+            "pool_refresh",
+            batch_idx=batch_idx,
+            initial_pool=initial_pool,
+            eligible_after_unauthorized=eligible,
+            returned_pool=[],
+            excluded_models=[],
+        )
         return []
     pool, excluded = _healthy_pool(eligible)
     # _healthy_pool fails open (returns full input + exclusion records) when
@@ -343,4 +355,19 @@ def _refresh_pool_for_batch(
             f"  mid-run auto-exclusion: {key[0]} [{key[1]}] "
             f"({r.get('failed')}/{r.get('total')} failed) — batch {batch_idx}"
         )
+    # Per-batch visibility into pool composition. Apply the same fail-open
+    # filter the `mid_run_quarantine` log uses — `_healthy_pool` returns
+    # the unfiltered pool plus exclusion records for ALL models when
+    # filtering would empty the pool, so an unfiltered list would show
+    # models in both `returned_pool` and `excluded_models`.
+    logger.info(
+        "pool_refresh",
+        batch_idx=batch_idx,
+        initial_pool=initial_pool,
+        eligible_after_unauthorized=eligible,
+        returned_pool=pool,
+        excluded_models=[
+            r["compile_model"] for r in excluded if r["compile_model"] not in returned_set
+        ],
+    )
     return pool

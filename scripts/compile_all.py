@@ -369,6 +369,18 @@ def main(
                     initial_pool, unauthorized, announced_quarantines, batch_idx
                 )
             batch_model = random.choice(pool) if pool else resolved_model
+            # Per-batch visibility — pairs with `pool_refresh` in
+            # `_refresh_pool_for_batch`. Log the actual pool truthfully
+            # (empty list when fallback to `resolved_model` fired) so
+            # telemetry doesn't claim `resolved_model` was a pool member.
+            logger.info(
+                "pool_pick",
+                batch_idx=batch_idx,
+                pool_size=len(pool) if pool else 0,
+                pool=pool or [],
+                picked=batch_model,
+                fallback=not pool,
+            )
             click.echo(
                 f"\n=== Batch {batch_idx}/{len(groups)} "
                 f"({len(batch)} emails, thread={thread_id[:12]}, "

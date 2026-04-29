@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
+import structlog.testing
 
 
 def _insert_message(conn: psycopg.Connection, message_id: str) -> None:
@@ -215,3 +216,120 @@ def test_long_window_wins_when_both_fire(
     kept, excluded = compile_all_module._healthy_pool(["test/persistent-bad", "test/good-model"])
     assert kept == ["test/good-model"]
     assert excluded[0]["reason"] == "quarantined (24h)"
+
+
+def test_refresh_pool_for_batch_emits_pool_refresh_log(
+    compile_all_module: Any, db_conn: psycopg.Connection
+) -> None:
+    """Per-batch ``pool_refresh`` log is the F8 instrumentation hook.
+
+    Run 5928c151 showed grok picked 9/115 (7.8%) vs uniform-expected 33%
+    in a 3-model pool. ``_healthy_pool`` 24h grok stats were clean
+    (220/0), so the rolling-failure quarantine wasn't filtering it. The
+    log line lets the next smoke disambiguate which mechanism is
+    excluding grok by capturing initial_pool / eligible_after_unauthorized
+    / returned_pool / excluded_models per batch.
+
+    See ``docs/audits/run-5928c151-findings-2026-04-29.md`` (F8).
+    """
+    # Clean slate — no failures so ``_healthy_pool`` keeps both models.
+    pool_input = ["test/model-a", "test/model-b"]
+
+    with structlog.testing.capture_logs() as logs:
+        result = compile_all_module._refresh_pool_for_batch(
+            pool_input, set(), set(), batch_idx=7
+        )
+
+    refresh_events = [evt for evt in logs if evt.get("event") == "pool_refresh"]
+    assert len(refresh_events) == 1, logs
+    event = refresh_events[0]
+    assert event["batch_idx"] == 7
+    assert event["initial_pool"] == pool_input
+    assert event["eligible_after_unauthorized"] == pool_input
+    assert event["returned_pool"] == result
+    assert isinstance(event["excluded_models"], list)
+
+
+def test_refresh_pool_for_batch_unauthorized_carryover_in_log(
+    compile_all_module: Any, db_conn: psycopg.Connection
+) -> None:
+    """The log distinguishes ``initial_pool`` from ``eligible_after_unauthorized``
+    so an operator can see which run-permanent prune (401/403) is at play.
+    """
+    pool_input = ["test/model-a", "test/model-b"]
+
+    with structlog.testing.capture_logs() as logs:
+        compile_all_module._refresh_pool_for_batch(
+            pool_input, {"test/model-a"}, set(), batch_idx=12
+        )
+
+    refresh_events = [evt for evt in logs if evt.get("event") == "pool_refresh"]
+    assert len(refresh_events) == 1
+    event = refresh_events[0]
+    assert event["initial_pool"] == pool_input
+    assert event["eligible_after_unauthorized"] == ["test/model-b"]
+    assert event["returned_pool"] == ["test/model-b"]
+    assert event["excluded_models"] == []  # no DB quarantine signal
+
+
+def test_refresh_pool_for_batch_excluded_models_filters_fail_open_survivors(
+    compile_all_module: Any, db_conn: psycopg.Connection
+) -> None:
+    """When ``_healthy_pool`` fails open (would empty the pool), it returns
+    the unfiltered pool plus exclusion records for ALL models. The log
+    must filter those — a model still in ``returned_pool`` is not
+    excluded. Regression for the Claude/Codex review on PR #283.
+    """
+    # Stage every model with persistent failures so all of them trip the
+    # 24h rule. ``_healthy_pool`` fails open and returns both.
+    for i in range(10):
+        _insert_message(db_conn, f"m{i}")
+    for i, model in enumerate(["test/dead-a", "test/dead-b"]):
+        for j in range(5):
+            _finished_attempt(
+                db_conn,
+                message_id=f"m{i * 5 + j}",
+                model=model,
+                outcome="failed",
+                age_hours=10.0,
+            )
+    db_conn.commit()
+
+    pool_input = ["test/dead-a", "test/dead-b"]
+
+    with structlog.testing.capture_logs() as logs:
+        result = compile_all_module._refresh_pool_for_batch(
+            pool_input, set(), set(), batch_idx=99
+        )
+
+    assert set(result) == set(pool_input), "fail-open must return both models"
+    refresh_events = [evt for evt in logs if evt.get("event") == "pool_refresh"]
+    assert len(refresh_events) == 1
+    event = refresh_events[0]
+    # Both models are still in the returned pool, so neither is "excluded"
+    # from this batch's perspective. The bug pre-fix would list both here.
+    assert event["excluded_models"] == [], event["excluded_models"]
+
+
+def test_refresh_pool_for_batch_logs_when_unauthorized_empties_pool(
+    compile_all_module: Any, db_conn: psycopg.Connection
+) -> None:
+    """When every model in ``initial_pool`` is in ``unauthorized``, the
+    function returns ``[]`` early — but it must still emit ``pool_refresh``
+    so operators can see the 401/403 carryover that emptied the pool.
+    Regression for Codex P2 on PR #283.
+    """
+    pool_input = ["test/model-a", "test/model-b"]
+    with structlog.testing.capture_logs() as logs:
+        result = compile_all_module._refresh_pool_for_batch(
+            pool_input, set(pool_input), set(), batch_idx=42
+        )
+    assert result == []
+    refresh_events = [evt for evt in logs if evt.get("event") == "pool_refresh"]
+    assert len(refresh_events) == 1, logs
+    event = refresh_events[0]
+    assert event["batch_idx"] == 42
+    assert event["initial_pool"] == pool_input
+    assert event["eligible_after_unauthorized"] == []
+    assert event["returned_pool"] == []
+    assert event["excluded_models"] == []
