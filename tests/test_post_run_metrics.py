@@ -26,8 +26,10 @@ from scripts.post_run_metrics import _has_tldr_h2  # noqa: E402
 from scripts.post_run_metrics import _lead_has_number_and_two_sentences  # noqa: E402
 from scripts.post_run_metrics import _lead_paragraph  # noqa: E402
 from scripts.post_run_metrics import _new_pages_since  # noqa: E402
+from scripts.post_run_metrics import _parse_prior_metrics  # noqa: E402
 from scripts.post_run_metrics import _people_wikilink_count  # noqa: E402
 from scripts.post_run_metrics import compute_filesystem_metrics  # noqa: E402
+from scripts.post_run_metrics import compute_langfuse_metrics  # noqa: E402
 from scripts.post_run_metrics import render_markdown  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -92,6 +94,39 @@ def test_lead_has_number_fails_for_empty_body() -> None:
     assert _lead_has_number_and_two_sentences("") is False
 
 
+@pytest.mark.parametrize(
+    "lead",
+    [
+        # Single-letter unit-prefix words. Without a word-boundary lookahead
+        # in NUMBER_PAT, "5 days" would falsely match "5 d", inflating M2.
+        "We onboarded 5 backend services. They're stable.",
+        "Took 3 days to roll out. Rollback was clean.",
+        "Spent 4 hours debugging. The fix was a one-liner.",
+        "Cut 5 minutes off the build. Average is now solid.",
+    ],
+)
+def test_lead_has_number_rejects_bare_integer_then_english_word(lead: str) -> None:
+    """M2 quality signal: bare integers followed by English words starting
+    with a unit-letter are NOT real measurable state. Caught by the
+    ``(?=\\W|$|\\d)`` boundary added to NUMBER_PAT."""
+    assert _lead_has_number_and_two_sentences(lead + "\n") is False
+
+
+@pytest.mark.parametrize(
+    "lead",
+    [
+        # Real measurable numbers should still pass.
+        "Live on 12% of buyers. Target 100% by Q2.",
+        "Latency p95 is 42ms. Down from 90ms last week.",
+        "Conversion lifted 1.4x. Sample of 12,400 sessions.",
+        "Throughput hit 100bps. Goal is 200bps by Q3.",
+    ],
+)
+def test_lead_has_number_accepts_real_measurable_state(lead: str) -> None:
+    """Counterpart to the FP test: pages with genuine measurements pass."""
+    assert _lead_has_number_and_two_sentences(lead + "\n") is True
+
+
 # ---------------------------------------------------------------------------
 # M5/M6: TL;DR + strikethrough detectors
 # ---------------------------------------------------------------------------
@@ -144,6 +179,21 @@ def test_archetype_other_when_unknown() -> None:
     assert _detect_archetype({"tags": ["misc"]}, "", "topics") == "other"
 
 
+def test_archetype_tag_precedence_decision_beats_launch() -> None:
+    # ARCHETYPE_TAG_SYNONYMS is ordered: when a page is tagged with
+    # both `decision` and `launch`, the more specific archetype
+    # (decision) wins. Without this guarantee, a topic that's both
+    # a launch and a decision would alternate based on dict iteration.
+    assert _detect_archetype({"tags": ["launch", "decision"]}, "", "topics") == "decision"
+    assert _detect_archetype({"tags": ["decision", "launch"]}, "", "topics") == "decision"
+
+
+def test_archetype_tag_precedence_bug_beats_launch() -> None:
+    # `bug` is more specific than `launch` — a page tagged with both
+    # is a bug page (Example 13 archetype shape), not a launch page.
+    assert _detect_archetype({"tags": ["launch", "bug"]}, "", "topics") == "bug"
+
+
 # ---------------------------------------------------------------------------
 # Full FS sweep on a synthetic wiki tree
 # ---------------------------------------------------------------------------
@@ -175,7 +225,10 @@ def test_compute_filesystem_metrics_smoke(tmp_path: Path) -> None:
         "topics",
         "alpha",
         {"owner": "asha"},
-        "Alpha is the new system. It shipped 3 features in Q1.\n",
+        # Lead has a unit-suffixed number (`12%`) — matches the
+        # tightened M2 regex which rejects bare integers like
+        # "3 features".
+        "Alpha is the new system. It shipped to 12% of customers in Q1.\n",
     )
     p2 = _write_page(
         wiki_dir,
@@ -313,3 +366,85 @@ def test_render_markdown_warnings_block(tmp_path: Path) -> None:
     md = render_markdown(report, prior=None)
     assert "Partial report" in md
     assert "langfuse: unreachable" in md
+
+
+# ---------------------------------------------------------------------------
+# _parse_prior_metrics — load-bearing for the Δ-vs-prior column
+# ---------------------------------------------------------------------------
+
+
+def test_parse_prior_metrics_extracts_pct_and_raw_values(tmp_path: Path) -> None:
+    """The Δ column depends on parsing the prior report's table back into
+    floats. If this regresses, every comparison silently shows nothing."""
+    # Match the renderer's actual table shape:
+    # `| ID | Metric | Value | Target | n | Notes |`
+    prior_md = tmp_path / "prior.md"
+    prior_md.write_text(
+        "# Some header\n\n"
+        "| ID | Metric | Value | Target | n | Notes |\n"
+        "|---|---|---:|---|---:|---|\n"
+        "| M1 | owner frontmatter set | 75.0% | ≥80% | 100 | |\n"
+        "| M2 | lead-paragraph-with-number | 45.5% | ≥70% | 100 | |\n"
+        "| M9 | avg prompt tokens per batch | 12345.67 | track | 50 | |\n"
+        "| M3 | active-teaching log_insight rate | - | ≥1/batch | 50 | |\n",
+        encoding="utf-8",
+    )
+    out = _parse_prior_metrics(prior_md)
+    assert pytest.approx(out["M1"]) == 0.75
+    assert pytest.approx(out["M2"]) == 0.455
+    assert pytest.approx(out["M9"]) == 12345.67
+    # `-` placeholder → metric absent from the parsed dict, not 0.0
+    assert "M3" not in out
+
+
+def test_parse_prior_metrics_handles_missing_file(tmp_path: Path) -> None:
+    """No prior report → empty dict, never raises."""
+    out = _parse_prior_metrics(tmp_path / "does-not-exist.md")
+    assert out == {}
+
+
+# ---------------------------------------------------------------------------
+# Langfuse-unreachable failure mode — partial report must still emit
+# ---------------------------------------------------------------------------
+
+
+def test_compute_langfuse_metrics_unreachable_returns_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `_list_recent_traces` returns empty (langfuse unreachable),
+    compute_langfuse_metrics returns a dict with all metrics None and
+    a warning string — never raises, never blocks compile."""
+
+    def _empty_listing(_limit: int) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr("scripts.post_run_metrics._list_recent_traces", _empty_listing)
+    out = compute_langfuse_metrics(run_id=None, limit=5)
+    assert out["cmw_premature_rate"] is None
+    assert out["reviewer_pass_rate"] is None
+    assert out["prompt_tokens_avg"] is None
+    assert out["trace_count"] == 0
+    assert "unreachable" in out["warning"].lower() or "empty" in out["warning"].lower()
+
+
+def test_compute_langfuse_metrics_no_matching_traces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When traces are listed but none match the run_id filter, returns a
+    warning instead of raising — common case when langfuse retention or
+    trace metadata drifts vs the compile-run UUID."""
+
+    def _listing(_limit: int) -> list[dict[str, object]]:
+        return [{"id": "trace-1"}, {"id": "trace-2"}]
+
+    def _fetch_other_run(_tid: str) -> dict[str, object]:
+        return {"body": {"metadata": {"compile_run_id": "different-run"}}}
+
+    monkeypatch.setattr("scripts.post_run_metrics._list_recent_traces", _listing)
+    monkeypatch.setattr("scripts.post_run_metrics._fetch_trace", _fetch_other_run)
+    from uuid import uuid4
+
+    out = compute_langfuse_metrics(run_id=uuid4(), limit=5)
+    assert out["cmw_premature_rate"] is None
+    assert out["reviewer_pass_rate"] is None
+    assert "no traces matched" in out["warning"]

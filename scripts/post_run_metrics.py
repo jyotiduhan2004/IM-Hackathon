@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -68,6 +69,19 @@ logger = structlog.get_logger(__name__)
 # Audit dir is the canonical home for repo-side dashboards.
 AUDITS_DIR = REPO_ROOT / "docs" / "audits"
 REPORT_PREFIX = "post-run-metrics"
+HISTORY_PATH = AUDITS_DIR / "metrics-history.jsonl"
+DASHBOARD_PATH = AUDITS_DIR / "dashboard.md"
+PROMPTS_FILE = REPO_ROOT / "src" / "compile" / "prompts.py"
+
+# Trace-derivable metrics we push to Langfuse as scores. Wiki-side
+# metrics (M1, M2, M5, M6, M7, M10) live only in the JSONL — they don't
+# fit the trace-score model.
+TRACE_METRICS_TO_PUSH: tuple[tuple[str, str], ...] = (
+    ("M3", "log_insight_active_teaching_per_email"),
+    ("M4", "check_my_work_pre_write_rate"),
+    ("M8", "reviewer_pass_first_cycle_rate"),
+    ("M9", "prompt_tokens_avg_per_trace"),
+)
 
 # Page categories that count as "content" for archetype + lead-paragraph
 # checks. People + glossary are explicitly excluded (Q12.1 + glossary is
@@ -77,7 +91,58 @@ CONTENT_CATEGORIES: tuple[str, ...] = ("topics", "systems", "policies", "decisio
 # Detection patterns
 TLDR_PAT = re.compile(r"^##\s+TL;DR\s*$", re.MULTILINE | re.IGNORECASE)
 STRIKETHROUGH_PAT = re.compile(r"~~[^~\n]+~~")
-NUMBER_PAT = re.compile(r"\d")
+# M2 quality signal — a "real number" in the lead paragraph means a page
+# is grounded in measurable state (rollout %, latency ms, conversion x or
+# Unicode multiplication sign, count of segments). Plain `\d` was too
+# loose: order IDs, message-id hashes, PR numbers (`#260`), and bare ISO
+# dates would all pass. This pattern requires either:
+#   - a percentage / multiplier / unit suffix (`12%`, `1.4x`, `42ms`, `2.5s`,
+#     `1.2GB`, `100bps`, `40INR`, `5k`, `2M`, `3B`)
+#   - a comparison context (`>3s`, `< 50%`, `>=80%`)
+#   - a comma-grouped large number (`12,400`)
+#   - a decimal (`3.14`)
+# Bare integers >=4 digits are rejected unless they're flagged as a count
+# via nearby unit/keyword — the goal is to reward "Live on 12% of buyers"
+# over "raw/2026-01-08_1234abcd.md" or "PR #260".
+# Unit suffixes ordered LONGEST-FIRST inside each character family. Critical:
+# regex alternation tries left-to-right and stops at the first match. Without
+# longest-first, `42ms` would match `42m` (and burn the trailing `s`); `100bps`
+# would match `100b`. Multi-char units must precede their single-char prefixes.
+# The trailing `(?=\W|$|\d)` lookahead prevents `5 days` from matching `5 d`
+# (single-letter unit eats the first letter of an English word).
+_NUMBER_UNIT_RE = (
+    r"(?:"
+    # currency / per-mille / percentage — unambiguous, no boundary needed
+    r"%|‱|‰|\$|₹|€|£|¢"
+    r"|"
+    # multipliers (2-letter must precede 1-letter)
+    r"bps|bp|"
+    r"ms|min|mo|m"  # ms / min / mo before bare m
+    r"|"
+    r"hr|h|"
+    r"qtr|"
+    r"wk|d|s|"
+    r"GB|MB|KB|TB|"
+    r"INR|USD|EUR|GBP|"
+    r"k|K|M|B|x|×"  # noqa: RUF001 — U+00D7 matches "1.4x" prose
+    r")"
+)
+NUMBER_PAT = re.compile(
+    r"(?:"
+    # decimal (3.14, 0.5)
+    r"\d+\.\d+"
+    r"|"
+    # comma-grouped (12,400)
+    r"\d{1,3}(?:,\d{3})+"
+    r"|"
+    # integer + unit (12%, 42ms, 5k, 2M) — must end on word boundary OR digit
+    # (so 1.2GB / 5k matches but `5 days` doesn't catch `5 d`).
+    r"\d+\s*" + _NUMBER_UNIT_RE + r"(?=\W|$|\d)"
+    r"|"
+    # comparison + integer (>3, <50, ≥80, ≤100)
+    r"[<>≤≥]\s*\d+"
+    r")"
+)
 PEOPLE_WIKILINK_PAT = re.compile(r"\[\[people/[^\]|]+(?:\|[^\]]+)?\]\]")
 SENTENCE_END_PAT = re.compile(r"[.!?](?=\s|$)")
 
@@ -413,7 +478,15 @@ def _trace_belongs_to_run(trace: dict[str, Any], run_id: UUID | None) -> bool:
 
 
 def _trace_signals(trace: dict[str, Any]) -> dict[str, Any]:
-    """Pull tool sequence + reviewer verdict + token usage from one trace."""
+    """Pull tool sequence + reviewer verdict + token usage from one trace.
+
+    `reviewer_verdict` captures the FIRST `task(reviewer)` verdict found
+    in observation order — that's first-cycle semantics. If the agent
+    re-invokes the reviewer after a fix, those subsequent verdicts are
+    intentionally ignored: M8 is "did the page pass on the first
+    review attempt?". Re-review-after-fix counts as the agent
+    recovering, not as a first-cycle pass.
+    """
     from src.observability.trace_signals import REVIEWER_VERDICT_PAT
 
     body = trace.get("body") or trace
@@ -459,7 +532,11 @@ def _trace_signals(trace: dict[str, Any]) -> dict[str, Any]:
 
 
 def compute_langfuse_metrics(run_id: UUID | None, limit: int = 50) -> dict[str, Any]:
-    """M4 (cmw pre-write rate), M8 (reviewer pass rate), M9 (prompt tokens).
+    """M4 (cmw pre-write rate), M8 (reviewer first-cycle pass rate), M9 (prompt tokens).
+
+    `reviewer_pass_rate`: of traces that had a reviewer verdict at all,
+    fraction whose FIRST verdict was "pass". Subsequent re-reviews
+    after a fix don't bump the numerator — see `_trace_signals`.
 
     Returns a dict with rates + a warning string when langfuse is
     unreachable. Never raises.
@@ -738,6 +815,211 @@ def render_markdown(report: Report, prior: dict[str, float] | None) -> str:
 
 
 # --------------------------------------------------------------------------
+# Layer 1 — Append-only JSONL history
+# --------------------------------------------------------------------------
+#
+# Every run's metrics row is appended to ``docs/audits/metrics-history.jsonl``
+# tagged with the prompt-version SHA so pre-revamp vs post-revamp runs are
+# queryable as discrete cohorts. The dashboard renderer reads this file.
+
+
+def _prompt_commit_sha() -> str:
+    """Short SHA of the last commit touching ``src/compile/prompts.py``.
+
+    Returns the literal string ``"unknown"`` (not ``None``) on any
+    failure so the JSONL field is always a string. Tests + CI without
+    the prompts file in git history shouldn't crash the dipstick.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--abbrev=7", "--format=%h", "--", str(PROMPTS_FILE)],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    sha = out.stdout.strip()
+    return sha or "unknown"
+
+
+def _resolve_run_meta(run_id: UUID | None) -> dict[str, Any]:
+    """Look up model + emails_processed for a run, if available.
+
+    Best-effort — DB hiccups return empty dict. Used to enrich JSONL
+    rows so the dashboard can group/filter by model.
+    """
+    if run_id is None:
+        return {}
+    import psycopg
+
+    try:
+        from src.db import connect
+
+        with connect() as conn:
+            row_raw = conn.execute(
+                "SELECT model, emails_processed FROM compile_runs WHERE run_id = %s",
+                (run_id,),
+            ).fetchone()
+    except (psycopg.Error, ImportError) as exc:
+        logger.warning("run_meta_lookup_failed", run_id=str(run_id), error=str(exc))
+        return {}
+    row = cast("dict[str, Any] | None", row_raw)
+    if not row:
+        return {}
+    return {
+        "model": row.get("model") or "unknown",
+        "pages_compiled_this_run": int(row.get("emails_processed") or 0),
+    }
+
+
+def _wiki_pages_total(wiki_dir: Path) -> int:
+    """Count content pages on disk — coarse 'how big is the wiki' signal."""
+    n = 0
+    for cat in CONTENT_CATEGORIES:
+        d = wiki_dir / cat
+        if d.exists():
+            n += sum(1 for _ in d.glob("*.md"))
+    return n
+
+
+def _metrics_dict(report: Report) -> dict[str, float | None]:
+    """Flatten ``report.metrics`` into a name→value dict for JSONL/scores.
+
+    M10 is the archetype distribution — it has no scalar value, so it's
+    skipped here. The distribution itself ships separately on the row
+    via ``archetype_dist``.
+    """
+    out: dict[str, float | None] = {}
+    for m in report.metrics:
+        if m.name == "M10":
+            continue
+        out[m.name] = float(m.value) if m.value is not None else None
+    return out
+
+
+def append_to_history(
+    report: Report,
+    run_id: UUID | None,
+    prompt_commit_sha: str,
+    wiki_dir: Path,
+    history_path: Path = HISTORY_PATH,
+) -> Path:
+    """Append one JSON line per run to ``metrics-history.jsonl``.
+
+    Idempotent-ish: we don't dedupe by run_id (the dipstick is meant
+    to be called once per completed run). If you re-run the dipstick
+    on the same run_id you'll get two rows — the dashboard's "latest"
+    view will pick the newer one by timestamp.
+    """
+    meta = _resolve_run_meta(run_id)
+    metrics = _metrics_dict(report)
+    row: dict[str, Any] = {
+        "run_id": str(run_id) if run_id else None,
+        "timestamp": report.generated_at,
+        "prompt_commit_sha": prompt_commit_sha,
+        "model": meta.get("model", "unknown"),
+        "pages_total": _wiki_pages_total(wiki_dir),
+        "pages_compiled_this_run": meta.get("pages_compiled_this_run", 0),
+        "new_pages_window": report.new_pages_total,
+        "metrics": metrics,
+        "archetype_dist": dict(report.archetype_dist),
+    }
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, default=str) + "\n")
+    return history_path
+
+
+def read_history(history_path: Path = HISTORY_PATH) -> list[dict[str, Any]]:
+    """Read the JSONL history file, skipping malformed lines.
+
+    Returns rows in file order (oldest first). The dashboard renderer
+    handles its own sorting.
+    """
+    if not history_path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in history_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning("metrics_history_bad_line", line=line[:120])
+            continue
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Layer 3 — Langfuse score push (trace-derived metrics only)
+# --------------------------------------------------------------------------
+
+
+def push_langfuse_scores(
+    report: Report,
+    run_id: UUID | None,
+    prompt_commit_sha: str,
+) -> int:
+    """Push trace-derivable metrics as Langfuse scores. Returns count pushed.
+
+    Failure mode: any langfuse error logs a warning + returns 0. We
+    NEVER block the JSONL append or compile loop on score-push.
+
+    Scoring strategy: scores attach to a daily aggregate session
+    ``compile-metrics-YYYY-MM-DD`` so the Langfuse UI can show
+    time-series charts of metric values across runs without
+    polluting individual compile traces.
+    """
+    metrics = _metrics_dict(report)
+    pushable = [
+        (mid, score_name, metrics.get(mid))
+        for mid, score_name in TRACE_METRICS_TO_PUSH
+        if metrics.get(mid) is not None
+    ]
+    if not pushable:
+        return 0
+    # Reuse the existing Langfuse client builder + safe-flush helpers from
+    # `src.observability.langfuse_scores`. Returns None when Langfuse is
+    # disabled or keys are missing — we silently no-op rather than crash.
+    # `create_score` is called inline because metrics scores are session-
+    # scoped (`session_id=compile-metrics-YYYY-MM-DD`) whereas the helper
+    # `_push_score` is trace-scoped — different shape.
+    from src.observability.langfuse_scores import _build_client
+    from src.observability.langfuse_scores import _safe_flush
+
+    client = _build_client()
+    if client is None:
+        return 0
+
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    session_id = f"compile-metrics-{today}"
+    comment = f"run_id={run_id} prompt_sha={prompt_commit_sha}"
+    pushed = 0
+    for _mid, name, value in pushable:
+        try:
+            client.create_score(
+                session_id=session_id,
+                name=name,
+                value=float(value) if value is not None else 0.0,
+                data_type="NUMERIC",
+                comment=comment,
+            )
+            pushed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "langfuse_metric_score_push_failed",
+                name=name,
+                error=str(exc)[:200],
+            )
+    _safe_flush(client)
+    return pushed
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -868,6 +1150,26 @@ def main(
         encoding="utf-8",
     )
 
+    # Layer 1 — append longitudinal row + Layer 2 — re-render dashboard +
+    # Layer 3 — push trace-derived metrics as Langfuse scores. Each step
+    # is best-effort: failures log a warning and the next step still runs.
+    sha = _prompt_commit_sha()
+    try:
+        append_to_history(report, rid, sha, settings.wiki_dir)
+    except (OSError, TypeError, ValueError) as exc:
+        # OSError: filesystem failures.
+        # TypeError / ValueError: JSON-encoding failures on a non-encodable
+        # field. Either way: log + continue; never block compile.
+        logger.warning("metrics_history_append_failed", error=str(exc))
+    try:
+        from scripts.render_metrics_dashboard import render_dashboard
+
+        render_dashboard()
+    except Exception as exc:  # noqa: BLE001 — dashboard render never blocks
+        logger.warning("dashboard_render_failed", error=str(exc)[:200])
+    if not skip_langfuse:
+        push_langfuse_scores(report, rid, sha)
+
     click.echo(md)
     click.echo(f"Wrote: {out_path}")
 
@@ -877,7 +1179,20 @@ def emit_for_run(run_id: UUID, *, skip_langfuse: bool = False) -> Path | None:
 
     Never raises. Returns the report path on success or None on failure
     (so the compile loop never blocks on metrics collection).
+
+    On success, also appends a row to ``metrics-history.jsonl``,
+    regenerates the dashboard, and pushes trace-derived metrics as
+    Langfuse scores. Each follow-up step is best-effort.
     """
+    # Guard against test stubs that pass a non-UUID string. Without
+    # this, ``compile_all`` integration tests pollute the real
+    # ``docs/audits/metrics-history.jsonl``.
+    if not isinstance(run_id, UUID):
+        try:
+            run_id = UUID(str(run_id))
+        except (ValueError, TypeError):
+            logger.warning("post_run_metrics_invalid_run_id", run_id=str(run_id))
+            return None
     try:
         since_dt = _resolve_run_started_at(run_id)
         report = build_report(
@@ -896,6 +1211,23 @@ def emit_for_run(run_id: UUID, *, skip_langfuse: bool = False) -> Path | None:
             json.dumps(asdict(report), indent=2, default=str),
             encoding="utf-8",
         )
+        sha = _prompt_commit_sha()
+        try:
+            append_to_history(report, run_id, sha, settings.wiki_dir)
+        except (OSError, TypeError, ValueError) as exc:
+            # Match `main()` scope — OSError (filesystem) +
+            # TypeError/ValueError (json.dumps on a non-encodable
+            # field). Don't let a JSONL append failure cascade and
+            # skip the dashboard render + Langfuse push that follow.
+            logger.warning("metrics_history_append_failed", error=str(exc))
+        try:
+            from scripts.render_metrics_dashboard import render_dashboard
+
+            render_dashboard()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dashboard_render_failed", error=str(exc)[:200])
+        if not skip_langfuse:
+            push_langfuse_scores(report, run_id, sha)
         return out_path
     except Exception as exc:  # noqa: BLE001 — never block the compile loop
         logger.warning("post_run_metrics_failed", run_id=str(run_id), error=str(exc))
@@ -905,15 +1237,24 @@ def emit_for_run(run_id: UUID, *, skip_langfuse: bool = False) -> Path | None:
 # Module-level export to keep `from scripts.post_run_metrics import ...`
 # clean from tests + scripts/compile_all.py wiring.
 __all__ = [
+    "DASHBOARD_PATH",
+    "HISTORY_PATH",
+    "TRACE_METRICS_TO_PUSH",
     "MetricResult",
     "Report",
     "_detect_archetype",
     "_has_owner_frontmatter",
     "_lead_has_number_and_two_sentences",
+    "_metrics_dict",
+    "_prompt_commit_sha",
+    "_wiki_pages_total",
+    "append_to_history",
     "build_report",
     "compute_filesystem_metrics",
     "compute_langfuse_metrics",
     "emit_for_run",
+    "push_langfuse_scores",
+    "read_history",
     "render_markdown",
 ]
 
