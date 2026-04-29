@@ -12,6 +12,7 @@ including pages with missing or empty frontmatter fields.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from dataclasses import field
@@ -45,6 +46,10 @@ def _page(src_path: str, meta: dict | None = None) -> _FakePage:
     return _FakePage(file=_FakeFile(src_path=src_path), meta=meta or {})
 
 
+def _plain_time_text(markdown: str) -> str:
+    return re.sub(r"<time[^>]*>([^<]*)</time>", r"\1", markdown)
+
+
 def _split_fixture(fixture_path: Path) -> tuple[dict, str]:
     """Parse the YAML frontmatter + body from a fixture file. mkdocs itself
     does this at load time and passes page.meta + body-only markdown to the
@@ -67,7 +72,11 @@ def test_banner_renders_all_three_fields_with_complete_frontmatter() -> None:
         "status": "current",
     }
     banner = _page_metadata_banner(fm)
-    assert banner.startswith("3 sources · last compiled 2026-04-13 · status: current")
+    assert _plain_time_text(banner).startswith(
+        "3 sources · last compiled 2026-04-13 · status: current"
+    )
+    assert 'class="relative-time"' in banner
+    assert 'datetime="2026-04-13T16:00:00+05:30"' in banner
 
 
 def test_banner_shows_zero_when_sources_missing() -> None:
@@ -135,7 +144,7 @@ def test_hook_splices_banner_after_h1_on_topic_pages() -> None:
     banner_text = "3 sources · last compiled 2026-04-13 · status: current"
     # Layout is H1 → status pill → banner → body, so the banner sits a few
     # lines further down than under the older header-only flow.
-    assert banner_text in "\n".join(lines[h1_idx + 1 : h1_idx + 6])
+    assert banner_text in _plain_time_text("\n".join(lines[h1_idx + 1 : h1_idx + 6]))
 
 
 def test_hook_prepends_banner_on_entity_page_without_h1() -> None:
@@ -151,7 +160,7 @@ def test_hook_prepends_banner_on_entity_page_without_h1() -> None:
     }
     body = "Email: jane@indiamart.com\n\nBody text.\n"
     out = on_page_markdown(body, page=_page("entities/jane.md", meta), config={}, files=[])
-    assert "0 sources · last compiled 2026-04-12 · status: current" in out
+    assert "0 sources · last compiled 2026-04-12 · status: current" in _plain_time_text(out)
 
 
 def test_hook_renders_banner_on_system_page_with_missing_last_compiled() -> None:
@@ -213,7 +222,7 @@ def test_hook_is_idempotent_on_rerun() -> None:
     once = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
     twice = on_page_markdown(once, page=_page("topics/t.md", meta), config={}, files=[])
     # Idempotency: second pass must NOT add a second banner.
-    assert twice.count("· last compiled 2026-04-13 · status: current") == 1
+    assert _plain_time_text(twice).count("· last compiled 2026-04-13 · status: current") == 1
 
 
 # --- fixture-driven tests (one of each page type) ------------------------
@@ -222,13 +231,13 @@ def test_hook_is_idempotent_on_rerun() -> None:
 def test_fixture_topic_page_renders_full_banner() -> None:
     fm, body = _split_fixture(FIXTURE_ROOT / "topics" / "example-topic.md")
     out = on_page_markdown(body, page=_page("topics/example-topic.md", fm), config={}, files=[])
-    assert "3 sources · last compiled 2026-04-13 · status: current" in out
+    assert "3 sources · last compiled 2026-04-13 · status: current" in _plain_time_text(out)
 
 
 def test_fixture_entity_page_renders_zero_sources_banner() -> None:
     fm, body = _split_fixture(FIXTURE_ROOT / "entities" / "jane-doe.md")
     out = on_page_markdown(body, page=_page("entities/jane-doe.md", fm), config={}, files=[])
-    assert "0 sources · last compiled 2026-04-12 · status: current" in out
+    assert "0 sources · last compiled 2026-04-12 · status: current" in _plain_time_text(out)
 
 
 def test_fixture_system_page_renders_superseded_status() -> None:
@@ -316,7 +325,7 @@ def test_hook_renders_threads_block_when_source_threads_present(monkeypatch) -> 
     assert "- Thread: `19b59cdc863a`" in out
     assert "- Thread: `19aee0c7cc33`" in out
     # Banner switches to "thread(s)" noun in the top-of-page stamp.
-    assert "2 threads · last compiled 2026-04-13 · status: active" in out
+    assert "2 threads · last compiled 2026-04-13 · status: active" in _plain_time_text(out)
 
 
 def test_hook_prefers_source_threads_over_legacy_sources(monkeypatch) -> None:
@@ -412,4 +421,4 @@ def test_hook_banner_idempotent_with_source_threads(monkeypatch) -> None:
     once = on_page_markdown(body, page=_page("topics/t.md", meta), config={}, files=[])
     twice = on_page_markdown(once, page=_page("topics/t.md", meta), config={}, files=[])
     # The banner must not double up (mirrors the sources-path contract).
-    assert twice.count("last compiled 2026-04-13") == 1
+    assert _plain_time_text(twice).count("last compiled 2026-04-13") == 1

@@ -14,6 +14,7 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 from langchain_core.tools import tool
@@ -25,11 +26,12 @@ from src.utils import extract_frontmatter as _extract_frontmatter
 from src.utils import render_with_frontmatter as _render_with_frontmatter
 
 logger = structlog.get_logger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @tool
 def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
-    """Set last_compiled on a wiki page to the current real-world UTC time.
+    """Set last_compiled on a wiki page to the current real-world IST time.
 
     Use this INSTEAD OF writing last_compiled yourself in the page frontmatter.
     You do not know the current date; this tool uses the system clock.
@@ -48,7 +50,7 @@ def stamp_page_compiled_at(file_path: str) -> dict[str, str]:
     frontmatter = _extract_frontmatter(content)
     body = _extract_body(content)
 
-    now_iso = datetime.now(UTC).isoformat()
+    now_iso = datetime.now(IST).isoformat(timespec="seconds")
     frontmatter["last_compiled"] = now_iso
     frontmatter["updated_by"] = settings.llm_model
     # Track running count of recompiles

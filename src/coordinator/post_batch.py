@@ -20,10 +20,10 @@ the state-flip queries read the catalog rows this module writes.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import click
 import psycopg
@@ -47,6 +47,7 @@ from src.wiki.page_validator import Error as ValidationError
 from src.wiki.page_validator import validate_page
 
 logger = structlog.get_logger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -171,7 +172,7 @@ def _stamp_recently_modified_pages(
     if not wiki_path.exists():
         return 0, 0
 
-    now_iso = datetime.now(UTC).isoformat()
+    now_iso = datetime.now(IST).isoformat(timespec="seconds")
     stamped, skipped = 0, 0
     stamped_slugs: list[str] = []
 
@@ -559,7 +560,7 @@ def _sync_and_stamp_landing_surfaces(wiki_dir: str, model_name: str) -> tuple[in
     if not candidates:
         return 0, 0
 
-    now_iso = datetime.now(UTC).isoformat()
+    now_iso = datetime.now(IST).isoformat(timespec="seconds")
     stamped = 0
     synced = 0
 

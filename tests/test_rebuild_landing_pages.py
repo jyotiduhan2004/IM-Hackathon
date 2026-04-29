@@ -135,6 +135,29 @@ class TestWriteSectionIndexStatusSuffix:
 
 
 class TestRebuildLandingPagesShowsSourceThreadsPages:
+    def test_section_index_sorts_mixed_timezone_offsets_by_absolute_time(
+        self, tmp_path: Path
+    ) -> None:
+        _write_page(
+            tmp_path / "topics" / "older-ist.md",
+            "title: Older IST\npage_type: topic\nstatus: active\n"
+            "sources:\n- raw/2026-01-01_older_abc.md\n"
+            "last_compiled: '2026-04-29T10:00:00+05:30'",
+            body="Older absolute timestamp.\n",
+        )
+        _write_page(
+            tmp_path / "topics" / "newer-utc.md",
+            "title: Newer UTC\npage_type: topic\nstatus: active\n"
+            "sources:\n- raw/2026-01-01_newer_def.md\n"
+            "last_compiled: '2026-04-29T06:00:00+00:00'",
+            body="Newer absolute timestamp.\n",
+        )
+
+        rebuild_landing_pages(str(tmp_path))
+
+        index = (tmp_path / "topics" / "index.md").read_text(encoding="utf-8")
+        assert index.index("[[newer-utc]]") < index.index("[[older-ist]]")
+
     def test_systems_page_with_source_threads_appears_in_index(self, tmp_path: Path) -> None:
         # Seed ONE system page using the post-Phase-A contract.
         _write_page(

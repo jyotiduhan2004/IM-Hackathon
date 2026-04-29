@@ -112,6 +112,9 @@ extra:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - javascripts/relative-time.js
+
 # Suppress warnings for pages referenced via [[wikilinks]] that MkDocs doesn't
 # natively understand — we render them as plain text (Phase 2 will add a plugin)
 strict: false

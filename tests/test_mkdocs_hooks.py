@@ -7,6 +7,7 @@ stay fast and decoupled from MkDocs' evolving API.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from dataclasses import field
@@ -34,6 +35,10 @@ class _FakePage:
 
 def _page(src_path: str, meta: dict | None = None) -> _FakePage:
     return _FakePage(file=_FakeFile(src_path=src_path), meta=meta or {})
+
+
+def _plain_time_text(markdown: str) -> str:
+    return re.sub(r"<time[^>]*>([^<]*)</time>", r"\1", markdown)
 
 
 BADGE_HTML = '<span class="ext-badge" title="External contact (not @indiamart.com)">external</span>'
@@ -127,7 +132,7 @@ def test_hook_decorates_domains_pages() -> None:
         body, page=_page("domains/engineering/index.md", meta), config={}, files=[]
     )
     assert "ns-status-active" in out
-    assert "1 source · last compiled 2026-04-15" in out
+    assert "1 source · last compiled 2026-04-15" in _plain_time_text(out)
 
 
 def test_hook_decorates_decisions_pages() -> None:
@@ -143,7 +148,7 @@ def test_hook_decorates_decisions_pages() -> None:
         body, page=_page("decisions/001-some-decision.md", meta), config={}, files=[]
     )
     assert "ns-status-active" in out
-    assert "0 sources · last compiled 2026-04-15" in out
+    assert "0 sources · last compiled 2026-04-15" in _plain_time_text(out)
 
 
 def test_hook_decorates_top_level_home_glossary_changes() -> None:
@@ -160,7 +165,9 @@ def test_hook_decorates_top_level_home_glossary_changes() -> None:
         body = "# Top\n\nBody.\n"
         out = on_page_markdown(body, page=_page(src_path, meta), config={}, files=[])
         assert "ns-status-active" in out, f"status pill missing on {src_path}"
-        assert "last compiled 2026-04-15" in out, f"banner missing on {src_path}"
+        assert "last compiled 2026-04-15" in _plain_time_text(out), (
+            f"banner missing on {src_path}"
+        )
 
 
 def test_hook_still_skips_legacy_log_md() -> None:
@@ -398,7 +405,7 @@ def test_hook_decorates_people_pages() -> None:
     body = "Email: alice@example.com\n\nSome content about Alice.\n"
     out = on_page_markdown(body, page=_page("people/alice.md", meta), config={}, files=[])
     assert "ns-status-active" in out
-    assert "1 source · last compiled 2026-04-16" in out
+    assert "1 source · last compiled 2026-04-16" in _plain_time_text(out)
 
 
 def test_hook_person_page_external_badge_renders() -> None:

@@ -86,6 +86,7 @@ def test_stamps_pages_modified_after_run_start(compile_all_module, wiki_dir):
     fm_b = extract_frontmatter(page_b.read_text(encoding="utf-8"))
     for fm in (fm_a, fm_b):
         assert "last_compiled" in fm
+        assert str(fm["last_compiled"]).endswith("+05:30")
         assert fm["updated_by"] == "test-model"
         assert fm["update_count"] == 1
 

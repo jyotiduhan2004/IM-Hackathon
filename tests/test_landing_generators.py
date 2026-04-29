@@ -136,6 +136,7 @@ def test_generate_home_lists_all_domains_and_recent(tmp_path: Path) -> None:
     for slug, title, _keywords in _DOMAINS:
         assert f"[{title}](domains/{slug}.md)" in content
     assert "[[topics/recent]]" in content or "[[systems/lens]]" in content
+    assert 'class="relative-time"' in content
     assert "page_type: home" in content
 
 
@@ -146,10 +147,11 @@ def test_generate_changes_no_db_writes_stub(tmp_path: Path) -> None:
     assert "page_type: changes" in content
 
 
-def test_generate_changes_groups_by_day(tmp_path: Path) -> None:
-    # Post-2026-04-24: _generate_changes reads pages from the filesystem
-    # (not compile_attempts from Postgres). Seed two pages touched on
-    # different days and expect two day-grouped sections.
+def test_generate_changes_emits_flat_recency_feed(tmp_path: Path) -> None:
+    # Post-2026-04-29: _generate_changes drops day H2 grouping in favor of
+    # a flat recency-ordered list. The browser-side `<time class="relative-time">`
+    # JS renders "5 minutes ago" / "3 days ago", so day headers were redundant.
+    # Newest page must appear before older one, each prefixed with "Updated".
     now = datetime.now(UTC)
     _write_page(
         tmp_path / "topics" / "today-page.md",
@@ -173,9 +175,13 @@ def test_generate_changes_groups_by_day(tmp_path: Path) -> None:
     )
     path = _generate_changes(tmp_path)
     content = path.read_text()
-    assert content.count("## ") >= 2
-    assert "[[topics/today-page]]" in content
-    assert "[[topics/yesterday-page]]" in content
+    today_idx = content.index("[[topics/today-page]]")
+    yesterday_idx = content.index("[[topics/yesterday-page]]")
+    assert today_idx < yesterday_idx
+    assert "- Updated " in content
+    assert 'class="relative-time"' in content
+    # No day-grouping H2s — only the page title H1 should remain.
+    assert content.count("\n## ") == 0
     # Must NOT leak LLM compile-runtime detail any more.
     assert "minimax" not in content
     assert "grok" not in content

@@ -21,10 +21,12 @@ import re
 from datetime import date
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 
 REPO_ROOT = Path(__file__).parent
+IST = ZoneInfo("Asia/Kolkata")
 
 _log = logging.getLogger(__name__)
 
@@ -403,7 +405,7 @@ def _page_metadata_banner(
 ) -> str:
     """One-line provenance banner at the top of each page.
 
-    Renders: `N sources · last compiled YYYY-MM-DD · status: active`
+    Renders: `N sources · last compiled <time ...>YYYY-MM-DD</time> · status: active`
 
     All three fields always render — missing `sources` becomes "0 sources",
     missing `status` becomes "active" (the North-Star default; flipped from
@@ -442,20 +444,40 @@ def _page_metadata_banner(
 
 
 def _format_last_compiled(value: object) -> str:
-    """Normalize `last_compiled` for display. Accepts strings, datetime, date,
-    None, or stub markers — always returns a short printable string.
+    """Normalize `last_compiled` for display.
+
+    Datetime values render as a `<time class="relative-time">` element so
+    viewer-side JS can replace the absolute fallback with "20 minutes ago"
+    without changing the stored page metadata.
     """
     if value is None or value == "":
         return "unknown"
     if isinstance(value, datetime):
-        return value.date().isoformat()
+        dt = value.astimezone(IST) if value.tzinfo is not None else value.replace(tzinfo=IST)
+        iso = html.escape(dt.isoformat(timespec="seconds"), quote=True)
+        fallback = dt.date().isoformat()
+        return f'<time class="relative-time" datetime="{iso}">{fallback}</time>'
     if isinstance(value, date):
-        return value.isoformat()
+        iso = html.escape(value.isoformat(), quote=True)
+        return f'<time datetime="{iso}">{iso}</time>'
     text = str(value)
     if text in ("stub", "stub-backfilled"):
         return text
-    # Bare ISO strings like "2026-04-13T10:30:00+00:00" — keep only the date.
-    return text.split("T")[0] if "T" in text else text
+    if "T" in text:
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return html.escape(text.split("T")[0])
+        dt = dt.astimezone(IST) if dt.tzinfo is not None else dt.replace(tzinfo=IST)
+        iso = html.escape(dt.isoformat(timespec="seconds"), quote=True)
+        fallback = dt.date().isoformat()
+        return f'<time class="relative-time" datetime="{iso}">{fallback}</time>'
+    try:
+        parsed_date = date.fromisoformat(text)
+    except ValueError:
+        return html.escape(text)
+    iso = html.escape(parsed_date.isoformat(), quote=True)
+    return f'<time datetime="{iso}">{iso}</time>'
 
 
 def on_page_markdown(markdown: str, *, page, config, files) -> str:
