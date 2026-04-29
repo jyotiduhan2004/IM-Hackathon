@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir \
     'pyyaml>=6.0'
 
 COPY mkdocs.yml mkdocs_hooks.py ./
+COPY src/ ./src/
 COPY wiki/ ./wiki/
 COPY raw/ ./raw/
 
