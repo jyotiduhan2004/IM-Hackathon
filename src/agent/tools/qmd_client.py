@@ -17,7 +17,7 @@ Design notes:
 - Spike audit (docs/audits/qmd-spike-2026-04-23.md) validated 85%
   top-5 sensibility on 40 real Langfuse queries, 9/9 on fixture
   backstop. ``QMD_TIMEOUT_S`` is the per-call hard cap; default is
-  generous (45s) to cover the worst cold-start reranker warm-up.
+  generous (60s) to cover the worst cold-start reranker warm-up.
 """
 
 from __future__ import annotations

@@ -357,7 +357,7 @@ def _redirect_connect_and_clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     from src.config import settings as _settings
 
     monkeypatch.setattr(_settings, "use_semantic_resolve", False)
-    monkeypatch.setattr(_settings, "qmd_timeout_s", 45)
+    monkeypatch.setattr(_settings, "qmd_timeout_s", 60)
 
     import src.db as db_pkg
     import src.db.compile_runs as db_compile_runs
