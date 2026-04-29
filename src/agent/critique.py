@@ -33,6 +33,8 @@ from src.utils import extract_frontmatter
 from src.utils import split_frontmatter
 from src.utils.wikilinks import WIKILINK_RE
 from src.utils.wikilinks import parse_wikilink_target
+from src.wiki.references import FOOTNOTE_DEF_RE
+from src.wiki.references import FOOTNOTE_USE_RE
 from src.wiki.sections import ANTI_PATTERN_H2_LOWER
 from src.wiki.sections import SUGGESTED_SECTIONS
 
@@ -58,14 +60,6 @@ _PEOPLE_SLUG_RE = re.compile(
     r"^[a-z0-9]+(?:-[a-z0-9]+)*-(?:indiamart-com|gmail-com|amazon-com)$",
     re.IGNORECASE,
 )
-# Footnote markers. Usage: ``[^msg-bff57907]`` in prose / Recent changes.
-# Definition: ``[^msg-bff57907]: text`` in ``## References``. #157 fix —
-# agents were writing usages without matching defs, leaving dangling
-# footnote references that render as raw brackets in the published wiki.
-_FOOTNOTE_USE_RE = re.compile(r"\[\^(msg-[a-z0-9-]+)\](?!:)", re.IGNORECASE)
-_FOOTNOTE_DEF_RE = re.compile(r"^\[\^(msg-[a-z0-9-]+)\]:", re.IGNORECASE | re.MULTILINE)
-
-
 @dataclass
 class Issue:
     id: str
@@ -364,12 +358,20 @@ def _check_stray_bracket(page: Path, repo_root: Path, body: str) -> list[Issue]:
 
 
 def _check_footnote_defs(page: Path, repo_root: Path, body: str) -> list[Issue]:
-    """Every ``[^msg-<hash>]`` usage needs a matching ``[^msg-<hash>]:``
-    definition somewhere in the body (typically ``## References``).
-    Missing defs render as raw bracket text in the published wiki — the
-    ``dspy-gepa-intent-classification`` finding from #157."""
-    uses = {m.group(1).lower() for m in _FOOTNOTE_USE_RE.finditer(body)}
-    defs = {m.group(1).lower() for m in _FOOTNOTE_DEF_RE.finditer(body)}
+    """Surface ``[^msg-x]`` body refs that have no matching definition.
+
+    The post-batch coordinator backfill is the primary fix for this: it
+    runs deterministically after every batch in ``compile_all.py`` and
+    rewrites the def block on disk. This check is the safety net for
+    non-coordinator entrypoints (``watch_and_compile.py``,
+    ``compile_parallel.py``) which call ``run_compilation`` directly
+    and skip the post-batch hook chain. Severity is ``warning`` so it
+    surfaces the gap without blocking the agent's check_my_work loop —
+    the contradiction with the "agent doesn't author References" prompt
+    rule was the failure mode that motivated the deterministic fix.
+    """
+    uses = {m.group(1).lower() for m in FOOTNOTE_USE_RE.finditer(body)}
+    defs = {m.group(1).lower() for m in FOOTNOTE_DEF_RE.finditer(body)}
     missing = sorted(uses - defs)
     if not missing:
         return []
@@ -379,12 +381,14 @@ def _check_footnote_defs(page: Path, repo_root: Path, body: str) -> list[Issue]:
         preview += f" (+{len(missing) - 5} more)"
     msg = (
         f"{len(missing)} footnote usage(s) without a matching definition: "
-        f"{preview}. Add `[^msg-<hash>]: <source text>` under `## References`."
+        f"{preview}. The post-batch coordinator hook backfills these in "
+        f"the standard `compile_all.py` flow; if you're seeing this, the "
+        f"page was compiled through a non-coordinator entrypoint."
     )
     return [
         Issue(
             _issue_id(relp, "footnote-missing-def", msg),
-            "blocker",
+            "warning",
             "footnote-missing-def",
             relp,
             msg,
@@ -784,6 +788,10 @@ def critique_pages(paths: list[Path], wiki_dir: Path, repo_root: Path) -> Critiq
         issues.extend(_check_broken_wikilinks(page, repo_root, body, known_slugs))
         issues.extend(_check_h1_in_body(page, repo_root, body))
         issues.extend(_check_stray_bracket(page, repo_root, body))
+        # Footnote-def integrity is guaranteed by the post-batch
+        # coordinator hook in `compile_all.py`. The check below remains
+        # as a `warning`-level safety net for non-coordinator
+        # entrypoints (`watch_and_compile.py`, `compile_parallel.py`).
         issues.extend(_check_footnote_defs(page, repo_root, body))
         issues.extend(_check_recent_changes_h2(page, repo_root, body, page_type))
         issues.extend(_check_suggested_h2_sections(page, repo_root, body, page_type))

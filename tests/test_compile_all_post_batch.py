@@ -297,3 +297,49 @@ def test_validate_hook_logs_errors_but_does_not_fail_batch(
     combined = captured.out + captured.err
     assert "validator errors" in combined
     assert "fence" in combined  # reason-level detail surfaced for the operator
+
+
+# --- coordinator-side ## References backfill ----------------------------
+
+
+@pytest.fixture
+def staged_raw_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Repoint ``settings.raw_dir`` at a stand-alone tmp ``raw/`` dir and
+    clear the shared raw-index cache so each test stages its own
+    fixtures."""
+    from src.config import settings as _settings
+    from src.wiki import references as refs_mod
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setattr(_settings, "raw_dir", raw)
+    refs_mod.clear_raw_index_cache()
+    return tmp_path
+
+
+def test_backfill_references_appends_h2_when_missing(
+    compile_all_module, wiki_dir: Path, staged_raw_repo: Path
+) -> None:
+    """Touched page has body refs and no defs — coordinator hook adds them."""
+    (staged_raw_repo / "raw" / "2026-04-01_subj_aaaa.md").write_text("x", encoding="utf-8")
+
+    page = wiki_dir / "topics" / "foo.md"
+    _write_page(page, "Foo", "topic", "Body cites [^msg-aaaa] here.\n")
+    changed = compile_all_module._backfill_references_on_touched_pages([page], wiki_dir)
+    assert changed == 1
+    txt = page.read_text(encoding="utf-8")
+    assert "## References" in txt
+    assert "[^msg-aaaa]: `raw/2026-04-01_subj_aaaa.md`" in txt
+
+
+def test_backfill_references_noop_on_clean_page(
+    compile_all_module, wiki_dir: Path, staged_raw_repo: Path
+) -> None:
+    """Page with no body refs is left alone (returns 0 changed)."""
+    page = wiki_dir / "topics" / "clean.md"
+    _write_page(page, "Clean", "topic", "Just prose, no refs.\n")
+    before = page.read_text(encoding="utf-8")
+    assert compile_all_module._backfill_references_on_touched_pages([page], wiki_dir) == 0
+    assert page.read_text(encoding="utf-8") == before

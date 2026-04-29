@@ -140,9 +140,20 @@ def fetch_new_emails(
 
 def compile_some(limit: int, batch_size: int) -> int:
     """Compile up to `limit` uncompiled emails (oldest first). Returns processed."""
+    import time
+
+    from src.coordinator.post_batch import _backfill_references_on_touched_pages
+    from src.coordinator.post_batch import _iter_touched_content_pages
+    from src.wiki.references import clear_raw_index_cache
+
     uncompiled = list_uncompiled_emails.invoke({"raw_dir": str(settings.raw_dir)})
     if not uncompiled:
         return 0
+
+    # The watch loop fetches new emails into raw/ between iterations, so the
+    # raw-index cache built last tick is stale by definition this tick. Drop
+    # it once at the start so the backfill sees the new files.
+    clear_raw_index_cache()
 
     to_do = uncompiled[:limit]
     processed = 0
@@ -156,6 +167,7 @@ def compile_some(limit: int, batch_size: int) -> int:
             f"Process chronologically. Mark each as compiled.\n\n"
             f"Files:\n" + "\n".join(f"- {p}" for p in paths)
         )
+        batch_start = time.time()
         try:
             run_compilation(
                 instruction=instruction,
@@ -165,6 +177,15 @@ def compile_some(limit: int, batch_size: int) -> int:
             processed += len(batch)
         except Exception as e:  # noqa: BLE001
             logger.error("compile batch failed", error=str(e))
+            continue
+        # Mirror compile_all.py's deterministic ## References backfill so
+        # live-mode pages don't ship with dangling [^msg-x] refs. Without
+        # this, the agent's prompt rule "stop authoring References" leaves
+        # cited-but-unverifiable pages in non-coordinator flows.
+        wiki_path = Path(settings.wiki_dir)
+        _backfill_references_on_touched_pages(
+            _iter_touched_content_pages(batch_start, wiki_path), wiki_path
+        )
 
     if processed:
         update_wiki_index.invoke({"wiki_dir": str(settings.wiki_dir)})

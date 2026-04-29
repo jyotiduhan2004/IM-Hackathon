@@ -316,6 +316,37 @@ def _iter_touched_pages(batch_start: float, wiki_dir: Path) -> list[Path]:
     return touched
 
 
+def _backfill_references_on_touched_pages(pages: list[Path], wiki_dir: Path) -> int:
+    """Append/extend ``## References`` on every touched page.
+
+    The mkdocs hook renders the section at build time only — the on-disk
+    ``.md`` would otherwise ship with body ``[^msg-xxx]`` refs and no
+    defs, so GitHub / plain ``cat`` shows dangling text. The agent
+    intentionally stops authoring References; this hook owns that
+    surface deterministically.
+
+    Resolves footnote raws via ``settings.raw_dir`` so a non-default
+    ``RAW_DIR`` env override is honoured (raw / wiki paths are
+    configurable independently of ``REPO_ROOT``).
+
+    Mirrors ``_normalize_touched_pages``: per-page try/except, log +
+    continue, never abort the batch. Returns mutated count.
+    """
+    _ = wiki_dir  # currently unused; raw_dir is sourced from settings
+    from src.config import settings
+    from src.wiki.references import backfill_references
+
+    raw_dir = Path(settings.raw_dir).resolve()
+    changed = 0
+    for page in pages:
+        try:
+            if backfill_references(page, raw_dir):
+                changed += 1
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("references_backfill_failed", path=str(page), error=str(exc))
+    return changed
+
+
 def _normalize_touched_pages(pages: list[Path], wiki_dir: Path) -> list[Path]:
     """Run the formatter against each page in ``pages``. Returns the subset
     the formatter actually rewrote.

@@ -49,6 +49,7 @@ from src.coordinator.model_pool import _is_model_unavailable_error  # noqa: E402
 from src.coordinator.model_pool import _prepare_model_pool  # noqa: E402
 from src.coordinator.model_pool import _refresh_pool_for_batch  # noqa: E402
 from src.coordinator.model_pool import _setup_model_pool  # noqa: E402
+from src.coordinator.post_batch import _backfill_references_on_touched_pages  # noqa: E402
 from src.coordinator.post_batch import _iter_touched_content_pages  # noqa: E402
 from src.coordinator.post_batch import _iter_touched_pages  # noqa: E402
 from src.coordinator.post_batch import _mdlint_autofix_touched_pages  # noqa: E402
@@ -499,8 +500,18 @@ def main(
                 # Running either earlier leaves ``message_touched_pages``
                 # empty and every email stays ``pending``.
                 touched_pages = _iter_touched_pages(batch_start, Path(wiki_dir))
+                # `touched_content_pages` covers topics + systems +
+                # policies + decisions + timelines + conflicts (wider
+                # scope than `_iter_touched_pages`). Computed once and
+                # reused for the References backfill below + the
+                # touch-catalog write below `_mark_batch_compiled`.
+                touched_content_pages = _iter_touched_content_pages(batch_start, Path(wiki_dir))
                 normalized = _normalize_touched_pages(touched_pages, Path(wiki_dir))
                 _mdlint_autofix_touched_pages(touched_pages)
+                # Backfill ## References on every touched content page —
+                # decisions in particular cite raw emails and aren't
+                # covered by the narrower `touched_pages`.
+                _backfill_references_on_touched_pages(touched_content_pages, Path(wiki_dir))
                 catalog_synced = _sync_wiki_catalog(touched_pages, Path(wiki_dir))
                 errors_by_page = _validate_touched_pages(touched_pages, Path(wiki_dir))
                 if errors_by_page:
@@ -518,14 +529,9 @@ def main(
                 # has rows) and BEFORE ``_mark_batch_compiled`` (which
                 # reads the catalog). ``attempts`` is keyed by
                 # ``message_id`` so we reuse its keys instead of a
-                # second ``find_by_raw_path`` pass over the batch.
-                #
-                # Use ``_iter_touched_content_pages`` (wider scope than
-                # ``_iter_touched_pages``) so policy/decision/timeline/
-                # conflict edits also write touch rows. Without this, a
-                # batch that only modifies a policy page writes zero
-                # rows → message stays pending → re-claimed forever.
-                touched_content_pages = _iter_touched_content_pages(batch_start, Path(wiki_dir))
+                # second ``find_by_raw_path`` pass over the batch. Reuses
+                # ``touched_content_pages`` from above so we don't scan
+                # the wiki twice per batch.
                 touches_inserted = _write_touch_catalog(touched_content_pages, list(attempts))
                 compiled_ids, skipped_ids, not_cited_paths, missing = _mark_batch_compiled(
                     batch,

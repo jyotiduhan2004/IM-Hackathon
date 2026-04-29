@@ -494,18 +494,18 @@ def test_hook_no_domain_badge_when_fields_missing() -> None:
 
 @pytest.fixture
 def fake_raw_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Stand up a fake `raw/` directory with two emails and point the hook at it.
-
-    Resets the module-level cache so each test gets a fresh index.
-    """
+    """Stand up a fake `raw/` directory with two emails and point the hook
+    at it. Clears the shared raw-index cache so each test sees a fresh
+    index."""
     import mkdocs_hooks
+    from src.wiki.references import clear_raw_index_cache
 
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     (raw_dir / "2026-01-08_launchim-bl-latency-regression_cda09a3d.md").write_text("body")
     (raw_dir / "2026-01-08_launchim-nitin-missed-call-bug_19b9dc5e.md").write_text("body")
     monkeypatch.setattr(mkdocs_hooks, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(mkdocs_hooks, "_raw_index_cache", None)
+    clear_raw_index_cache()
     return tmp_path
 
 

@@ -30,72 +30,18 @@ IST = ZoneInfo("Asia/Kolkata")
 
 _log = logging.getLogger(__name__)
 
-# Inline footnote markers in body prose: ``[^msg-cda09a3d]``. The trailing
-# ``(?!:)`` lookahead skips the definition shape (``[^msg-x]: …``) so we only
-# pick up usages. Hash is the 8-char raw-filename suffix, e.g. ``cda09a3d``.
-# Mirrors ``src/compile/critique.py`` — kept local so the mkdocs hook doesn't
-# import from compile internals.
-_FOOTNOTE_USE_RE = re.compile(r"\[\^(msg-[a-z0-9-]+)\](?!:)", re.IGNORECASE)
-_FOOTNOTE_DEF_RE = re.compile(r"^\[\^(msg-[a-z0-9-]+)\]:", re.IGNORECASE | re.MULTILINE)
+# Footnote regex / raw-index / render helpers live in `src.wiki.references`
+# so the mkdocs hook (build-time render) and the coordinator backfill
+# (post-batch persistence) share one implementation and can't drift.
+from src.wiki.references import FOOTNOTE_DEF_RE as _FOOTNOTE_DEF_RE  # noqa: E402
+from src.wiki.references import ordered_unique_footnotes as _ordered_unique_footnotes  # noqa: E402
+from src.wiki.references import render_references_block  # noqa: E402
+
 # H2 detectors — anchored to start-of-line so prose mentions don't false-hit.
 _H2_REFERENCES_RE = re.compile(r"^##\s+References\b", re.MULTILINE)
 _H2_SOURCES_RE = re.compile(r"^##\s+Sources\b", re.MULTILINE)
 # Strip pattern: ``## Sources`` plus body until next H2 or EOF.
 _SOURCES_H2_BLOCK_RE = re.compile(r"^##\s+Sources\b.*?(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
-
-# Cache of `<short_id>` → `raw/<filename>.md` built lazily on first lookup.
-# Raw files are immutable post-ingest, so the index is stable across a build.
-_raw_index_cache: dict[str, str] | None = None
-
-
-def _build_raw_index() -> dict[str, str]:
-    """Map the 8-char hash suffix of every raw file to its repo-relative path.
-
-    Raw filenames are ``YYYY-MM-DD_<subject-slug>_<hash>.md`` (see
-    ``src/ingest/parser.py``). The hash is what footnotes reference as
-    ``[^msg-<hash>]``. We index by hash so a footnote can be resolved without
-    a DB roundtrip.
-    """
-    raw_dir = REPO_ROOT / "raw"
-    if not raw_dir.exists():
-        return {}
-    index: dict[str, str] = {}
-    for path in raw_dir.glob("*.md"):
-        stem = path.stem
-        if "_" not in stem:
-            continue
-        short = stem.rsplit("_", 1)[-1]
-        if short:
-            index[short.lower()] = f"raw/{path.name}"
-    return index
-
-
-def _resolve_footnote_path(short_hash: str) -> str | None:
-    """Return ``raw/<file>.md`` for a footnote hash, or None if unknown.
-
-    ``short_hash`` may include the ``msg-`` prefix or not — we strip it so the
-    caller can pass either shape.
-    """
-    global _raw_index_cache
-    if _raw_index_cache is None:
-        _raw_index_cache = _build_raw_index()
-    key = short_hash.removeprefix("msg-").lower()
-    return _raw_index_cache.get(key)
-
-
-def _ordered_unique_footnotes(body: str) -> list[str]:
-    """Return inline footnote tags (``msg-xxxxxxxx``) in first-appearance order.
-
-    De-duplicates so a tag cited five times only renders once in References.
-    """
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for match in _FOOTNOTE_USE_RE.finditer(body):
-        tag = match.group(1).lower()
-        if tag not in seen:
-            seen.add(tag)
-            ordered.append(tag)
-    return ordered
 
 
 def _strip_sources_h2(body: str, page_path: str) -> str:
@@ -115,29 +61,6 @@ def _strip_sources_h2(body: str, page_path: str) -> str:
         page_path,
     )
     return _SOURCES_H2_BLOCK_RE.sub("", body).rstrip() + "\n"
-
-
-def _render_references_block(footnotes: list[str], page_path: str) -> str:
-    """Render a ``## References`` block from inline footnote tags.
-
-    Each tag becomes a footnote definition pointing to its raw email path.
-    Unresolvable tags still render with a clear marker so MkDocs doesn't drop
-    the citation silently — the validator will surface the missing raw.
-    """
-    lines = ["", "## References", ""]
-    for tag in footnotes:
-        path = _resolve_footnote_path(tag)
-        if path:
-            lines.append(f"[^{tag}]: `{path}`")
-        else:
-            _log.warning(
-                "mkdocs_hooks: footnote [^%s] on %s has no matching raw file",
-                tag,
-                page_path,
-            )
-            lines.append(f"[^{tag}]: *(raw file not found for `{tag}`)*")
-    lines.append("")
-    return "\n".join(lines)
 
 
 def _catalog_sources_enabled() -> bool:
@@ -532,7 +455,9 @@ def on_page_markdown(markdown: str, *, page, config, files) -> str:
     if not _H2_REFERENCES_RE.search(body) and not _FOOTNOTE_DEF_RE.search(body):
         footnotes = _ordered_unique_footnotes(body)
         if footnotes:
-            body = body.rstrip() + "\n" + _render_references_block(footnotes, src_path)
+            body = body.rstrip() + "\n" + render_references_block(
+                footnotes, REPO_ROOT / "raw", src_path
+            )
 
     # Swap excluded `raw/attachments/...` refs for a visible marker — the
     # viewer container ships without those binaries so a literal img/link

@@ -98,6 +98,11 @@ async def _run_batch_async(
 
     Returns (batch_num, success, short_msg).
     """
+    import time
+
+    from src.coordinator.post_batch import _backfill_references_on_touched_pages
+    from src.coordinator.post_batch import _iter_touched_content_pages
+
     async with semaphore:
         paths = [e["path"] for e in batch]
         batch_files = "\n".join(f"- {p}" for p in paths)
@@ -116,6 +121,7 @@ async def _run_batch_async(
         # _current_raw_paths ContextVar gets set — otherwise create_entities
         # in this parallel path fails with "no raw_paths in batch context".
         # run_compilation does view-root lifecycle + callbacks too.
+        batch_start = time.time()
         try:
             result = await asyncio.to_thread(
                 run_compilation,
@@ -126,8 +132,6 @@ async def _run_batch_async(
             )
             last = result["messages"][-1]
             summary = str(getattr(last, "content", ""))[:150]
-            click.echo(f"[batch {batch_num}/{total_batches}] done")
-            return (batch_num, True, summary)
         except Exception as e:  # noqa: BLE001
             logger.error(
                 "parallel batch failed",
@@ -136,6 +140,19 @@ async def _run_batch_async(
                 error=str(e),
             )
             return (batch_num, False, str(e)[:200])
+        # Mirror compile_all.py's deterministic ## References backfill so
+        # parallel-mode pages don't ship with dangling [^msg-x] refs.
+        # `mtime >= batch_start` correctly scopes to pages touched after
+        # THIS batch started, even if a sibling batch finished earlier
+        # — backfill is idempotent so any overlap is safe.
+        wiki_path = Path(wiki_dir)
+        await asyncio.to_thread(
+            _backfill_references_on_touched_pages,
+            _iter_touched_content_pages(batch_start, wiki_path),
+            wiki_path,
+        )
+        click.echo(f"[batch {batch_num}/{total_batches}] done")
+        return (batch_num, True, summary)
 
 
 @click.command()

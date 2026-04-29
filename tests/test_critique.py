@@ -591,13 +591,16 @@ def test_broken_concept_slug_stays_blocker(tmp_path: Path) -> None:
     assert any(b.check == "broken-wikilink" for b in result.blockers), result.issues
 
 
-# --- #157 — footnote defs must match usages -------------------------------
+# --- footnote def-vs-use safety net (warning severity) -------------------
+# Primary fix: deterministic backfill in
+# `src/coordinator/post_batch.py::_backfill_references_on_touched_pages`.
+# The check below remains as a `warning` for non-coordinator entrypoints
+# (`watch_and_compile.py`, `compile_parallel.py`) which skip the hook chain.
 
 
-def test_footnote_usage_without_def_is_blocker(tmp_path: Path) -> None:
-    """``[^msg-bff57907]`` in the body requires ``[^msg-bff57907]:`` in
-    ``## References``. Without it, the footnote renders as raw bracket
-    text — regression for the dspy-gepa-intent-classification finding."""
+def test_footnote_usage_without_def_warns_not_blocks(tmp_path: Path) -> None:
+    """Missing def is now a warning, not a blocker — the deterministic
+    backfill is the primary fix; the agent must not loop on this."""
     wiki = tmp_path / "wiki"
     page = wiki / "topics" / "foo.md"
     _write_page(
@@ -609,13 +612,14 @@ def test_footnote_usage_without_def_is_blocker(tmp_path: Path) -> None:
         "## References\n- source\n",
     )
     result = critique_pages([page], wiki, tmp_path)
-    matches = [b for b in result.blockers if b.check == "footnote-missing-def"]
-    assert len(matches) == 1, [b.message for b in result.blockers]
+    matches = [w for w in result.warnings if w.check == "footnote-missing-def"]
+    assert len(matches) == 1, [w.message for w in result.warnings]
     assert "msg-bff57907" in matches[0].message
+    assert all(b.check != "footnote-missing-def" for b in result.blockers)
 
 
-def test_footnote_usage_with_def_no_blocker(tmp_path: Path) -> None:
-    """Matching def present — no blocker."""
+def test_footnote_usage_with_def_no_warning(tmp_path: Path) -> None:
+    """Matching def present — no warning."""
     wiki = tmp_path / "wiki"
     page = wiki / "topics" / "foo.md"
     _write_page(
@@ -627,7 +631,7 @@ def test_footnote_usage_with_def_no_blocker(tmp_path: Path) -> None:
         "## References\n[^msg-bff57907]: email from dev team\n",
     )
     result = critique_pages([page], wiki, tmp_path)
-    assert all(b.check != "footnote-missing-def" for b in result.blockers)
+    assert all(w.check != "footnote-missing-def" for w in result.warnings)
 
 
 # --- #158 — Recent-changes H2 required on topic pages ---------------------
