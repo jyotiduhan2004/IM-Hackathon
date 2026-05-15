@@ -88,3 +88,25 @@ logs/
 
 # Playwright MCP debug logs
 .playwright-mcp/
+
+# Chroma vector index (rebuild with: python scripts/index_wiki.py)
+.chroma_index/
+
+# QMD hybrid search index (rebuild with: qmd collection add + qmd embed)
+.qmd/
+
+# Test wiki copy
+wiki2/
+
+# Wiki tree and graph (rebuild with: python scripts/index_wiki.py)
+wiki/wiki_tree.json
+wiki/wiki_graph.json
+
+# Email KB dump
+email_kb_dump.sql
+
+# Node modules (QMD)
+node_modules/
+
+# macOS resource forks
+._*

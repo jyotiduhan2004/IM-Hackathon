@@ -1,0 +1,46 @@
+{
+  "query_skills": [
+    {
+      "name": "search-strategy",
+      "description": "How to effectively search this wiki. IndiaMART acronyms, QMD vs grep vs keyword_search tips, search patterns by query type."
+    },
+    {
+      "name": "contact-finder",
+      "description": "How to find who to contact at IndiaMART. Person page lookups, owner fields, email extraction, team structure."
+    },
+    {
+      "name": "wiki-navigation",
+      "description": "How to navigate the wiki structure. 8 domains, page types, wikilink format, coverage window, special pages."
+    },
+    {
+      "name": "qmd-usage",
+      "description": "How to use QMD hybrid search effectively. BM25+vector+RRF explained, do's and don'ts, what's indexed."
+    },
+    {
+      "name": "indiamart-context",
+      "description": "IndiaMART organizational knowledge. Key products, teams, mailing lists, internal tools, what this wiki covers."
+    },
+    {
+      "name": "gap-tracker",
+      "description": "What to do when information is missing. How to handle 'not found', common gaps, coverage limitations."
+    }
+  ],
+  "compile_skills": [
+    {
+      "name": "content-filter",
+      "description": "Strip noise from raw emails: signatures, forwarded chains, quoted replies, HTML artifacts, greetings, CC lists."
+    },
+    {
+      "name": "merge-detection",
+      "description": "Decide whether to create new page or merge into existing. Wikipedia rules: primary topic, >50% overlap, parent hub."
+    },
+    {
+      "name": "article-structure",
+      "description": "Enforce wiki page template: Lead + Key Details + Sources mandatory. Frontmatter validation."
+    },
+    {
+      "name": "link-audit",
+      "description": "Post-compilation audit: find orphan pages, dead-end pages, broken wikilinks. Suggest cross-links."
+    }
+  ]
+}
