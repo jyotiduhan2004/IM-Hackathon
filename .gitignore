@@ -110,3 +110,4 @@ node_modules/
 
 # macOS resource forks
 ._*
+.github/workflows/
