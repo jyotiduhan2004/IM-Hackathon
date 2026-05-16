@@ -49,7 +49,7 @@ and initiatives across 8 business domains.
 3. Read pages with head() to scan, cat() for detail
 4. Use related_pages() to discover connected pages via wikilinks
 5. Answer ONLY from wiki facts. Never invent.
-6. Cite sources: Sources: [[slug-1]], [[slug-2]]
+6. Cite sources: Sources: [[slug-1]], [[slug-2]]. The system will auto-attach the most relevant source email subjects.
 7. If not found: load_skill('gap-tracker') for guidance
 
 ## Important
@@ -63,7 +63,7 @@ and initiatives across 8 business domains.
 def run_main_agent(
     question: str,
     chat_history: list[dict] | None = None,
-    max_iterations: int = 15,
+    max_iterations: int = 50,
     tool_callback=None,
 ) -> dict:
     clear_page_cache()
@@ -170,13 +170,19 @@ def run_main_agent(
 
     citations = list(pages_read)
 
-    # Extract raw email references
+    # Extract raw email references and resolve subjects
     from src.query.agents._tools import _page_cache
+    from src.query.config import RAW_DIR
     email_refs = set()
+    raw_paths = {}  # msg-hash -> raw file path (from footnote defs)
     for slug in pages_read:
         content = _page_cache.get(slug, "")
         for match in re.finditer(r'\[\^(msg-[a-f0-9]+)\]', content):
             email_refs.add(match.group(1))
+        for match in re.finditer(r'\[\^(msg-[a-f0-9]+)\]:\s*`([^`]+)`', content):
+            raw_paths[match.group(1)] = match.group(2)
+
+    email_sources = _resolve_email_subjects(email_refs, raw_paths, RAW_DIR)
 
     # Silent gap logging
     _log_gaps(question, answer, citations, tool_calls_log)
@@ -186,8 +192,51 @@ def run_main_agent(
         "citations": citations,
         "wiki_pages_read": citations,
         "email_refs": sorted(email_refs),
+        "email_sources": email_sources,
         "tool_calls": tool_calls_log,
     }
+
+
+def _resolve_email_subjects(
+    email_refs: set[str],
+    raw_paths: dict[str, str],
+    raw_dir: Path,
+) -> list[dict]:
+    """Resolve msg-hash refs to email subjects by reading raw file frontmatter."""
+    from src.query.indexer import parse_frontmatter
+
+    results = []
+    for ref in sorted(email_refs):
+        msg_hash = ref.replace("msg-", "")
+        raw_path = None
+
+        if ref in raw_paths:
+            candidate = raw_dir.parent / raw_paths[ref]
+            if candidate.exists():
+                raw_path = candidate
+
+        if not raw_path:
+            matches = list(raw_dir.glob(f"*_{msg_hash}.md"))
+            if matches:
+                raw_path = matches[0]
+
+        if not raw_path or not raw_path.exists():
+            results.append({"ref": ref, "subject": None, "from": None, "date": None})
+            continue
+
+        try:
+            text = raw_path.read_text(encoding="utf-8", errors="replace")
+            fm, _ = parse_frontmatter(text)
+            results.append({
+                "ref": ref,
+                "subject": fm.get("subject", ""),
+                "from": fm.get("from", ""),
+                "date": fm.get("date", ""),
+            })
+        except Exception:
+            results.append({"ref": ref, "subject": None, "from": None, "date": None})
+
+    return results
 
 
 def _log_gaps(question: str, answer: str, citations: list, tool_calls: list):

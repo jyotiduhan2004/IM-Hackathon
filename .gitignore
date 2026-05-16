@@ -28,21 +28,10 @@ credentials.json
 .DS_Store
 Thumbs.db
 
-# Content of raw/ and wiki/ is NOT committed — only the directory structure.
-# This keeps the repo clean while letting us move to a real datastore later.
-# The .gitkeep files in each subdirectory preserve the tree layout in git.
-raw/*.md
-raw/attachments/**/*
-!raw/attachments/.gitkeep
-wiki/*.md
-wiki/topics/*.md
-# `entities/` is the legacy path (pre-v10-U1); `people/` is the new path.
-# Ignoring both until every worktree is migrated prevents a pre-migration
-# branch from committing stale `wiki/entities/*.md` under the current config.
-wiki/entities/*.md
-wiki/people/*.md
-wiki/systems/*.md
-wiki/policies/*.md
+# Raw emails and compiled wiki — data, not code. Rebuild from pipeline.
+raw/
+wiki/
+wiki2/
 
 # Langfuse / tracing
 .langfuse/
@@ -95,12 +84,7 @@ logs/
 # QMD hybrid search index (rebuild with: qmd collection add + qmd embed)
 .qmd/
 
-# Test wiki copy
-wiki2/
-
-# Wiki tree and graph (rebuild with: python scripts/index_wiki.py)
-wiki/wiki_tree.json
-wiki/wiki_graph.json
+# Wiki tree and graph already excluded by wiki/ rule above
 
 # Email KB dump
 email_kb_dump.sql

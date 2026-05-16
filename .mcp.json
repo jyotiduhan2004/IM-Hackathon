@@ -3,6 +3,11 @@
     "langchain-docs": {
       "type": "http",
       "url": "https://docs.langchain.com/mcp"
+    },
+    "duckie": {
+      "command": "uv",
+      "args": ["run", "python", "src/mcp/server.py"],
+      "cwd": "/mnt/c/Users/jyoti/Downloads/IM Hackathon/wiki/email-knowledge-base"
     }
   }
 }

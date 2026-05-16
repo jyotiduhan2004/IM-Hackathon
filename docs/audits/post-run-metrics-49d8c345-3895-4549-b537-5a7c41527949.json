@@ -1,0 +1,107 @@
+{
+  "run_id": "49d8c345-3895-4549-b537-5a7c41527949",
+  "generated_at": "2026-05-14T07:05:22.440339+00:00",
+  "since": "2026-05-14T07:02:43.342199+00:00",
+  "new_pages_total": 4,
+  "metrics": [
+    {
+      "name": "M1",
+      "label": "% new pages with `owner:` frontmatter",
+      "value": 0.0,
+      "target": "\u226580%",
+      "sample_size": 4,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M2",
+      "label": "% new pages with \u22652-sentence lead paragraph + a number",
+      "value": 0.0,
+      "target": "\u226570%",
+      "sample_size": 4,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M3",
+      "label": "log_insight active-teaching calls per email",
+      "value": 0.0,
+      "target": "\u22651/batch",
+      "sample_size": 3,
+      "unit": "raw",
+      "note": "emails_processed=0"
+    },
+    {
+      "name": "M4",
+      "label": "check_my_work pre-write rate",
+      "value": null,
+      "target": "0%",
+      "sample_size": 0,
+      "unit": "pct",
+      "note": "langfuse list empty / unreachable"
+    },
+    {
+      "name": "M5",
+      "label": "% pages with `## TL;DR` H2",
+      "value": 0.0,
+      "target": "\u21920%",
+      "sample_size": 4,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M6",
+      "label": "% pages with strikethrough `~~`",
+      "value": 0.0,
+      "target": "0%",
+      "sample_size": 4,
+      "unit": "pct",
+      "note": ""
+    },
+    {
+      "name": "M7",
+      "label": "median people-wikilinks per page",
+      "value": 0.0,
+      "target": "\u22643",
+      "sample_size": 4,
+      "unit": "raw",
+      "note": ""
+    },
+    {
+      "name": "M8",
+      "label": "reviewer pass-on-first-cycle rate",
+      "value": null,
+      "target": "\u226560%",
+      "sample_size": 0,
+      "unit": "pct",
+      "note": "langfuse list empty / unreachable"
+    },
+    {
+      "name": "M9",
+      "label": "average prompt tokens per trace",
+      "value": null,
+      "target": "track",
+      "sample_size": 0,
+      "unit": "raw",
+      "note": "langfuse list empty / unreachable"
+    },
+    {
+      "name": "M10",
+      "label": "archetype distribution (see table below)",
+      "value": null,
+      "target": "balanced",
+      "sample_size": 4,
+      "unit": "raw",
+      "note": ""
+    }
+  ],
+  "archetype_dist": {
+    "other": 1,
+    "system": 1,
+    "policy": 1,
+    "decision": 1
+  },
+  "warnings": [
+    "langfuse: langfuse list empty / unreachable"
+  ]
+}
