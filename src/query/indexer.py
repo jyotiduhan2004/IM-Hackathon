@@ -193,7 +193,7 @@ def build_wiki_tree(wiki_dir: Path | None = None) -> dict:
             "domain": page["domain"],
             "type": page["page_type"],
         }
-        # TODO: uncomment when KB pages have tags/aliases/summary in frontmatter
+        # Tags/aliases/summary not yet in all pages — enable when frontmatter is backfilled
         # if page.get("tags"):
         #     entry["tags"] = page["tags"]
         # if page.get("aliases"):
